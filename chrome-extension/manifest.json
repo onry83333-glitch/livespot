@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "LiveSpot - Stripchat Manager",
+  "version": "2.1.0",
+  "description": "Stripchat配信管理ツール - チャット監視・DM送信・売上分析",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "*://stripchat.com/*",
+    "*://*.stripchat.com/*",
+    "https://ujgbhkllfeacbgpdbjto.supabase.co/*",
+    "http://localhost:8000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://stripchat.com/*", "*://*.stripchat.com/*"],
+      "js": ["content_spy.js", "dm_executor.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
