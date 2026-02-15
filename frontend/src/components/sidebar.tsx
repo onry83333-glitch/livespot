@@ -9,6 +9,7 @@ const navItems = [
   { href: '/alerts',    icon: '🔔', label: '入室アラート' },
   { href: '/dm',        icon: '💬', label: 'DM一斉送信' },
   { href: '/sessions',  icon: '📺', label: '配信セッション' },
+  { href: '/users',     icon: '👥', label: 'ユーザー管理' },
   { href: '/analytics', icon: '📊', label: '分析&スコアリング' },
   { href: '/reports',   icon: '🤖', label: 'AIレポート' },
   { href: '/feed',      icon: '📝', label: 'フィード管理' },
