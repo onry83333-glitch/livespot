@@ -60,11 +60,12 @@ export interface SpyMessage {
   account_id: string;
   cast_name: string;
   message_time: string;
-  msg_type: 'chat' | 'gift' | 'tip' | 'goal' | 'enter' | 'leave' | 'system';
+  msg_type: 'chat' | 'gift' | 'tip' | 'goal' | 'enter' | 'leave' | 'system' | 'viewer_count';
   user_name: string | null;
   message: string | null;
   tokens: number;
   is_vip: boolean;
+  user_color: string | null;
   metadata: Record<string, unknown>;
   session_id?: string | null;
   session_title?: string | null;

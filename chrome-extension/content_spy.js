@@ -288,12 +288,13 @@
     node.dataset.lsParsed = '1';
 
     let userName = '';
+    let userColor = null;
     let message = '';
     let msgType = 'chat';
     let tokens = 0;
     let isVip = false;
 
-    // --- ユーザー名抽出 ---
+    // --- ユーザー名抽出 + カラー取得 ---
     const userLink = node.querySelector(
       'a[href*="/user/"], a[href*="stripchat.com/"]'
     );
@@ -303,12 +304,18 @@
         const hrefMatch = (userLink.href || '').match(/\/([^/]+)\/?$/);
         userName = hrefMatch ? hrefMatch[1] : '';
       }
+      try { userColor = window.getComputedStyle(userLink).color || null; } catch (e) { /* ignore */ }
     }
     if (!userName) {
       const userSpan = node.querySelector(
         '[class*="username"], [class*="userName"], [class*="UserName"], [class*="user-name"], [class*="nick"], [class*="Nick"], [class*="author"], [class*="Author"]'
       );
-      if (userSpan) userName = (userSpan.textContent || '').trim();
+      if (userSpan) {
+        userName = (userSpan.textContent || '').trim();
+        if (!userColor) {
+          try { userColor = window.getComputedStyle(userSpan).color || null; } catch (e) { /* ignore */ }
+        }
+      }
     }
 
     // --- メッセージ本文 ---
@@ -420,12 +427,22 @@
       /^(.+?)\s+has joined/i,                            // "User has joined"
       /^(.+?)\s+joined\s+the\s+(?:group\s+)?chat/i,     // "User joined the chat"
       /^(.+?)\s+entered/i,                               // "User entered"
+      /^(.+?)\s+has entered/i,                           // "User has entered"
+      /^(.+?)\s+entered\s+the\s+(?:group\s+)?chat/i,    // "User entered the chat"
+      /^(.+?)\s+is\s+here/i,                             // "User is here"
+      /^(.+?)\s+arrived/i,                               // "User arrived"
       /^(.+?)\s*さんが.*(?:参加|入室)/,                   // "Userさんがグループチャットに参加しました"
+      /^(.+?)\s*が(?:参加|入室)しました/,                 // "Userが参加しました"
     ];
     const leavePatterns = [
       /^(.+?)\s+has left/i,                              // "User has left"
       /^(.+?)\s+left\s+the\s+(?:group\s+)?chat/i,       // "User left the chat"
+      /^(.+?)\s+left/i,                                  // "User left"
+      /^(.+?)\s+has gone/i,                              // "User has gone"
+      /^(.+?)\s+departed/i,                              // "User departed"
+      /^(.+?)\s+exited/i,                                // "User exited"
       /^(.+?)\s*さんが.*退室/,                            // "Userさんが退室しました"
+      /^(.+?)\s*が退室しました/,                          // "Userが退室しました"
     ];
 
     if (msgType === 'chat') {
@@ -488,6 +505,7 @@
       msg_type: msgType,
       tokens,
       is_vip: isVip,
+      user_color: userColor,
       metadata: { source: 'dom_observer' },
     };
   }
@@ -794,7 +812,12 @@
         : null;
 
       if (key !== lastKey) {
+        const prevTotal = lastViewerStats ? lastViewerStats.total : null;
+        const delta = (prevTotal !== null && stats.total !== null) ? stats.total - prevTotal : 0;
+
         lastViewerStats = stats;
+
+        // 1. 既存フロー: viewer_stats テーブルへ
         chrome.runtime.sendMessage({
           type: 'VIEWER_STATS',
           cast_name: castName,
@@ -803,7 +826,25 @@
           others: stats.others,
           timestamp: new Date().toISOString(),
         });
-        console.log(LOG, '視聴者数送信:', stats);
+
+        // 2. NEW: spy_messages タイムラインにも統合（初回は差分不明なのでスキップ）
+        if (prevTotal !== null) {
+          const trend = delta > 5 ? '▲ 急増' : delta > 0 ? '▲ 増加' : delta < -5 ? '▼ 急減' : delta < 0 ? '▼ 減少' : '━ 横ばい';
+          chrome.runtime.sendMessage({
+            type: 'CHAT_MESSAGE',
+            cast_name: castName,
+            message_time: new Date().toISOString(),
+            msg_type: 'viewer_count',
+            user_name: null,
+            message: `視聴者数: ${prevTotal}→${stats.total} (${delta >= 0 ? '+' : ''}${delta}) ${trend}`,
+            tokens: 0,
+            is_vip: false,
+            user_color: null,
+            metadata: { source: 'viewer_stats', total: stats.total, coin_users: stats.coin_users, others: stats.others, delta },
+          });
+        }
+
+        console.log(LOG, '視聴者数送信:', stats, delta !== 0 ? `(${delta >= 0 ? '+' : ''}${delta})` : '');
       }
     } catch (e) {
       // DOM not ready yet
@@ -813,8 +854,8 @@
   function startViewerStatsPolling() {
     if (viewerStatsTimer) return;
     getViewerStats();
-    viewerStatsTimer = setInterval(getViewerStats, 180000);
-    console.log(LOG, '視聴者数ポーリング開始(180秒間隔)');
+    viewerStatsTimer = setInterval(getViewerStats, 60000);
+    console.log(LOG, '視聴者数ポーリング開始(60秒間隔)');
   }
 
   function stopViewerStatsPolling() {

@@ -45,10 +45,25 @@ export default function SpyPage() {
   // B.3: Side panel collapse (mobile)
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
 
+  // Whisper: accountId for sending
+  const [accountId, setAccountId] = useState<string | null>(null);
+  const [whisperText, setWhisperText] = useState('');
+  const [whisperTemplate, setWhisperTemplate] = useState<string | null>(null);
+  const [whisperSending, setWhisperSending] = useState(false);
+  const whisperSbRef = useRef(createClient());
+
   const { messages, castNames, isConnected, insertDemoData } = useRealtimeSpy({
     castName: selectedCast,
     enabled: !!user,
   });
+
+  // Whisper: accountId取得
+  useEffect(() => {
+    if (!user) return;
+    whisperSbRef.current.from('accounts').select('id').limit(1).single().then(({ data }) => {
+      if (data) setAccountId(data.id);
+    });
+  }, [user]);
 
   // ============================================================
   // B.2: Auto-scroll on new messages
@@ -205,6 +220,31 @@ export default function SpyPage() {
     }
     setDemoLoading(false);
   };
+
+  // ============================================================
+  // Whisper send
+  // ============================================================
+  const handleWhisperSend = useCallback(async () => {
+    const text = whisperText.trim();
+    if (!text || !accountId) return;
+    setWhisperSending(true);
+    try {
+      const castName = selectedCast || castNames[0] || null;
+      const { error } = await whisperSbRef.current.from('whispers').insert({
+        account_id: accountId,
+        cast_name: castName,
+        message: text,
+        template_name: whisperTemplate,
+      });
+      if (error) throw error;
+      setWhisperText('');
+      setWhisperTemplate(null);
+    } catch (e: unknown) {
+      console.error('[Whisper] send failed:', e);
+    } finally {
+      setWhisperSending(false);
+    }
+  }, [whisperText, whisperTemplate, accountId, selectedCast, castNames]);
 
   // ============================================================
   // Connection status
@@ -427,17 +467,41 @@ export default function SpyPage() {
             </button>
           </div>
 
-          {/* Whisper input */}
+          {/* Whisper input — functional */}
           <div className="mt-2 pt-3 border-t flex-shrink-0" style={{ borderColor: 'var(--border-glass)' }}>
             <div className="flex gap-2 mb-2 flex-wrap">
-              {['謝罪 + 甘え', '嫉妬を煽る', '延長の打診'].map(t => (
-                <button key={t} className="btn-ghost text-[10px] py-1 px-2.5">{t}</button>
+              {[
+                { name: '謝罪 + 甘え', text: 'ごめんね...もうちょっと一緒にいて？お願い...' },
+                { name: '嫉妬を煽る', text: 'さっきのユーザーとばかり話してた？私のこと見てないよね...' },
+                { name: '延長の打診', text: 'もう少しだけいてくれたら嬉しいな...延長してくれる？' },
+              ].map(t => (
+                <button
+                  key={t.name}
+                  onClick={() => { setWhisperText(t.text); setWhisperTemplate(t.name); }}
+                  disabled={whisperSending}
+                  className="btn-ghost text-[10px] py-1 px-2.5 disabled:opacity-50"
+                >{t.name}</button>
               ))}
-              <button className="btn-ghost text-[10px] py-1 px-2">+</button>
             </div>
             <div className="flex gap-2">
-              <input className="input-glass flex-1 text-xs" placeholder='キャストに「ささやく」メッセージ... (Ctrl+Enter)' />
-              <button className="btn-primary text-[11px] whitespace-nowrap px-3">送信</button>
+              <input
+                className="input-glass flex-1 text-xs"
+                placeholder='キャストに「ささやく」メッセージ... (Ctrl+Enter)'
+                value={whisperText}
+                onChange={(e) => { setWhisperText(e.target.value); setWhisperTemplate(null); }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    handleWhisperSend();
+                  }
+                }}
+                disabled={whisperSending || !accountId}
+              />
+              <button
+                onClick={handleWhisperSend}
+                disabled={whisperSending || !whisperText.trim() || !accountId}
+                className="btn-primary text-[11px] whitespace-nowrap px-3 disabled:opacity-50"
+              >{whisperSending ? '送信中...' : '送信'}</button>
             </div>
           </div>
         </div>

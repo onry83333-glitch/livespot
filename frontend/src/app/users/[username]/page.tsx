@@ -107,6 +107,8 @@ export default function UserTimelinePage() {
         return 'var(--accent-amber)';
       case 'goal':
         return 'var(--accent-purple)';
+      case 'viewer_count':
+        return '#38bdf8';
       case 'enter':
       case 'leave':
         return 'var(--text-muted)';
@@ -124,6 +126,8 @@ export default function UserTimelinePage() {
         return 'rgba(245,158,11,0.06)';
       case 'goal':
         return 'rgba(167,139,250,0.06)';
+      case 'viewer_count':
+        return 'rgba(56,189,248,0.06)';
       case 'enter':
         return 'rgba(34,197,94,0.04)';
       case 'leave':

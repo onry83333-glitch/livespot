@@ -19,6 +19,7 @@ let bufferTimer = null;
 let spyMsgCount = 0;
 let viewerStatsBuffer = [];
 let viewerStatsTimer = null;
+let whisperPollingTimer = null;
 
 // A.2: Heartbeat tracking
 let lastHeartbeat = 0;
@@ -183,7 +184,7 @@ async function restoreBuffers() {
 // ============================================================
 // SPY データ品質バリデーション
 // ============================================================
-const VALID_MSG_TYPES = ['chat', 'tip', 'gift', 'goal', 'enter', 'leave', 'system'];
+const VALID_MSG_TYPES = ['chat', 'tip', 'gift', 'goal', 'enter', 'leave', 'system', 'viewer_count'];
 
 function validateSpyMessage(msg) {
   // 1. メッセージ本文が500文字超 → 連結バグの残骸
@@ -273,6 +274,7 @@ async function flushMessageBuffer() {
     message: msg.message || '',
     tokens: msg.tokens || 0,
     is_vip: false,
+    user_color: msg.user_color || null,
     metadata: msg.metadata || {},
   }));
 
@@ -378,6 +380,66 @@ async function flushViewerStats() {
 }
 
 // ============================================================
+// Whisper Polling (10秒間隔で未読whisperを取得 → Stripchatタブへ転送)
+// ============================================================
+async function pollWhispers() {
+  try {
+    await loadAuth();
+    if (!accountId || !accessToken) return;
+
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/whispers?account_id=eq.${accountId}&read_at=is.null&order=created_at.asc&limit=5`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+
+    if (!res.ok) return;
+
+    const whispers = await res.json();
+    if (!Array.isArray(whispers) || whispers.length === 0) return;
+
+    console.log('[LS-BG] 未読Whisper取得:', whispers.length, '件');
+
+    const tabs = await chrome.tabs.query({
+      url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+    });
+    if (tabs.length === 0) return;
+
+    for (const whisper of whispers) {
+      for (const tab of tabs) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'SHOW_WHISPER',
+          whisper_id: whisper.id,
+          message: whisper.message,
+          cast_name: whisper.cast_name,
+          template_name: whisper.template_name,
+        }).catch(() => {});
+      }
+    }
+  } catch (e) {
+    // silent — polling errors are non-critical
+  }
+}
+
+function startWhisperPolling() {
+  if (whisperPollingTimer) return;
+  console.log('[LS-BG] Whisperポーリング開始(10秒間隔)');
+  pollWhispers();
+  whisperPollingTimer = setInterval(pollWhispers, 10000);
+}
+
+function stopWhisperPolling() {
+  if (whisperPollingTimer) {
+    clearInterval(whisperPollingTimer);
+    whisperPollingTimer = null;
+  }
+}
+
+// ============================================================
 // Message Handlers
 // ============================================================
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -397,6 +459,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       user_name: msg.user_name || '',
       message: msg.message || '',
       tokens: msg.tokens || 0,
+      user_color: msg.user_color || null,
       metadata: msg.metadata || {},
     };
 
@@ -448,6 +511,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     console.log('[LS-BG] ハートビート受信: cast=', msg.castName, 'observing=', msg.observing, 'msgs=', msg.messageCount);
     sendResponse({ ok: true });
     return false;
+  }
+
+  // --- Whisper: Mark as read (content_whisper.jsから) ---
+  if (msg.type === 'WHISPER_READ') {
+    loadAuth().then(async () => {
+      if (!accessToken) {
+        sendResponse({ ok: false });
+        return;
+      }
+      try {
+        await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/whispers?id=eq.${msg.whisper_id}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ read_at: new Date().toISOString() }),
+          }
+        );
+        console.log('[LS-BG] Whisper既読更新:', msg.whisper_id);
+        sendResponse({ ok: true });
+      } catch (err) {
+        console.warn('[LS-BG] Whisper既読更新失敗:', err.message);
+        sendResponse({ ok: false });
+      }
+    });
+    return true;
   }
 
   // --- Popup: Auth credentials updated (ログイン直後に即通知) ---
@@ -679,7 +772,8 @@ restoreBuffers().then(() => {
     console.log('[LS-BG] 認証状態: token=', !!accessToken, 'account=', accountId, 'spy=', spyEnabled);
     if (accessToken && accountId) {
       startDMPolling();
-      console.log('[LS-BG] 初期化完了 DMポーリング開始');
+      startWhisperPolling();
+      console.log('[LS-BG] 初期化完了 DM/Whisperポーリング開始');
     } else if (accessToken && !accountId) {
       console.log('[LS-BG] 初期化完了 accountId未設定 → Supabase REST APIでアカウント自動取得');
       try {
@@ -696,6 +790,7 @@ restoreBuffers().then(() => {
             chrome.storage.local.set({ account_id: accountId });
             console.log('[LS-BG] アカウント自動設定:', accountId, data[0].account_name);
             startDMPolling();
+            startWhisperPolling();
             if (messageBuffer.length > 0) flushMessageBuffer();
           }
         } else {
@@ -717,6 +812,7 @@ chrome.storage.onChanged.addListener((changes) => {
       console.log('[LS-BG] Storage変更後の状態: token=', !!accessToken, 'account=', accountId);
       if (accessToken && accountId) {
         startDMPolling();
+        startWhisperPolling();
         // バッファflush試行
         if (messageBuffer.length > 0) {
           console.log('[LS-BG] Storage変更でaccountId取得 → バッファflush試行:', messageBuffer.length, '件');
@@ -724,6 +820,7 @@ chrome.storage.onChanged.addListener((changes) => {
         }
       } else {
         stopDMPolling();
+        stopWhisperPolling();
       }
     });
   }

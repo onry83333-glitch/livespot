@@ -12,6 +12,7 @@ const typeStyles: Record<string, { color: string; bg: string; border: string; la
   enter:  { color: 'var(--accent-green)',  bg: 'rgba(34,197,94,0.05)',  border: 'rgba(34,197,94,0.15)',  label: '\ud83d\udc4b' },
   leave:  { color: 'var(--accent-pink)',   bg: 'rgba(244,63,94,0.05)',  border: 'rgba(244,63,94,0.15)',  label: '\ud83d\udeaa' },
   system: { color: 'var(--text-muted)',    bg: 'rgba(100,116,139,0.04)', border: 'transparent',           label: '\ud83d\udd14' },
+  viewer_count: { color: '#38bdf8',      bg: 'rgba(56,189,248,0.06)', border: 'rgba(56,189,248,0.18)', label: '\ud83d\udcca' },
 };
 
 export function ChatMessage({ message: msg }: { message: SpyMessage }) {
@@ -44,7 +45,7 @@ export function ChatMessage({ message: msg }: { message: SpyMessage }) {
       {/* ユーザー名 (league color) */}
       {msg.user_name && (
         <span className={`font-semibold mr-2 ${isTip ? 'text-sm' : 'text-xs'}`}
-          style={{ color: getUserLeagueColor((msg as unknown as Record<string, unknown>).user_level as number | null) }}>
+          style={{ color: msg.user_color || getUserLeagueColor((msg as unknown as Record<string, unknown>).user_level as number | null) }}>
           {msg.user_name}
         </span>
       )}
