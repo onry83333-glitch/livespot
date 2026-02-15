@@ -48,10 +48,15 @@ def query(token, table, params=""):
     return r.json()
 
 
+def ts_param(dt):
+    """URL-safe ISO timestamp (encode + as %2B)"""
+    return dt.isoformat().replace("+", "%2B")
+
+
 # ── チェック関数 ──────────────────────────────────────
 def check_spy(token, prev_count):
     now_utc = datetime.now(timezone.utc)
-    since = (now_utc - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    since = ts_param(now_utc - timedelta(minutes=5))
 
     # 直近5分のメッセージ
     recent = query(
