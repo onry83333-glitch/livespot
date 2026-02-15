@@ -55,7 +55,52 @@
   }
 
   // ============================================================
-  // Chat Container 発見（6段階フォールバック）
+  // ユーザーリスト / 視聴者リストの除外判定
+  // ============================================================
+  const USERLIST_RE = /user.?list|userList|UserList|viewer|Viewer|member|Member|people|People|online|Online|spectator|Spectator|fan.?list|FanList/i;
+
+  function isUserListElement(el) {
+    // 自身のclass
+    if (USERLIST_RE.test(getClass(el))) return true;
+    // 祖先3段階チェック
+    let p = el.parentElement;
+    for (let i = 0; i < 4 && p; i++) {
+      if (USERLIST_RE.test(getClass(p))) return true;
+      p = p.parentElement;
+    }
+    return false;
+  }
+
+  // チャットメッセージっぽい子要素を持つかサンプリング判定
+  // ユーザーリスト: 子要素がリンク1個だけ（ユーザー名のみ）
+  // チャット: 子要素にユーザー名 + テキスト本文がある
+  function looksLikeChatContainer(el) {
+    const kids = el.children;
+    if (kids.length < 2) return false;
+    // 最大10個をサンプリング
+    let chatLike = 0;
+    let listLike = 0;
+    const sample = Math.min(kids.length, 10);
+    for (let i = 0; i < sample; i++) {
+      const child = kids[kids.length - 1 - i]; // 末尾（最新）から
+      const text = (child.textContent || '').trim();
+      const links = child.querySelectorAll('a');
+      const hasTextSpan = child.querySelector(
+        '[class*="text"], [class*="Text"], [class*="content"], [class*="Content"], [class*="message"], [class*="Message"]'
+      );
+      // ユーザーリスト項目の特徴: テキストが短い & リンク1個のみ & テキスト要素なし
+      if (text.length < 40 && links.length <= 1 && !hasTextSpan && child.childElementCount <= 3) {
+        listLike++;
+      } else {
+        chatLike++;
+      }
+    }
+    console.log(LOG, `  コンテナ判定: chatLike=${chatLike} listLike=${listLike} / ${sample}サンプル`);
+    return chatLike > listLike;
+  }
+
+  // ============================================================
+  // Chat Container 発見（6段階フォールバック + ユーザーリスト除外）
   // ============================================================
   function findChatContainer() {
     // Strategy 0 (最優先): Stripchat既知のセレクタ（2026年確認済み）
@@ -78,7 +123,7 @@
     for (const sel of knownSelectors) {
       try {
         const el = document.querySelector(sel);
-        if (el) {
+        if (el && !isUserListElement(el)) {
           console.log(LOG, 'チャットコンテナ発見(既知セレクタ):', sel, 'tag:', el.tagName, '子要素数:', el.children.length, 'class:', getClass(el).substring(0, 80));
           return el;
         }
@@ -89,17 +134,17 @@
 
     // Strategy 1: data-testid
     let el = document.querySelector('[data-testid="chat-messages"]');
-    if (el) {
+    if (el && !isUserListElement(el)) {
       console.log(LOG, 'チャットコンテナ発見(data-testid) tag:', el.tagName, 'class:', getClass(el).substring(0, 80));
       return el;
     }
 
-    // Strategy 2: class名パターン（複合）
+    // Strategy 2: class名パターン（複合）— ユーザーリスト除外
     const candidates = document.querySelectorAll(
       '[class*="chat"][class*="list"], [class*="message"][class*="container"], [class*="chat"][class*="scroll"]'
     );
     for (const c of candidates) {
-      if (c.children.length > 2) {
+      if (c.children.length > 2 && !isUserListElement(c) && looksLikeChatContainer(c)) {
         console.log(LOG, 'チャットコンテナ発見(class複合):', getClass(c).substring(0, 80), '子要素数:', c.children.length);
         return c;
       }
@@ -109,46 +154,53 @@
     const chatPanel = document.querySelector(
       '.chat-panel, [class*="chatPanel"], [class*="ChatPanel"], [class*="chat-room"], [class*="chatRoom"]'
     );
-    if (chatPanel) {
+    if (chatPanel && !isUserListElement(chatPanel)) {
       console.log(LOG, 'チャットパネル発見:', getClass(chatPanel).substring(0, 80));
-      const scrollable =
-        chatPanel.querySelector('[style*="overflow"]') ||
-        chatPanel.querySelector('[class*="scroll"]') ||
-        chatPanel.querySelector('[class*="list"]') ||
-        chatPanel.querySelector('[class*="content"]');
-      if (scrollable) {
-        console.log(LOG, 'チャットコンテナ発見(パネル内スクロール):', getClass(scrollable).substring(0, 80));
-        return scrollable;
+      // パネル内のスクロール要素を探す — ユーザーリスト系を除外
+      const scrollCandidates = chatPanel.querySelectorAll(
+        '[style*="overflow"], [class*="scroll"], [class*="list"], [class*="content"]'
+      );
+      for (const sc of scrollCandidates) {
+        if (!isUserListElement(sc) && sc.children.length > 2) {
+          if (looksLikeChatContainer(sc)) {
+            console.log(LOG, 'チャットコンテナ発見(パネル内):', getClass(sc).substring(0, 80));
+            return sc;
+          }
+        }
       }
       const panelStyle = getComputedStyle(chatPanel);
-      if (panelStyle.overflowY === 'auto' || panelStyle.overflowY === 'scroll') {
+      if ((panelStyle.overflowY === 'auto' || panelStyle.overflowY === 'scroll') && looksLikeChatContainer(chatPanel)) {
         console.log(LOG, 'チャットコンテナ発見(パネル自体):', getClass(chatPanel).substring(0, 80));
         return chatPanel;
       }
     }
 
-    // Strategy 4: ヒューリスティック — チャット領域内のスクロール可能な要素
+    // Strategy 4: ヒューリスティック — chat/message キーワード + スクロール
     const allEls = document.querySelectorAll('div[class], ul[class], ol[class]');
     for (const div of allEls) {
       const cn = getClass(div);
       if (!/chat|Chat|message|Message/i.test(cn)) continue;
+      if (isUserListElement(div)) continue;
       const style = getComputedStyle(div);
       if (
         (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
-        div.children.length > 3
+        div.children.length > 3 &&
+        looksLikeChatContainer(div)
       ) {
         console.log(LOG, 'チャットコンテナ発見(ヒューリスティック):', cn.substring(0, 80), '子要素数:', div.children.length);
         return div;
       }
     }
 
-    // Strategy 5: 最終手段 — overflow:auto/scroll で子要素が多い要素
+    // Strategy 5: 最終手段 — overflow:auto/scroll で子要素が多い要素（ユーザーリスト除外 + チャット判定必須）
     for (const div of allEls) {
+      if (isUserListElement(div)) continue;
       const style = getComputedStyle(div);
       if (
         (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
         div.children.length > 10 &&
-        div.scrollHeight > div.clientHeight
+        div.scrollHeight > div.clientHeight &&
+        looksLikeChatContainer(div)
       ) {
         console.log(LOG, 'チャットコンテナ発見(最終手段):', getClass(div).substring(0, 80), '子要素数:', div.children.length);
         return div;
@@ -163,7 +215,7 @@
       if (i < 15) {
         const cn = getClass(el);
         const style = getComputedStyle(el);
-        console.log(LOG, `  [${i}] <${el.tagName.toLowerCase()}> class="${cn.substring(0, 120)}" 子=${el.children.length} overflow=${style.overflowY} size=${el.scrollWidth}x${el.scrollHeight}`);
+        console.log(LOG, `  [${i}] <${el.tagName.toLowerCase()}> class="${cn.substring(0, 120)}" 子=${el.children.length} overflow=${style.overflowY} size=${el.scrollWidth}x${el.scrollHeight} userList=${isUserListElement(el)}`);
       }
     });
 
@@ -177,8 +229,39 @@
     if (node.nodeType !== 1) return null;
     if (node.dataset?.lsParsed) return null;
 
+    // ユーザーリスト内の要素は即スキップ
+    if (isUserListElement(node)) {
+      node.dataset.lsParsed = '1';
+      return null;
+    }
+
     const fullText = (node.textContent || '').trim();
     if (!fullText) return null;
+
+    // ユーザーリスト項目の早期検出:
+    // テキストが短い(40文字以下) + 子要素が少ない(3個以下) + テキスト要素なし
+    // → ユーザー名だけの行 = 視聴者リスト
+    if (fullText.length <= 40 && node.childElementCount <= 3) {
+      const hasTextEl = node.querySelector(
+        '[class*="text"], [class*="Text"], [class*="content"], [class*="Content"], [class*="message"], [class*="Message"]'
+      );
+      if (!hasTextEl) {
+        // さらにチェック: 数字プレフィックス付きのユーザー名パターン（例: "42houkeisan"）
+        if (/^\d+[a-zA-Z]/.test(fullText) || /^\d+$/.test(fullText)) {
+          node.dataset.lsParsed = '1';
+          return null;
+        }
+        // リンクが1個だけでテキストがリンクテキストと同一 → ユーザーリスト項目
+        const links = node.querySelectorAll('a');
+        if (links.length === 1) {
+          const linkText = (links[0].textContent || '').trim();
+          if (fullText === linkText || fullText.replace(/\s+/g, '') === linkText.replace(/\s+/g, '')) {
+            node.dataset.lsParsed = '1';
+            return null;
+          }
+        }
+      }
+    }
 
     // 重複チェック
     const nodeId = hashCode(fullText + node.childElementCount);
@@ -210,18 +293,27 @@
     }
     if (!userName) {
       const userSpan = node.querySelector(
-        '[class*="username"], [class*="userName"], [class*="UserName"], [class*="user-name"], [class*="user"], [class*="User"], [class*="nick"], [class*="Nick"], [class*="author"], [class*="Author"]'
+        '[class*="username"], [class*="userName"], [class*="UserName"], [class*="user-name"], [class*="nick"], [class*="Nick"], [class*="author"], [class*="Author"]'
       );
       if (userSpan) userName = (userSpan.textContent || '').trim();
     }
 
     // --- メッセージ本文 ---
-    // まず専用のテキスト要素を探す
+    // まず専用のテキスト要素を探す（ユーザー名要素を除外）
+    const userEl = userLink || node.querySelector(
+      '[class*="username"], [class*="userName"], [class*="UserName"], [class*="user-name"], [class*="nick"], [class*="Nick"], [class*="author"], [class*="Author"]'
+    );
     const textSpan = node.querySelector(
       '[class*="text"], [class*="Text"], [class*="message-text"], [class*="messageText"], [class*="content"]'
     );
-    if (textSpan && textSpan !== node) {
+    if (textSpan && textSpan !== node && textSpan !== userEl) {
       message = (textSpan.textContent || '').trim();
+    } else if (userName && fullText.startsWith(userName)) {
+      // テキスト先頭がユーザー名 → 除去して本文を取得
+      message = fullText
+        .substring(userName.length)
+        .replace(/^[\s:：\-—]+/, '')
+        .trim();
     } else if (userName && fullText.includes(userName)) {
       message = fullText
         .substring(fullText.indexOf(userName) + userName.length)
@@ -343,6 +435,20 @@
 
     // ユーザー名もメッセージも取れなかったら無視
     if (!userName && msgType === 'chat') return null;
+
+    // ユーザーリスト誤認ガード:
+    // chatタイプで、メッセージが空 or メッセージ=ユーザー名 → ユーザーリスト項目の可能性大
+    if (msgType === 'chat') {
+      if (!message || message === userName) {
+        return null;
+      }
+      // メッセージ先頭がユーザー名の繰り返し（例: "masagoro5379masagoro5379"）→ パース異常
+      if (userName && message.startsWith(userName) && message.length <= userName.length * 2 + 5) {
+        // 本文からユーザー名プレフィックスを除去
+        message = message.substring(userName.length).replace(/^[\s:：\-—]+/, '').trim();
+        if (!message) return null;
+      }
+    }
 
     return {
       user_name: userName,
