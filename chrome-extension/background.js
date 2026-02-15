@@ -181,6 +181,54 @@ async function restoreBuffers() {
 }
 
 // ============================================================
+// SPY データ品質バリデーション
+// ============================================================
+const VALID_MSG_TYPES = ['chat', 'tip', 'gift', 'goal', 'enter', 'leave', 'system'];
+
+function validateSpyMessage(msg) {
+  // 1. メッセージ本文が500文字超 → 連結バグの残骸
+  if (msg.message && msg.message.length > 500) {
+    console.warn('[LS-BG] バリデーション除外: メッセージが500文字超',
+      msg.user_name, msg.message.length, '文字');
+    return false;
+  }
+
+  // 2. ユーザー名に改行・タブが含まれる
+  if (msg.user_name && /[\n\r\t]/.test(msg.user_name)) {
+    console.warn('[LS-BG] バリデーション除外: ユーザー名不正', msg.user_name);
+    return false;
+  }
+
+  // 3. msg_typeが想定値以外
+  if (msg.msg_type && !VALID_MSG_TYPES.includes(msg.msg_type)) {
+    console.warn('[LS-BG] バリデーション除外: 不正なmsg_type', msg.msg_type);
+    return false;
+  }
+
+  // 4. chatタイプでメッセージがユーザー名と完全一致（旧バグパターン）
+  if (msg.msg_type === 'chat' && msg.message && msg.user_name &&
+      msg.message.trim() === msg.user_name.trim()) {
+    console.warn('[LS-BG] バリデーション除外: メッセージ=ユーザー名', msg.user_name);
+    return false;
+  }
+
+  return true;
+}
+
+function deduplicateBuffer(messages) {
+  const seen = new Set();
+  return messages.filter(msg => {
+    const key = `${msg.message_time}|${msg.user_name}|${msg.message}`;
+    if (seen.has(key)) {
+      console.log('[LS-BG] 重複除去:', msg.user_name, msg.message?.substring(0, 30));
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+// ============================================================
 // SPY Message Buffer → Supabase REST API 直接POST
 // バックエンドを経由せず直接spy_messagesに挿入
 // ============================================================
@@ -203,8 +251,20 @@ async function flushMessageBuffer() {
   messageBuffer = [];
   persistBuffer();
 
+  // バリデーション + 重複除去
+  const validated = batch.filter(validateSpyMessage);
+  const deduplicated = deduplicateBuffer(validated);
+  const droppedCount = batch.length - deduplicated.length;
+  if (droppedCount > 0) {
+    console.log('[LS-BG] バリデーション/重複除去で', droppedCount, '件除外');
+  }
+  if (deduplicated.length === 0) {
+    console.log('[LS-BG] 有効なメッセージなし — 送信スキップ');
+    return;
+  }
+
   // Supabase REST API用の行データを作成（一括INSERT）
-  const rows = batch.map(msg => ({
+  const rows = deduplicated.map(msg => ({
     account_id: accountId,
     cast_name: msg.cast_name || '',
     message_time: msg.message_time || new Date().toISOString(),
