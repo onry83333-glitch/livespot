@@ -1,5 +1,5 @@
 /**
- * LiveSpot Chrome Extension - Configuration
+ * Strip Live Spot Chrome Extension - Configuration
  * background.js から importScripts('config.js') で読み込み
  */
 const CONFIG = {

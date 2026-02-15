@@ -1,5 +1,5 @@
 /**
- * LiveSpot - DM Executor
+ * Strip Live Spot - DM Executor
  * Background から受け取ったDMタスクをStripchat上で実行
  */
 

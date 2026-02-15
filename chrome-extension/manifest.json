@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "LiveSpot - Stripchat Manager",
+  "name": "Strip Live Spot - Stripchat Manager",
   "version": "2.1.0",
   "description": "Stripchat配信管理ツール - チャット監視・DM送信・売上分析",
   "permissions": [

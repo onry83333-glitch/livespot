@@ -1,7 +1,7 @@
 importScripts('config.js');
 
 /**
- * LiveSpot - Background Service Worker
+ * Strip Live Spot - Background Service Worker
  * Auth管理、DMキューポーリング、SPYメッセージリレー
  *
  * 修正: accountId null問題
@@ -53,7 +53,7 @@ function checkHeartbeatTimeout() {
     chrome.notifications.create('spy-heartbeat-lost', {
       type: 'basic',
       iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><text y="24" font-size="24">⚠️</text></svg>',
-      title: 'LiveSpot - 監視停止の可能性',
+      title: 'Strip Live Spot - 監視停止の可能性',
       message: `SPY監視からのハートビートが${Math.round(elapsed / 1000)}秒間途絶えています。Stripchatタブを確認してください。`,
       priority: 2,
     });

@@ -4,7 +4,7 @@ import { AuthProvider } from '@/components/auth-provider';
 import { AppShell } from '@/components/app-shell';
 
 export const metadata: Metadata = {
-  title: 'LiveSpot - Premium Agency OS',
+  title: 'Strip Live Spot - Premium Agency OS',
   description: 'ライブ配信エージェンシー管理プラットフォーム',
 };
 

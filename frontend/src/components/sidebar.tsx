@@ -36,7 +36,7 @@ export function Sidebar() {
           </div>
           <div>
             <h1 className="text-base font-bold tracking-tight" style={{ color: 'var(--accent-primary)' }}>
-              LiveSpot
+              Strip Live Spot
             </h1>
             <p className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ color: 'var(--accent-green)' }}>
               PREMIUM AGENCY

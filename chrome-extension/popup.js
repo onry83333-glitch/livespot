@@ -1,5 +1,5 @@
 /**
- * LiveSpot - Popup Script
+ * Strip Live Spot - Popup Script
  * Supabase REST API認証、設定管理、ステータス表示
  * 状態は chrome.storage.local に永続化し、ポップアップ再開時に復元
  */

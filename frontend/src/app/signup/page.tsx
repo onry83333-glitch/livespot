@@ -48,7 +48,7 @@ export default function SignupPage() {
             style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple))' }}>
             🌐
           </div>
-          <h1 className="text-2xl font-bold">LiveSpot</h1>
+          <h1 className="text-2xl font-bold">Strip Live Spot</h1>
           <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>新規アカウント作成</p>
         </div>
 

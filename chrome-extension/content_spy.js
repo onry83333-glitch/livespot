@@ -1,5 +1,5 @@
 /**
- * LiveSpot - Content SPY Script
+ * Strip Live Spot - Content SPY Script
  * Stripchatのチャット DOM を監視し、メッセージを background.js へリレー
  * A.2: 再接続ロジック + ハートビート
  */

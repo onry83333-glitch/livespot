@@ -40,13 +40,13 @@ const DEFAULT_TRIGGERS: TriggerSettings = { criticalThreshold: 1000, warningThre
 function loadTriggers(): TriggerSettings {
   if (typeof window === 'undefined') return DEFAULT_TRIGGERS;
   try {
-    const saved = localStorage.getItem('livespot_alert_triggers');
+    const saved = localStorage.getItem('strip_live_spot_alert_triggers');
     return saved ? { ...DEFAULT_TRIGGERS, ...JSON.parse(saved) } : DEFAULT_TRIGGERS;
   } catch { return DEFAULT_TRIGGERS; }
 }
 
 function saveTriggers(t: TriggerSettings) {
-  localStorage.setItem('livespot_alert_triggers', JSON.stringify(t));
+  localStorage.setItem('strip_live_spot_alert_triggers', JSON.stringify(t));
 }
 
 function classifyVip(totalCoins: number, triggers: TriggerSettings): 'critical' | 'warning' | 'normal' {
