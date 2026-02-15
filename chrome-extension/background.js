@@ -20,6 +20,9 @@ let spyMsgCount = 0;
 let viewerStatsBuffer = [];
 let viewerStatsTimer = null;
 let whisperPollingTimer = null;
+let dmProcessing = false;
+let pendingDMResolve = null;
+let pendingDMTaskId = null;
 
 // A.2: Heartbeat tracking
 let lastHeartbeat = 0;
@@ -561,19 +564,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
-  // --- DM: Result from dm_executor.js ---
+  // --- DM: Result from dm_executor.js (v2: SEND_DM → DM_SEND_RESULT) ---
+  if (msg.type === 'DM_SEND_RESULT') {
+    console.log('[LS-BG] DM_SEND_RESULT受信: taskId=', msg.taskId, 'success=', msg.success);
+    // pendingDMResolve で待機中の Promise を解決
+    if (pendingDMResolve && pendingDMTaskId === msg.taskId) {
+      pendingDMResolve({ success: msg.success, error: msg.error || null });
+      pendingDMResolve = null;
+      pendingDMTaskId = null;
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- DM: Legacy DM_RESULT (互換性) ---
   if (msg.type === 'DM_RESULT') {
-    apiRequest(`/api/dm/queue/${msg.dm_id}/status`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        status: msg.status,
-        error: msg.error || null,
-        sent_at: new Date().toISOString(),
-      }),
-    })
-      .then((data) => sendResponse({ ok: true, data }))
-      .catch((err) => sendResponse({ ok: false, error: err.message }));
-    return true;
+    console.log('[LS-BG] DM_RESULT (レガシー): dm_id=', msg.dm_id);
+    sendResponse({ ok: true });
+    return false;
   }
 
   // --- Popup: Get extension status ---
@@ -595,16 +603,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // --- Popup: Get DM queue ---
+  // --- Popup: Get DM queue (Supabase直接) ---
   if (msg.type === 'GET_DM_QUEUE') {
-    loadAuth().then(() => {
-      if (!accountId) {
+    loadAuth().then(async () => {
+      if (!accountId || !accessToken) {
         sendResponse({ ok: true, data: [] });
         return;
       }
-      apiRequest(`/api/dm/queue?account_id=${accountId}&status=queued&limit=50`)
-        .then((data) => sendResponse({ ok: true, data }))
-        .catch((err) => sendResponse({ ok: false, error: err.message }));
+      try {
+        const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+          + `?account_id=eq.${accountId}&status=in.(queued,sending)`
+          + `&order=created_at.asc&limit=50`
+          + `&select=id,user_name,message,status,campaign,created_at`;
+        const res = await fetch(url, {
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        });
+        if (!res.ok) throw new Error(`Supabase error: ${res.status}`);
+        const data = await res.json();
+        sendResponse({ ok: true, data });
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message });
+      }
     });
     return true;
   }
@@ -694,64 +716,230 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ============================================================
-// DM Queue Polling
+// DM Queue — Supabase直接ポーリング + タブ遷移方式
 // ============================================================
-function isDMPollingEnabled() {
-  // localhost時はDMポーリング無効（バックエンド未起動でエラーになるため）
-  if (!CONFIG.API_BASE_URL) return false;
-  if (CONFIG.API_BASE_URL.includes('localhost')) return false;
-  if (CONFIG.API_BASE_URL.includes('127.0.0.1')) return false;
-  return true;
+
+/**
+ * Supabase REST APIでDMキューから1件取得
+ */
+async function fetchNextDMTask() {
+  await loadAuth();
+  if (!accountId || !accessToken) return null;
+
+  const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+    + `?account_id=eq.${accountId}&status=eq.queued`
+    + `&order=created_at.asc&limit=1`
+    + `&select=id,user_name,profile_url,message,campaign`;
+
+  const res = await fetch(url, {
+    headers: {
+      'apikey': CONFIG.SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) return null;
+      return fetchNextDMTask();
+    }
+    return null;
+  }
+
+  const data = await res.json();
+  return (Array.isArray(data) && data.length > 0) ? data[0] : null;
+}
+
+/**
+ * DM送信ログのステータスをSupabase直接更新
+ */
+async function updateDMTaskStatus(taskId, status, error) {
+  await loadAuth();
+  if (!accessToken) return;
+
+  const body = { status };
+  if (error) body.error = error;
+  if (status === 'success') body.sent_at = new Date().toISOString();
+
+  await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?id=eq.${taskId}`, {
+    method: 'PATCH',
+    headers: {
+      'apikey': CONFIG.SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  }).catch(err => console.warn('[LS-BG] DMステータス更新失敗:', err.message));
+}
+
+/**
+ * Stripchatタブを取得または作成
+ */
+async function getOrCreateStripchatTab() {
+  const tabs = await chrome.tabs.query({
+    url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+  });
+  if (tabs.length > 0) return tabs[0];
+
+  // 新しいタブを作成
+  const newTab = await chrome.tabs.create({
+    url: 'https://stripchat.com/',
+    active: false,
+  });
+  // ページロードを待つ
+  await waitForTabComplete(newTab.id, 15000);
+  return newTab;
+}
+
+/**
+ * タブのロード完了を待つ
+ */
+function waitForTabComplete(tabId, timeout = 15000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+
+    function onUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(true);
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+
+    // タイムアウト
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(false);
+    }, timeout);
+
+    // 既にcompleteの場合
+    chrome.tabs.get(tabId).then(tab => {
+      if (tab.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(true);
+      }
+    }).catch(() => resolve(false));
+  });
+}
+
+/**
+ * dm_executor.js からの結果を待つ（Promiseベース）
+ */
+function waitForDMResult(taskId, timeout = 30000) {
+  return new Promise((resolve) => {
+    pendingDMTaskId = taskId;
+    pendingDMResolve = resolve;
+
+    setTimeout(() => {
+      if (pendingDMResolve && pendingDMTaskId === taskId) {
+        pendingDMResolve = null;
+        pendingDMTaskId = null;
+        resolve({ success: false, error: 'タイムアウト (30秒)' });
+      }
+    }, timeout);
+  });
+}
+
+function sleep_bg(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * DMタスクを1件処理（タブ遷移 → 送信指示 → 結果待ち）
+ */
+async function processSingleDMTask(task) {
+  console.log('[LS-BG] DM処理開始: id=', task.id, 'user=', task.user_name);
+
+  // 1. ステータスを sending に更新
+  await updateDMTaskStatus(task.id, 'sending', null);
+
+  try {
+    // 2. Stripchatタブを取得
+    const tab = await getOrCreateStripchatTab();
+
+    // 3. プロフィールURLに遷移
+    const profileUrl = task.profile_url
+      || `https://stripchat.com/user/${task.user_name}`;
+    console.log('[LS-BG] タブ遷移:', profileUrl);
+
+    await chrome.tabs.update(tab.id, { url: profileUrl });
+
+    // 4. ページロード完了を待つ
+    const loaded = await waitForTabComplete(tab.id, 15000);
+    if (!loaded) {
+      throw new Error('ページロードタイムアウト');
+    }
+
+    // ページロード後の描画安定待ち
+    await sleep_bg(3000);
+
+    // 5. content script に DM送信を指示
+    try {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: 'SEND_DM',
+        taskId: task.id,
+        username: task.user_name,
+        message: task.message,
+      });
+    } catch (err) {
+      throw new Error('DM executor通信失敗: ' + err.message);
+    }
+
+    // 6. 結果を待つ
+    const result = await waitForDMResult(task.id, CONFIG.DM_SEND_TIMEOUT);
+
+    // 7. ステータス更新
+    if (result.success) {
+      await updateDMTaskStatus(task.id, 'success', null);
+      console.log('[LS-BG] DM送信成功: user=', task.user_name);
+    } else {
+      await updateDMTaskStatus(task.id, 'error', result.error);
+      console.warn('[LS-BG] DM送信失敗: user=', task.user_name, 'error=', result.error);
+    }
+  } catch (err) {
+    console.error('[LS-BG] DM処理例外: user=', task.user_name, err.message);
+    await updateDMTaskStatus(task.id, 'error', err.message);
+  }
+}
+
+/**
+ * DMキューを順次処理（ポーリングで1件ずつ取得→処理→次へ）
+ */
+async function processDMQueue() {
+  if (dmProcessing) return;
+  dmProcessing = true;
+
+  try {
+    while (true) {
+      const task = await fetchNextDMTask();
+      if (!task) break; // キューが空
+
+      await processSingleDMTask(task);
+
+      // レート制限: 3-8秒ランダム待機
+      const delay = 3000 + Math.random() * 5000;
+      console.log('[LS-BG] DM次タスクまで', Math.round(delay / 1000), '秒待機');
+      await sleep_bg(delay);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] DMキュー処理エラー:', e.message);
+  } finally {
+    dmProcessing = false;
+  }
 }
 
 function startDMPolling() {
   if (dmPollingTimer) return;
-  if (!isDMPollingEnabled()) {
-    console.log('[LS-BG] DMポーリング: スキップ (API_BASE_URL=', CONFIG.API_BASE_URL, ')');
-    return;
-  }
-  console.log('[LS-BG] DMポーリング開始');
+  console.log('[LS-BG] DMポーリング開始 (Supabase直接, 10秒間隔)');
 
-  dmPollingTimer = setInterval(async () => {
-    try {
-      await loadAuth();
-      if (!accountId || !accessToken) return;
+  // 即時1回実行
+  processDMQueue();
 
-      const tasks = await apiRequest(
-        `/api/dm/queue?account_id=${accountId}&status=queued&limit=5`
-      );
-
-      if (!tasks || tasks.length === 0) return;
-
-      const tabs = await chrome.tabs.query({
-        url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
-      });
-
-      if (tabs.length === 0) return;
-
-      for (const task of tasks) {
-        await apiRequest(`/api/dm/queue/${task.id}/status`, {
-          method: 'PUT',
-          body: JSON.stringify({ status: 'sending' }),
-        }).catch(() => {});
-      }
-
-      chrome.tabs.sendMessage(tabs[0].id, {
-        type: 'EXECUTE_DM',
-        tasks,
-      }).catch((err) => {
-        console.warn('[LS-BG] DMタスク送信失敗:', err.message);
-        tasks.forEach((task) => {
-          apiRequest(`/api/dm/queue/${task.id}/status`, {
-            method: 'PUT',
-            body: JSON.stringify({ status: 'queued' }),
-          }).catch(() => {});
-        });
-      });
-    } catch (e) {
-      console.warn('[LS-BG] DMポーリングエラー:', e.message);
-    }
-  }, CONFIG.POLL_INTERVAL);
+  dmPollingTimer = setInterval(() => {
+    processDMQueue();
+  }, 10000);
 }
 
 function stopDMPolling() {

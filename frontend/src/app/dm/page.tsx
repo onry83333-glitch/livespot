@@ -122,24 +122,33 @@ export default function DmPage() {
   const handleSend = async () => {
     if (targets.length === 0) { setError('ターゲットを1件以上入力してください'); return; }
     if (!message.trim()) { setError('メッセージを入力してください'); return; }
+    if (!selectedAccount) { setError('アカウントを選択してください'); return; }
     setSending(true); setError(null); setBatchId(null);
     try {
-      const bid = `bulk_${Date.now()}`;
-      const rows = targets.map(t => ({
-        account_id: selectedAccount,
-        user_name: t.replace(/.*\/user\//, ''),
-        profile_url: t.startsWith('http') ? t : `https://ja.stripchat.com/user/${t}`,
-        message,
-        status: 'queued',
-        campaign: bid,
-        queued_at: new Date().toISOString(),
-      }));
-      const { error: insertErr } = await sb.from('dm_send_log').insert(rows);
-      if (insertErr) throw insertErr;
+      // ターゲットからユーザー名を抽出
+      const usernames = targets.map(t => t.replace(/.*\/user\//, '').trim());
+
+      const { data, error: rpcErr } = await sb.rpc('create_dm_batch', {
+        p_account_id: selectedAccount,
+        p_targets: usernames,
+        p_message: message,
+        p_template_name: null,
+      });
+
+      if (rpcErr) throw rpcErr;
+
+      // RPC関数がエラーを返した場合（上限超え等）
+      if (data?.error) {
+        setError(`${data.error} (使用済み: ${data.used}/${data.limit})`);
+        return;
+      }
+
+      const bid = data?.batch_id;
+      const count = data?.count || usernames.length;
       setBatchId(bid);
-      setQueuedCount(rows.length);
-      setStatusCounts({ total: rows.length, queued: rows.length, sending: 0, success: 0, error: 0 });
-      pollStatus(bid);
+      setQueuedCount(count);
+      setStatusCounts({ total: count, queued: count, sending: 0, success: 0, error: 0 });
+      if (bid) pollStatus(bid);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -213,21 +222,47 @@ export default function DmPage() {
   const handleThankSend = async () => {
     if (whaleChecked.size === 0) { setWhaleError('ユーザーを1名以上選択してください'); return; }
     if (!thankMessage.trim()) { setWhaleError('メッセージを入力してください'); return; }
+    if (!selectedAccount) { setWhaleError('アカウントを選択してください'); return; }
     setThankSending(true); setWhaleError(null); setThankResult(null);
     try {
-      const bid = `thank_${Date.now()}`;
-      const rows = Array.from(whaleChecked).map(un => ({
-        account_id: selectedAccount,
-        user_name: un,
-        message: thankMessage.replace('{username}', un),
-        status: 'queued',
-        campaign: bid,
-        template_name: 'thank_dm',
-        queued_at: new Date().toISOString(),
-      }));
-      const { error: insertErr } = await sb.from('dm_send_log').insert(rows);
-      if (insertErr) throw insertErr;
-      setThankResult({ queued: rows.length, batch_id: bid });
+      // お礼DMはユーザーごとにメッセージを個別化するため、個別INSERTを使う
+      // ただしRPC経由でプラン上限チェックを行う
+      const usernames = Array.from(whaleChecked);
+      // まず上限チェック用に1件目のメッセージでRPCを呼ぶ
+      const { data, error: rpcErr } = await sb.rpc('create_dm_batch_personalized', {
+        p_account_id: selectedAccount,
+        p_usernames: usernames,
+        p_message_template: thankMessage,
+        p_template_name: 'thank_dm',
+      });
+
+      if (rpcErr) {
+        // RPC関数が存在しない場合はフォールバック（直接INSERT）
+        if (rpcErr.message?.includes('function') || rpcErr.code === '42883') {
+          console.warn('[DM] create_dm_batch_personalized未実装 → 直接INSERT');
+          const bid = `thank_${Date.now()}`;
+          const rows = usernames.map(un => ({
+            account_id: selectedAccount,
+            user_name: un,
+            profile_url: `https://stripchat.com/user/${un}`,
+            message: thankMessage.replace('{username}', un),
+            status: 'queued',
+            campaign: bid,
+            template_name: 'thank_dm',
+            queued_at: new Date().toISOString(),
+          }));
+          const { error: insertErr } = await sb.from('dm_send_log').insert(rows);
+          if (insertErr) throw insertErr;
+          setThankResult({ queued: rows.length, batch_id: bid });
+        } else {
+          throw rpcErr;
+        }
+      } else if (data?.error) {
+        setWhaleError(`${data.error} (使用済み: ${data.used}/${data.limit})`);
+        return;
+      } else {
+        setThankResult({ queued: data?.count || usernames.length, batch_id: data?.batch_id || '' });
+      }
     } catch (e: unknown) {
       setWhaleError(e instanceof Error ? e.message : 'エラーが発生しました');
     }
@@ -243,12 +278,11 @@ export default function DmPage() {
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold">DM</h1>
           <span className="badge-info text-[10px]">V7.0</span>
-          <span className="badge-live text-[10px] flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 anim-live"></span>
-            Chrome接続済み
+          <span className="badge-info text-[10px] flex items-center gap-1">
+            Chrome拡張で実行
           </span>
         </div>
-        {tab === 'thank' && accounts.length > 0 && (
+        {accounts.length > 0 && (
           <select className="input-glass text-xs px-3 py-2 w-48"
             value={selectedAccount}
             onChange={(e) => setSelectedAccount(e.target.value)}>
