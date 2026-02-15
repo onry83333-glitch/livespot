@@ -543,8 +543,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // ============================================================
 // DM Queue Polling
 // ============================================================
+function isDMPollingEnabled() {
+  // localhost時はDMポーリング無効（バックエンド未起動でエラーになるため）
+  if (!CONFIG.API_BASE_URL) return false;
+  if (CONFIG.API_BASE_URL.includes('localhost')) return false;
+  if (CONFIG.API_BASE_URL.includes('127.0.0.1')) return false;
+  return true;
+}
+
 function startDMPolling() {
   if (dmPollingTimer) return;
+  if (!isDMPollingEnabled()) {
+    console.log('[LS-BG] DMポーリング: スキップ (API_BASE_URL=', CONFIG.API_BASE_URL, ')');
+    return;
+  }
   console.log('[LS-BG] DMポーリング開始');
 
   dmPollingTimer = setInterval(async () => {
