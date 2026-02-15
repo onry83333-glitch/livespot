@@ -20,14 +20,17 @@ export default function UserTimelinePage() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [messages, setMessages] = useState<SpyMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<MsgTypeFilter>('all');
 
   // アカウントID取得
   useEffect(() => {
     if (!user) return;
     (async () => {
-      const { data } = await sb.from('accounts').select('id').limit(1).single();
-      if (data) setAccountId(data.id);
+      try {
+        const { data } = await sb.from('accounts').select('id').limit(1).single();
+        if (data) setAccountId(data.id);
+      } catch { /* ignored */ }
     })();
   }, [user, sb]);
 
@@ -35,16 +38,23 @@ export default function UserTimelinePage() {
   useEffect(() => {
     if (!accountId) return;
     setLoading(true);
+    setError(null);
     (async () => {
-      const { data } = await sb
-        .from('spy_messages')
-        .select('*')
-        .eq('account_id', accountId)
-        .eq('user_name', username)
-        .order('message_time', { ascending: false });
+      try {
+        const { data, error: fetchErr } = await sb
+          .from('spy_messages')
+          .select('*')
+          .eq('account_id', accountId)
+          .eq('user_name', username)
+          .order('message_time', { ascending: false });
 
-      setMessages(data || []);
-      setLoading(false);
+        if (fetchErr) throw new Error(fetchErr.message);
+        setMessages(data || []);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'データ取得に失敗しました');
+      } finally {
+        setLoading(false);
+      }
     })();
   }, [accountId, username, sb]);
 
@@ -136,6 +146,12 @@ export default function UserTimelinePage() {
           <span>👤</span> {username}
         </h1>
       </div>
+
+      {error && (
+        <div className="glass-card p-4 anim-fade-up" style={{ borderLeft: '3px solid var(--accent-pink)' }}>
+          <p className="text-xs" style={{ color: 'var(--accent-pink)' }}>{error}</p>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-20">

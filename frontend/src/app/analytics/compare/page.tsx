@@ -42,6 +42,7 @@ export default function CastComparePage() {
   const [selectedCasts, setSelectedCasts] = useState<string[]>([]);
   const [period, setPeriod] = useState<Period>('7d');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [castStats, setCastStats] = useState<CastStats[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
 
@@ -49,8 +50,10 @@ export default function CastComparePage() {
   useEffect(() => {
     if (!user) return;
     (async () => {
-      const { data } = await sb.from('accounts').select('id').limit(1).single();
-      if (data) setAccountId(data.id);
+      try {
+        const { data } = await sb.from('accounts').select('id').limit(1).single();
+        if (data) setAccountId(data.id);
+      } catch { /* ignored */ }
     })();
   }, [user, sb]);
 
@@ -58,23 +61,28 @@ export default function CastComparePage() {
   useEffect(() => {
     if (!accountId) return;
     (async () => {
-      const { data } = await sb
-        .from('spy_messages')
-        .select('cast_name')
-        .eq('account_id', accountId)
-        .not('cast_name', 'is', null);
+      try {
+        const { data, error: fetchErr } = await sb
+          .from('spy_messages')
+          .select('cast_name')
+          .eq('account_id', accountId)
+          .not('cast_name', 'is', null);
 
-      if (data) {
-        const unique = Array.from(new Set(data.map(r => r.cast_name as string))).sort();
-        setAllCasts(unique);
-        // 最初の2キャストを自動選択
-        if (unique.length >= 2) {
-          setSelectedCasts(unique.slice(0, 2));
-        } else if (unique.length === 1) {
-          setSelectedCasts([unique[0]]);
+        if (fetchErr) throw new Error(fetchErr.message);
+        if (data) {
+          const unique = Array.from(new Set(data.map(r => r.cast_name as string))).sort();
+          setAllCasts(unique);
+          if (unique.length >= 2) {
+            setSelectedCasts(unique.slice(0, 2));
+          } else if (unique.length === 1) {
+            setSelectedCasts([unique[0]]);
+          }
         }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'キャスト一覧の取得に失敗しました');
+      } finally {
+        setInitialLoading(false);
       }
-      setInitialLoading(false);
     })();
   }, [accountId, sb]);
 
@@ -93,66 +101,71 @@ export default function CastComparePage() {
     }
   }, [period]);
 
-  // データ取得
+  // データ取得（Promise.allで並列化）
   const loadStats = useCallback(async () => {
     if (!accountId || selectedCasts.length === 0) {
       setCastStats([]);
       return;
     }
     setLoading(true);
+    setError(null);
 
-    const results: CastStats[] = [];
+    try {
+      const promises = selectedCasts.map(async (castName, i) => {
+        let query = sb
+          .from('spy_messages')
+          .select('msg_type, user_name, tokens, message_time')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName);
 
-    for (let i = 0; i < selectedCasts.length; i++) {
-      const castName = selectedCasts[i];
-      let query = sb
-        .from('spy_messages')
-        .select('msg_type, user_name, tokens, message_time')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName);
+        if (startDate) {
+          query = query.gte('message_time', startDate);
+        }
 
-      if (startDate) {
-        query = query.gte('message_time', startDate);
-      }
+        const { data, error: fetchErr } = await query.order('message_time', { ascending: true });
+        if (fetchErr) throw new Error(fetchErr.message);
+        const msgs = data || [];
 
-      const { data } = await query.order('message_time', { ascending: true });
-      const msgs = data || [];
+        const totalMessages = msgs.length;
+        const totalTips = msgs.reduce((s, m) => s + (m.tokens || 0), 0);
+        const tipMessages = msgs.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').length;
+        const uniqueUsers = new Set(msgs.filter(m => m.user_name).map(m => m.user_name)).size;
 
-      const totalMessages = msgs.length;
-      const totalTips = msgs.reduce((s, m) => s + (m.tokens || 0), 0);
-      const tipMessages = msgs.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').length;
-      const uniqueUsers = new Set(msgs.filter(m => m.user_name).map(m => m.user_name)).size;
+        // 平均チャット速度 (msg/min)
+        let avgChatSpeed = 0;
+        if (msgs.length > 1) {
+          const firstTime = new Date(msgs[0].message_time).getTime();
+          const lastTime = new Date(msgs[msgs.length - 1].message_time).getTime();
+          const durationMin = (lastTime - firstTime) / 60000;
+          avgChatSpeed = durationMin > 0 ? totalMessages / durationMin : 0;
+        }
 
-      // 平均チャット速度 (msg/min)
-      let avgChatSpeed = 0;
-      if (msgs.length > 1) {
-        const firstTime = new Date(msgs[0].message_time).getTime();
-        const lastTime = new Date(msgs[msgs.length - 1].message_time).getTime();
-        const durationMin = (lastTime - firstTime) / 60000;
-        avgChatSpeed = durationMin > 0 ? totalMessages / durationMin : 0;
-      }
+        // セッション数 (30分以上の間隔で分割)
+        let sessionCount = msgs.length > 0 ? 1 : 0;
+        for (let j = 1; j < msgs.length; j++) {
+          const gap = new Date(msgs[j].message_time).getTime() - new Date(msgs[j - 1].message_time).getTime();
+          if (gap > 30 * 60 * 1000) sessionCount++;
+        }
 
-      // セッション数 (30分以上の間隔で分割)
-      let sessionCount = msgs.length > 0 ? 1 : 0;
-      for (let j = 1; j < msgs.length; j++) {
-        const gap = new Date(msgs[j].message_time).getTime() - new Date(msgs[j - 1].message_time).getTime();
-        if (gap > 30 * 60 * 1000) sessionCount++;
-      }
-
-      results.push({
-        castName,
-        color: CAST_COLORS[i % CAST_COLORS.length],
-        totalMessages,
-        totalTips,
-        uniqueUsers,
-        avgChatSpeed,
-        sessionCount,
-        tipMessages,
+        return {
+          castName,
+          color: CAST_COLORS[i % CAST_COLORS.length],
+          totalMessages,
+          totalTips,
+          uniqueUsers,
+          avgChatSpeed,
+          sessionCount,
+          tipMessages,
+        } as CastStats;
       });
-    }
 
-    setCastStats(results);
-    setLoading(false);
+      const results = await Promise.all(promises);
+      setCastStats(results);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'データ取得に失敗しました');
+    } finally {
+      setLoading(false);
+    }
   }, [accountId, selectedCasts, startDate, sb]);
 
   useEffect(() => {
@@ -320,6 +333,13 @@ export default function CastComparePage() {
           </div>
         </div>
       </div>
+
+      {/* エラー表示 */}
+      {error && (
+        <div className="glass-card p-4 anim-fade-up" style={{ borderLeft: '3px solid var(--accent-pink)' }}>
+          <p className="text-xs" style={{ color: 'var(--accent-pink)' }}>{error}</p>
+        </div>
+      )}
 
       {/* ローディング */}
       {loading && (

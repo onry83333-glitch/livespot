@@ -23,7 +23,6 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('[SPY] castNames取得失敗:', error.message);
       return;
     }
     if (data) {
@@ -46,7 +45,6 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
 
     const { data, error } = await query;
     if (error) {
-      console.error('[SPY] messages取得失敗:', error.message);
       return;
     }
     if (data) {
@@ -56,8 +54,6 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
 
   // デモデータ挿入 — エラーメッセージを返す
   const insertDemoData = useCallback(async (accountId: string): Promise<string | null> => {
-    console.log('[DEMO] inserting with account_id:', accountId);
-
     const now = new Date();
     const demoMessages = [
       { account_id: accountId, cast_name: 'サクラ', message_time: new Date(now.getTime() - 4000).toISOString(), msg_type: 'chat', user_name: 'BigSpender88', message: 'サクラちゃん今日もかわいいね！', tokens: 0, is_vip: false, metadata: {} },
@@ -72,12 +68,10 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
       .insert(demoMessages);
 
     if (error) {
-      console.error('[DEMO] INSERT失敗:', error.message, error.details, error.hint);
       return `${error.message}${error.hint ? ` (${error.hint})` : ''}`;
     }
 
-    console.log('[DEMO] INSERT成功: 5件');
-    return null; // 成功
+    return null;
   }, []);
 
   // Realtime subscription

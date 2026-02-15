@@ -23,7 +23,6 @@ export function useDMQueue(accountId: string) {
       setQueue(data ?? []);
       updateStats(data ?? []);
     } catch (e) {
-      console.error('Failed to load DM queue:', e);
     }
   }, [accountId]);
 

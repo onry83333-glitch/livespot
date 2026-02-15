@@ -22,6 +22,7 @@ export default function UsersPage() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'tokens' | 'messages' | 'recent'>('tokens');
 
@@ -29,49 +30,67 @@ export default function UsersPage() {
   useEffect(() => {
     if (!user) return;
     (async () => {
-      const { data } = await sb.from('accounts').select('id').limit(1).single();
-      if (data) setAccountId(data.id);
+      try {
+        const { data } = await sb.from('accounts').select('id').limit(1).single();
+        if (data) setAccountId(data.id);
+      } catch { /* ignored */ }
     })();
   }, [user, sb]);
 
-  // ユーザー一覧取得
+  // ユーザー一覧取得（RPC関数 or フォールバック）
   useEffect(() => {
     if (!accountId) return;
     setLoading(true);
+    setError(null);
     (async () => {
-      const { data, error } = await sb
-        .from('spy_messages')
-        .select('user_name, tokens, message_time')
-        .eq('account_id', accountId)
-        .not('user_name', 'is', null);
+      try {
+        // RPC関数を試行（003マイグレーション適用後に有効）
+        const { data: rpcData, error: rpcError } = await sb.rpc('user_summary', { p_account_id: accountId });
 
-      if (error || !data) {
-        setLoading(false);
-        return;
-      }
-
-      // クライアント側でユニーク化・集計
-      const map = new Map<string, UserSummary>();
-      for (const row of data) {
-        const name = row.user_name as string;
-        const existing = map.get(name);
-        if (existing) {
-          existing.messageCount += 1;
-          existing.totalTokens += row.tokens || 0;
-          if (row.message_time > existing.lastActivity) {
-            existing.lastActivity = row.message_time;
-          }
+        if (!rpcError && rpcData) {
+          setUsers(rpcData.map((r: { user_name: string; message_count: number; total_tokens: number; last_activity: string }) => ({
+            user_name: r.user_name,
+            messageCount: Number(r.message_count),
+            totalTokens: Number(r.total_tokens),
+            lastActivity: r.last_activity,
+          })));
         } else {
-          map.set(name, {
-            user_name: name,
-            messageCount: 1,
-            totalTokens: row.tokens || 0,
-            lastActivity: row.message_time,
-          });
+          // フォールバック: クライアント側集計
+          const { data, error: fetchErr } = await sb
+            .from('spy_messages')
+            .select('user_name, tokens, message_time')
+            .eq('account_id', accountId)
+            .not('user_name', 'is', null);
+
+          if (fetchErr) throw new Error(fetchErr.message);
+          if (!data) { setUsers([]); return; }
+
+          const map = new Map<string, UserSummary>();
+          for (const row of data) {
+            const name = row.user_name as string;
+            const existing = map.get(name);
+            if (existing) {
+              existing.messageCount += 1;
+              existing.totalTokens += row.tokens || 0;
+              if (row.message_time > existing.lastActivity) {
+                existing.lastActivity = row.message_time;
+              }
+            } else {
+              map.set(name, {
+                user_name: name,
+                messageCount: 1,
+                totalTokens: row.tokens || 0,
+                lastActivity: row.message_time,
+              });
+            }
+          }
+          setUsers(Array.from(map.values()));
         }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'データ取得に失敗しました');
+      } finally {
+        setLoading(false);
       }
-      setUsers(Array.from(map.values()));
-      setLoading(false);
     })();
   }, [accountId, sb]);
 
@@ -157,6 +176,13 @@ export default function UsersPage() {
           <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>累計メッセージ</p>
         </div>
       </div>
+
+      {/* エラー表示 */}
+      {error && (
+        <div className="glass-card p-4 anim-fade-up" style={{ borderLeft: '3px solid var(--accent-pink)' }}>
+          <p className="text-xs" style={{ color: 'var(--accent-pink)' }}>{error}</p>
+        </div>
+      )}
 
       {/* ユーザー一覧 */}
       {loading ? (

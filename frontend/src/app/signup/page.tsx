@@ -93,7 +93,7 @@ export default function SignupPage() {
                   type="email"
                   required
                   className="input-glass"
-                  placeholder="admin@livespot.jp"
+                  placeholder="you@example.com"
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                 />

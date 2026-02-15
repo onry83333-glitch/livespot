@@ -118,7 +118,7 @@ export default function FeedPage() {
         .limit(100);
       setPosts(data ?? []);
     } catch (e) {
-      console.error('[LS] feed posts fetch error:', e);
+      // error handled silently
     } finally {
       setPostsLoading(false);
     }
@@ -155,7 +155,7 @@ export default function FeedPage() {
         total_posts: posts.length,
       });
     } catch (e) {
-      console.error('[LS] feed analytics fetch error:', e);
+      // error handled silently
     } finally {
       setAnalyticsLoading(false);
     }
@@ -186,7 +186,7 @@ export default function FeedPage() {
       resetForm();
       loadPosts();
     } catch (e) {
-      console.error('[LS] create post error:', e);
+      // error handled silently
     } finally {
       setFormSaving(false);
     }

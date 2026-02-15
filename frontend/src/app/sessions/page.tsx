@@ -90,7 +90,6 @@ export default function SessionsPage() {
       .order('started_at', { ascending: false })
       .limit(50)
       .then(({ data, error }) => {
-        if (error) console.error('sessions fetch error:', error);
         setSessions((data ?? []) as Session[]);
         setLoading(false);
       });
@@ -109,7 +108,6 @@ export default function SessionsPage() {
       .order('message_time', { ascending: true })
       .limit(2000)
       .then(({ data, error }) => {
-        if (error) console.error('messages fetch error:', error);
         setDetailMessages((data ?? []) as SpyMessage[]);
         setDetailLoading(false);
       });
@@ -196,7 +194,6 @@ export default function SessionsPage() {
 
   // AI Report: generate (direct Claude API call, no backend needed)
   const generateReport = useCallback(async (sessionId: string, accountId: string) => {
-    console.log('[LS] Report generation started', { sessionId, accountId });
     setReportLoading(sessionId);
     setReportError(null);
 
@@ -317,7 +314,6 @@ export default function SessionsPage() {
       ].join('\n');
 
       // --- Call server-side API route ---
-      console.log('[LS] Calling AI report API route...', { promptLen: userPrompt.length });
       const supabase = createClient();
       const { data: { session: authSession } } = await supabase.auth.getSession();
       if (!authSession?.access_token) throw new Error('認証セッションが無効です');
@@ -340,8 +336,6 @@ export default function SessionsPage() {
       const reportText = apiData.text;
       const tokensUsed = apiData.tokensUsed || 0;
       const costUsd = apiData.costUsd || 0;
-
-      console.log('[LS] Report generated', { tokensUsed, costUsd: costUsd.toFixed(4) });
 
       // --- Save to Supabase ai_reports ---
       const castName = msgs[0]?.cast_name || '';
@@ -369,7 +363,6 @@ export default function SessionsPage() {
       }));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : 'レポート生成に失敗しました';
-      console.error('[LS] Report generation error:', msg);
       setReportError(msg);
     } finally {
       setReportLoading(null);
@@ -521,7 +514,7 @@ export default function SessionsPage() {
                     {/* AI Report Button */}
                     <button
                       type="button"
-                      onClick={(e) => { e.stopPropagation(); e.preventDefault(); console.log('[LS] AI Report button clicked', s.session_id); generateReport(s.session_id, s.account_id); }}
+                      onClick={(e) => { e.stopPropagation(); e.preventDefault(); generateReport(s.session_id, s.account_id); }}
                       disabled={reportLoading === s.session_id}
                       className="flex-shrink-0 flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg font-medium transition-all hover:brightness-125 cursor-pointer"
                       style={{
