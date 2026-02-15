@@ -232,14 +232,33 @@
     }
 
     // --- msg_type 判定 ---
-    // Tip
-    const tokenMatch = message.match(/(\d+)\s*(?:tokens?|tk|トークン)/i);
+
+    // Tip — トークン数検出
+    const tokenMatch = fullText.match(/(\d+)\s*(?:tokens?|tk|トークン|コイン)/i);
     if (tokenMatch) {
       tokens = parseInt(tokenMatch[1], 10);
       msgType = 'tip';
     }
 
-    // Gift
+    // Tip — テキストからユーザー名を抽出（DOMから取れなかった場合）
+    if (msgType === 'tip' && !userName) {
+      const tipPatterns = [
+        /^(.+?)\s+tipped\s+\d+/i,                       // "User tipped 50 tokens"
+        /^(.+?)\s+sent\s+\d+/i,                         // "User sent 50 tokens"
+        /^(.+?)\s*さんが\s*\d+\s*(?:コイン|トークン)/,   // "Userさんが 50 コイン"
+        /^(.+?)\s+が\s+\d+\s*tk/i,                      // "User が 50 tk"
+        /^(.+?)\s+(?:tipped|sent|gave)/i,               // "User tipped/sent/gave"
+      ];
+      for (const pat of tipPatterns) {
+        const m = fullText.match(pat);
+        if (m && m[1].trim().length > 0 && m[1].trim().length < 50) {
+          userName = m[1].trim();
+          break;
+        }
+      }
+    }
+
+    // Gift — DOM要素ベース
     if (
       node.querySelector(
         '[class*="gift"], [class*="Gift"], [class*="reward"], img[src*="gift"]'
@@ -247,22 +266,65 @@
     ) {
       msgType = 'gift';
       if (!tokens) {
-        const giftTokens = message.match(/(\d+)/);
+        const giftTokens = fullText.match(/(\d+)\s*(?:tokens?|tk|トークン|コイン)?/i);
         if (giftTokens) tokens = parseInt(giftTokens[1], 10);
+      }
+      // Gift でもユーザー名をテキストから抽出
+      if (!userName) {
+        const giftPatterns = [
+          /^(.+?)\s+(?:sent|gave|gifted)/i,
+          /^(.+?)\s*さんが.*(?:プレゼント|ギフト)/,
+        ];
+        for (const pat of giftPatterns) {
+          const m = fullText.match(pat);
+          if (m && m[1].trim().length > 0 && m[1].trim().length < 50) {
+            userName = m[1].trim();
+            break;
+          }
+        }
       }
     }
 
-    // Enter / Leave
-    if (/joined|entered|入室|has entered/i.test(fullText) && !message) {
-      msgType = 'enter';
+    // Enter / Leave — テキストパターンで判定 + ユーザー名抽出
+    const enterPatterns = [
+      /^(.+?)\s+has joined/i,                            // "User has joined"
+      /^(.+?)\s+joined\s+the\s+(?:group\s+)?chat/i,     // "User joined the chat"
+      /^(.+?)\s+entered/i,                               // "User entered"
+      /^(.+?)\s*さんが.*(?:参加|入室)/,                   // "Userさんがグループチャットに参加しました"
+    ];
+    const leavePatterns = [
+      /^(.+?)\s+has left/i,                              // "User has left"
+      /^(.+?)\s+left\s+the\s+(?:group\s+)?chat/i,       // "User left the chat"
+      /^(.+?)\s*さんが.*退室/,                            // "Userさんが退室しました"
+    ];
+
+    if (msgType === 'chat') {
+      for (const pat of enterPatterns) {
+        const m = fullText.match(pat);
+        if (m && m[1].trim().length > 0 && m[1].trim().length < 50) {
+          msgType = 'enter';
+          if (!userName) userName = m[1].trim();
+          message = '';
+          break;
+        }
+      }
     }
-    if (/left|退室|has left/i.test(fullText)) {
-      msgType = 'leave';
+    if (msgType === 'chat') {
+      for (const pat of leavePatterns) {
+        const m = fullText.match(pat);
+        if (m && m[1].trim().length > 0 && m[1].trim().length < 50) {
+          msgType = 'leave';
+          if (!userName) userName = m[1].trim();
+          message = '';
+          break;
+        }
+      }
     }
 
-    // System
+    // System — DOM要素ベース
     if (
       !userName &&
+      msgType === 'chat' &&
       node.querySelector(
         '[class*="system"], [class*="System"], [class*="notice"], [class*="Notice"]'
       )
