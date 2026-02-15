@@ -304,10 +304,17 @@
       '[class*="username"], [class*="userName"], [class*="UserName"], [class*="user-name"], [class*="nick"], [class*="Nick"], [class*="author"], [class*="Author"]'
     );
     const textSpan = node.querySelector(
-      '[class*="text"], [class*="Text"], [class*="message-text"], [class*="messageText"], [class*="content"]'
+      '[class*="message-text"], [class*="messageText"], [class*="MessageText"]'
     );
+    // textSpan がユーザー名要素と異なるかつユーザー名を含まない場合のみ使用
     if (textSpan && textSpan !== node && textSpan !== userEl) {
-      message = (textSpan.textContent || '').trim();
+      const spanText = (textSpan.textContent || '').trim();
+      // textSpanがユーザー名で始まる場合はstrip
+      if (userName && spanText.startsWith(userName)) {
+        message = spanText.substring(userName.length).replace(/^[\s:：\-—]+/, '').trim();
+      } else {
+        message = spanText;
+      }
     } else if (userName && fullText.startsWith(userName)) {
       // テキスト先頭がユーザー名 → 除去して本文を取得
       message = fullText
@@ -323,13 +330,31 @@
       message = fullText;
     }
 
+    // 最終ガード: messageがまだユーザー名で始まっていたら除去
+    if (userName && message && message.startsWith(userName)) {
+      message = message.substring(userName.length).replace(/^[\s:：\-—]+/, '').trim();
+    }
+
     // --- msg_type 判定 ---
 
-    // Tip — トークン数検出
-    const tokenMatch = fullText.match(/(\d+)\s*(?:tokens?|tk|トークン|コイン)/i);
-    if (tokenMatch) {
-      tokens = parseInt(tokenMatch[1], 10);
-      msgType = 'tip';
+    // Goal / システムメッセージ — 「Xコインでゴール」パターン（チップとは別物）
+    const goalMatch = fullText.match(/(\d+)\s*コインでゴール[：:]/);
+    if (goalMatch) {
+      tokens = parseInt(goalMatch[1], 10);
+      msgType = 'goal';
+      // ゴールメッセージはシステム発行なのでユーザー名は不要
+      if (!userName) userName = '';
+      // メッセージ本文はゴール内容
+      message = fullText;
+    }
+
+    // Tip — トークン数検出（ゴール以外）
+    if (msgType !== 'goal') {
+      const tokenMatch = fullText.match(/(\d+)\s*(?:tokens?|tk|トークン|コイン)/i);
+      if (tokenMatch) {
+        tokens = parseInt(tokenMatch[1], 10);
+        msgType = 'tip';
+      }
     }
 
     // Tip — テキストからユーザー名を抽出（DOMから取れなかった場合）
@@ -433,7 +458,7 @@
       isVip = true;
     }
 
-    // ユーザー名もメッセージも取れなかったら無視
+    // ユーザー名もメッセージも取れなかったら無視（goal/system は除外）
     if (!userName && msgType === 'chat') return null;
 
     // ユーザーリスト誤認ガード:
@@ -441,12 +466,6 @@
     if (msgType === 'chat') {
       if (!message || message === userName) {
         return null;
-      }
-      // メッセージ先頭がユーザー名の繰り返し（例: "masagoro5379masagoro5379"）→ パース異常
-      if (userName && message.startsWith(userName) && message.length <= userName.length * 2 + 5) {
-        // 本文からユーザー名プレフィックスを除去
-        message = message.substring(userName.length).replace(/^[\s:：\-—]+/, '').trim();
-        if (!message) return null;
       }
     }
 

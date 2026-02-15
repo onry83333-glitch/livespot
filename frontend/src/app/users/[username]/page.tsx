@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, formatJST, timeAgo, msgTypeLabel } from '@/lib/utils';
 import type { SpyMessage } from '@/types';
 
-type MsgTypeFilter = 'all' | 'chat' | 'tip' | 'gift' | 'enter' | 'leave';
+type MsgTypeFilter = 'all' | 'chat' | 'tip' | 'gift' | 'goal' | 'enter' | 'leave';
 
 export default function UserTimelinePage() {
   const { user } = useAuth();
@@ -105,6 +105,8 @@ export default function UserTimelinePage() {
       case 'tip':
       case 'gift':
         return 'var(--accent-amber)';
+      case 'goal':
+        return 'var(--accent-purple)';
       case 'enter':
       case 'leave':
         return 'var(--text-muted)';
@@ -120,6 +122,8 @@ export default function UserTimelinePage() {
       case 'tip':
       case 'gift':
         return 'rgba(245,158,11,0.06)';
+      case 'goal':
+        return 'rgba(167,139,250,0.06)';
       case 'enter':
         return 'rgba(34,197,94,0.04)';
       case 'leave':
@@ -240,6 +244,7 @@ export default function UserTimelinePage() {
                 { key: 'chat', label: '💬 チャット' },
                 { key: 'tip', label: '💰 チップ' },
                 { key: 'gift', label: '🎁 ギフト' },
+                { key: 'goal', label: '🎯 ゴール' },
                 { key: 'enter', label: '👋 入室' },
                 { key: 'leave', label: '🚪 退室' },
               ] as { key: MsgTypeFilter; label: string }[]).map(f => (

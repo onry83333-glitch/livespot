@@ -59,7 +59,7 @@ export function getUserLeagueColor(level: number | null | undefined): string {
 /** Message type to display */
 export function msgTypeLabel(type: string): string {
   const map: Record<string, string> = {
-    chat: '💬', gift: '🎁', tip: '💰', enter: '🚪', leave: '👋', system: '⚙️',
+    chat: '💬', gift: '🎁', tip: '💰', goal: '🎯', enter: '🚪', leave: '👋', system: '⚙️',
   };
   return map[type] || type;
 }

@@ -8,6 +8,7 @@ const typeStyles: Record<string, { color: string; bg: string; border: string; la
   chat:   { color: 'var(--text-primary)',  bg: 'transparent',            border: 'transparent',            label: '\ud83d\udcac' },
   gift:   { color: 'var(--accent-amber)',  bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)', label: '\ud83c\udf81' },
   tip:    { color: 'var(--accent-amber)',  bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)', label: '\ud83d\udcb0' },
+  goal:   { color: 'var(--accent-purple)', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.25)', label: '\ud83c\udfaf' },
   enter:  { color: 'var(--accent-green)',  bg: 'rgba(34,197,94,0.05)',  border: 'rgba(34,197,94,0.15)',  label: '\ud83d\udc4b' },
   leave:  { color: 'var(--accent-pink)',   bg: 'rgba(244,63,94,0.05)',  border: 'rgba(244,63,94,0.15)',  label: '\ud83d\udeaa' },
   system: { color: 'var(--text-muted)',    bg: 'rgba(100,116,139,0.04)', border: 'transparent',           label: '\ud83d\udd14' },
@@ -15,7 +16,7 @@ const typeStyles: Record<string, { color: string; bg: string; border: string; la
 
 export function ChatMessage({ message: msg }: { message: SpyMessage }) {
   const style = typeStyles[msg.msg_type] ?? typeStyles.chat;
-  const isTip = msg.msg_type === 'tip' || msg.msg_type === 'gift';
+  const isTip = msg.msg_type === 'tip' || msg.msg_type === 'gift' || msg.msg_type === 'goal';
   const isSystem = msg.msg_type === 'system';
 
   const time = new Date(msg.message_time).toLocaleTimeString('ja-JP', {

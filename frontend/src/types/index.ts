@@ -60,7 +60,7 @@ export interface SpyMessage {
   account_id: string;
   cast_name: string;
   message_time: string;
-  msg_type: 'chat' | 'gift' | 'tip' | 'enter' | 'leave' | 'system';
+  msg_type: 'chat' | 'gift' | 'tip' | 'goal' | 'enter' | 'leave' | 'system';
   user_name: string | null;
   message: string | null;
   tokens: number;
