@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, msgTypeLabel, getUserLeagueColor } from '@/lib/utils';
-import type { Session, SpyMessage, Account } from '@/types';
+import type { SpyMessage, Account } from '@/types';
 
 interface AIReport {
   id: string;
@@ -19,6 +19,21 @@ interface AIReport {
 // Types
 // ============================================================
 
+/** spy_messages から動的算出したセッション */
+interface ComputedSession {
+  id: string;
+  session_id: string;
+  account_id: string;
+  cast_name: string;
+  title: string | null;
+  started_at: string;
+  ended_at: string;
+  total_messages: number;
+  total_tips: number;
+  total_coins: number;
+  unique_users: number;
+}
+
 interface UserStat {
   user_name: string;
   msg_count: number;
@@ -27,6 +42,30 @@ interface UserStat {
 }
 
 type MsgFilter = 'all' | 'chat' | 'tip';
+
+/** メッセージ群からセッションサマリーを構築 */
+function buildComputedSession(
+  accountId: string,
+  castName: string,
+  msgs: { message_time: string; msg_type: string; user_name: string | null; tokens: number }[],
+): ComputedSession {
+  const started_at = msgs[0].message_time;
+  const ended_at = msgs[msgs.length - 1].message_time;
+  const sessionId = `${castName}_${new Date(started_at).getTime()}`;
+  return {
+    id: sessionId,
+    session_id: sessionId,
+    account_id: accountId,
+    cast_name: castName,
+    title: null,
+    started_at,
+    ended_at,
+    total_messages: msgs.length,
+    total_tips: msgs.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').length,
+    total_coins: msgs.reduce((s, m) => s + (m.tokens || 0), 0),
+    unique_users: new Set(msgs.filter(m => m.user_name).map(m => m.user_name)).size,
+  };
+}
 
 // ============================================================
 // Main Page
@@ -38,7 +77,7 @@ export default function SessionsPage() {
   const [selectedAccount, setSelectedAccount] = useState<string>('');
   const [coinRate, setCoinRate] = useState(7.7);
   const [castUsernames, setCastUsernames] = useState<string[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessions, setSessions] = useState<ComputedSession[]>([]);
   const [loading, setLoading] = useState(false);
 
   // Detail panel state
@@ -71,7 +110,7 @@ export default function SessionsPage() {
       });
   }, [user]);
 
-  // Load sessions when account changes
+  // Load sessions: spy_messages から5分ギャップ方式で動的算出
   useEffect(() => {
     if (!selectedAccount) return;
     setLoading(true);
@@ -84,34 +123,76 @@ export default function SessionsPage() {
     }
 
     const supabase = createClient();
-    supabase.from('sessions')
-      .select('*')
+    const since = new Date(Date.now() - 90 * 86400000).toISOString();
+
+    supabase.from('spy_messages')
+      .select('cast_name, message_time, msg_type, user_name, tokens')
       .eq('account_id', selectedAccount)
-      .order('started_at', { ascending: false })
-      .limit(50)
-      .then(({ data, error }) => {
-        setSessions((data ?? []) as Session[]);
+      .gte('message_time', since)
+      .order('message_time', { ascending: true })
+      .limit(10000)
+      .then(({ data }) => {
+        if (!data || data.length === 0) {
+          setSessions([]);
+          setLoading(false);
+          return;
+        }
+
+        // cast_name 別にグループ化
+        const byCast = new Map<string, typeof data>();
+        for (const msg of data) {
+          const arr = byCast.get(msg.cast_name) || [];
+          arr.push(msg);
+          byCast.set(msg.cast_name, arr);
+        }
+
+        // 5分ギャップでセッション分割
+        const computed: ComputedSession[] = [];
+        Array.from(byCast.entries()).forEach(([cast, msgs]) => {
+          let group: typeof msgs = [];
+          for (let i = 0; i < msgs.length; i++) {
+            if (i > 0) {
+              const gap = new Date(msgs[i].message_time).getTime()
+                        - new Date(msgs[i - 1].message_time).getTime();
+              if (gap > 5 * 60 * 1000) {
+                if (group.length > 0) computed.push(buildComputedSession(selectedAccount, cast, group));
+                group = [];
+              }
+            }
+            group.push(msgs[i]);
+          }
+          if (group.length > 0) computed.push(buildComputedSession(selectedAccount, cast, group));
+        });
+
+        computed.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+        setSessions(computed);
         setLoading(false);
       });
   }, [selectedAccount, accounts]);
 
-  // Load detail messages when session expanded
+  // Load detail messages when session expanded (cast_name + 時間範囲で取得)
   useEffect(() => {
     if (!expandedId) return;
     setDetailLoading(true);
     setDetailMessages([]);
 
+    const session = sessions.find(s => s.session_id === expandedId);
+    if (!session) { setDetailLoading(false); return; }
+
     const supabase = createClient();
     supabase.from('spy_messages')
       .select('*')
-      .eq('session_id', expandedId)
+      .eq('account_id', session.account_id)
+      .eq('cast_name', session.cast_name)
+      .gte('message_time', session.started_at)
+      .lte('message_time', session.ended_at)
       .order('message_time', { ascending: true })
       .limit(2000)
-      .then(({ data, error }) => {
+      .then(({ data }) => {
         setDetailMessages((data ?? []) as SpyMessage[]);
         setDetailLoading(false);
       });
-  }, [expandedId]);
+  }, [expandedId, sessions]);
 
   // Helper: is this message from the cast?
   const isCastMsg = (m: SpyMessage): boolean => {
@@ -377,20 +458,18 @@ export default function SessionsPage() {
     setMsgFilter('all');
   };
 
-  const duration = (s: Session) => {
-    if (!s.ended_at) return '配信中';
+  const duration = (s: ComputedSession) => {
     const mins = Math.round((new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 60000);
+    if (mins < 1) return '1分未満';
     if (mins < 60) return `${mins}分`;
     return `${Math.floor(mins / 60)}時間${mins % 60}分`;
   };
 
-  // NOTE: CSVインポートがJST時刻をタイムゾーンなしで保存 → DBは+00:00付き
-  // そのため timeZone:'UTC' で表示するとJSTの値がそのまま出る
   const fmtTime = (d: string) =>
-    new Date(d).toLocaleString('ja-JP', { timeZone: 'UTC', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    new Date(d).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
   const fmtHMS = (d: string) =>
-    new Date(d).toLocaleTimeString('ja-JP', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    new Date(d).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   return (
     <div className="h-[calc(100vh-48px)] flex flex-col gap-4 overflow-hidden">
@@ -444,9 +523,8 @@ export default function SessionsPage() {
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <h3 className="text-sm font-bold">
-                      {s.title || fmtTime(s.started_at)}
+                      {s.title || `${s.cast_name} — ${fmtTime(s.started_at)}`}
                     </h3>
-                    {!s.ended_at && <span className="badge-live text-[9px] py-0.5 px-1.5">LIVE</span>}
                   </div>
                   <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     {isExpanded ? '▲ 閉じる' : '▼ 詳細'}
@@ -692,7 +770,7 @@ interface ViewerStat {
   recorded_at: string;
 }
 
-function ViewerChart({ session }: { session: Session }) {
+function ViewerChart({ session }: { session: ComputedSession }) {
   const [open, setOpen] = useState(false);
   const [stats, setStats] = useState<ViewerStat[]>([]);
   const [summary, setSummary] = useState({ max: 0, min: 0, avg: 0, count: 0 });
@@ -730,7 +808,7 @@ function ViewerChart({ session }: { session: Session }) {
   }, [open, session]);
 
   const fmtT = (d: string) =>
-    new Date(d).toLocaleTimeString('ja-JP', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
+    new Date(d).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' });
 
   return (
     <div className="mb-4">
@@ -880,7 +958,7 @@ function ViewerSVG({ stats, onHover }: {
   const step = Math.max(1, Math.floor(stats.length / 6));
   const xTicks = stats.filter((_, i) => i % step === 0 || i === stats.length - 1).map((s, _, arr) => ({
     x: xOf(stats.indexOf(s)),
-    label: new Date(s.recorded_at).toLocaleTimeString('ja-JP', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' }),
+    label: new Date(s.recorded_at).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' }),
   }));
 
   return (
