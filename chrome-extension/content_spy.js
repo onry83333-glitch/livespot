@@ -563,23 +563,10 @@
     lastMessageTime = Date.now();
     console.log(LOG, `=== チャット監視開始: ${castName} コンテナ: <${container.tagName.toLowerCase()}> class="${getClass(container).substring(0, 80)}" ===`);
 
-    // 既存の子要素を解析（初回スキャン — parseOneOrMany で再帰対応）
-    let initialCount = 0;
-    for (const child of container.children) {
-      const parsedList = parseOneOrMany(child);
-      for (const parsed of parsedList) {
-        initialCount++;
-        chrome.runtime.sendMessage({
-          type: 'CHAT_MESSAGE',
-          cast_name: castName,
-          message_time: new Date().toISOString(),
-          ...parsed,
-        });
-      }
-    }
-    if (initialCount > 0) {
-      console.log(LOG, `初回スキャン: ${initialCount}件のメッセージを送信`);
-    }
+    // 初回スキャンをスキップ — リアルタイム新規メッセージのみ取得
+    // 理由: 既存メッセージの一括取得でテキスト連結バグが発生するため
+    // MutationObserver が正常動作しているので、監視開始後の新規メッセージだけで十分
+    console.log(LOG, '初回スキャンをスキップ、MutationObserverのみで監視開始');
 
     observer = new MutationObserver((mutations) => {
       if (!enabled) return;
