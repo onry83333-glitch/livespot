@@ -238,6 +238,19 @@
     const fullText = (node.textContent || '').trim();
     if (!fullText) return null;
 
+    // ★ Multi-message wrapper detection:
+    // このノードの直接の子要素が複数のユーザーリンクを含む場合、
+    // 複数メッセージを束ねたラッパーと判断。
+    // → null を返す（lsParsed はセットしない）ので parseOneOrMany() が子要素を再帰処理する。
+    let childrenWithUser = 0;
+    for (const child of node.children) {
+      if (child.querySelector('a[href*="/user/"], a[href*="stripchat.com/"]') ||
+          child.querySelector('[class*="username"], [class*="userName"], [class*="UserName"], [class*="nick"], [class*="Nick"]')) {
+        childrenWithUser++;
+        if (childrenWithUser > 1) return null;
+      }
+    }
+
     // ユーザーリスト項目の早期検出:
     // テキストが短い(40文字以下) + 子要素が少ない(3個以下) + テキスト要素なし
     // → ユーザー名だけの行 = 視聴者リスト
@@ -488,6 +501,36 @@
   }
 
   // ============================================================
+  // Recursive message parser — ラッパーノード対応
+  // 1ノード = 1メッセージを保証。ラッパーなら子要素を再帰走査。
+  // ============================================================
+  function parseOneOrMany(node, depth) {
+    if (!depth) depth = 0;
+    if (depth > 5) return []; // 安全弁: 再帰上限
+    if (node.nodeType !== 1) return [];
+    if (node.dataset?.lsParsed) return [];
+
+    // まず単一メッセージとしてパース試行
+    const single = parseMessageNode(node);
+    if (single) return [single];
+
+    // parseMessageNode が null を返した。
+    // lsParsed がセットされていれば「拒否」→ 再帰不要
+    if (node.dataset?.lsParsed) return [];
+
+    // lsParsed 未セット = multi-message wrapper → 子要素を再帰処理
+    const results = [];
+    for (const child of node.children) {
+      results.push(...parseOneOrMany(child, depth + 1));
+    }
+    // ラッパー自体を処理済みマーク（再処理防止）
+    if (results.length > 0) {
+      node.dataset.lsParsed = '1';
+    }
+    return results;
+  }
+
+  // ============================================================
   // Observer
   // ============================================================
   function startObserving() {
@@ -520,11 +563,11 @@
     lastMessageTime = Date.now();
     console.log(LOG, `=== チャット監視開始: ${castName} コンテナ: <${container.tagName.toLowerCase()}> class="${getClass(container).substring(0, 80)}" ===`);
 
-    // 既存の子要素を解析（初回スキャン）
+    // 既存の子要素を解析（初回スキャン — parseOneOrMany で再帰対応）
     let initialCount = 0;
     for (const child of container.children) {
-      const parsed = parseMessageNode(child);
-      if (parsed) {
+      const parsedList = parseOneOrMany(child);
+      for (const parsed of parsedList) {
         initialCount++;
         chrome.runtime.sendMessage({
           type: 'CHAT_MESSAGE',
@@ -544,8 +587,8 @@
       for (const mutation of mutations) {
         if (mutation.type !== 'childList') continue;
         for (const node of mutation.addedNodes) {
-          const parsed = parseMessageNode(node);
-          if (parsed) {
+          const parsedList = parseOneOrMany(node);
+          for (const parsed of parsedList) {
             lastMessageTime = Date.now();
             newMsgCount++;
             chrome.runtime.sendMessage({
