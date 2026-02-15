@@ -111,6 +111,7 @@ export default function SessionsPage() {
   }, [user]);
 
   // Load sessions: spy_messages から5分ギャップ方式で動的算出
+  // NOTE: Supabase PostgREST は1リクエスト最大1000行 → ページネーションで全件取得
   useEffect(() => {
     if (!selectedAccount) return;
     setLoading(true);
@@ -125,22 +126,42 @@ export default function SessionsPage() {
     const supabase = createClient();
     const since = new Date(Date.now() - 90 * 86400000).toISOString();
 
-    supabase.from('spy_messages')
-      .select('cast_name, message_time, msg_type, user_name, tokens')
-      .eq('account_id', selectedAccount)
-      .gte('message_time', since)
-      .order('message_time', { ascending: true })
-      .limit(10000)
-      .then(({ data }) => {
-        if (!data || data.length === 0) {
+    type MsgRow = { cast_name: string; message_time: string; msg_type: string; user_name: string | null; tokens: number };
+    const BATCH = 1000;
+    const MAX_ROWS = 50000;
+
+    (async () => {
+      try {
+        const allMsgs: MsgRow[] = [];
+        let offset = 0;
+
+        // ページネーションで全件取得
+        while (offset < MAX_ROWS) {
+          const { data, error } = await supabase.from('spy_messages')
+            .select('cast_name, message_time, msg_type, user_name, tokens')
+            .eq('account_id', selectedAccount)
+            .gte('message_time', since)
+            .order('message_time', { ascending: true })
+            .range(offset, offset + BATCH - 1);
+
+          if (error) { console.error('[Sessions] fetch error:', error.message); break; }
+          if (!data || data.length === 0) break;
+          allMsgs.push(...(data as MsgRow[]));
+          if (data.length < BATCH) break; // 最終ページ
+          offset += BATCH;
+        }
+
+        console.log('[Sessions] Total messages fetched:', allMsgs.length);
+
+        if (allMsgs.length === 0) {
           setSessions([]);
           setLoading(false);
           return;
         }
 
         // cast_name 別にグループ化
-        const byCast = new Map<string, typeof data>();
-        for (const msg of data) {
+        const byCast = new Map<string, MsgRow[]>();
+        for (const msg of allMsgs) {
           const arr = byCast.get(msg.cast_name) || [];
           arr.push(msg);
           byCast.set(msg.cast_name, arr);
@@ -149,7 +170,7 @@ export default function SessionsPage() {
         // 5分ギャップでセッション分割
         const computed: ComputedSession[] = [];
         Array.from(byCast.entries()).forEach(([cast, msgs]) => {
-          let group: typeof msgs = [];
+          let group: MsgRow[] = [];
           for (let i = 0; i < msgs.length; i++) {
             if (i > 0) {
               const gap = new Date(msgs[i].message_time).getTime()
@@ -165,9 +186,19 @@ export default function SessionsPage() {
         });
 
         computed.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+
+        console.log('[Sessions] Sessions computed:', computed.length);
+        computed.forEach((s, i) => console.log(
+          `  [${i}] ${s.cast_name} | ${s.started_at} → ${s.ended_at} | ${s.total_messages} msgs, ${s.total_coins} tk`
+        ));
+
         setSessions(computed);
+      } catch (e) {
+        console.error('[Sessions] unexpected error:', e);
+      } finally {
         setLoading(false);
-      });
+      }
+    })();
   }, [selectedAccount, accounts]);
 
   // Load detail messages when session expanded (cast_name + 時間範囲で取得)
