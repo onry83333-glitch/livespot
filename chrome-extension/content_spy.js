@@ -357,20 +357,27 @@
 
     // --- msg_type 判定 ---
 
-    // Goal / システムメッセージ — 「Xコインでゴール」パターン（チップとは別物）
-    const goalMatch = fullText.match(/(\d+)\s*コインでゴール[：:]/);
-    if (goalMatch) {
-      tokens = parseInt(goalMatch[1], 10);
+    // Goal / システムメッセージ — ゴール関連通知はチップではない
+    // 「Xコインでゴール」「新しいゴール – Xコイン...」「Goal達成」等
+    const isGoalMessage = (
+      /\d+\s*コインでゴール/.test(fullText) ||
+      /新しいゴール/.test(fullText) ||
+      /ゴール達成/.test(fullText) ||
+      /New\s+Goal/i.test(fullText) ||
+      /Goal[：:\s\-–—]+\d+/i.test(fullText)
+    );
+    if (isGoalMessage) {
       msgType = 'goal';
-      // ゴールメッセージはシステム発行なのでユーザー名は不要
+      tokens = 0; // ゴール残り/設定コイン数はチップ額ではない
       if (!userName) userName = '';
-      // メッセージ本文はゴール内容
       message = fullText;
     }
 
     // Tip — トークン数検出（ゴール以外）
+    // (?:^|\s) で数字の前にスペースか行頭を要求 → ユーザー名内の数字を誤検出しない
+    // 例: "masagoro5379コイン補充" → 5379の前が文字なのでマッチしない
     if (msgType !== 'goal') {
-      const tokenMatch = fullText.match(/(\d+)\s*(?:tokens?|tk|トークン|コイン)/i);
+      const tokenMatch = fullText.match(/(?:^|\s)(\d+)\s*(?:tokens?|tk|トークン|コイン)/i);
       if (tokenMatch) {
         tokens = parseInt(tokenMatch[1], 10);
         msgType = 'tip';

@@ -58,7 +58,7 @@ export default function UsersPage() {
           // フォールバック: クライアント側集計
           const { data, error: fetchErr } = await sb
             .from('spy_messages')
-            .select('user_name, tokens, message_time')
+            .select('user_name, tokens, message_time, msg_type')
             .eq('account_id', accountId)
             .not('user_name', 'is', null);
 
@@ -68,10 +68,11 @@ export default function UsersPage() {
           const map = new Map<string, UserSummary>();
           for (const row of data) {
             const name = row.user_name as string;
+            const isTipOrGift = row.msg_type === 'tip' || row.msg_type === 'gift';
             const existing = map.get(name);
             if (existing) {
               existing.messageCount += 1;
-              existing.totalTokens += row.tokens || 0;
+              if (isTipOrGift) existing.totalTokens += row.tokens || 0;
               if (row.message_time > existing.lastActivity) {
                 existing.lastActivity = row.message_time;
               }
@@ -79,7 +80,7 @@ export default function UsersPage() {
               map.set(name, {
                 user_name: name,
                 messageCount: 1,
-                totalTokens: row.tokens || 0,
+                totalTokens: isTipOrGift ? (row.tokens || 0) : 0,
                 lastActivity: row.message_time,
               });
             }

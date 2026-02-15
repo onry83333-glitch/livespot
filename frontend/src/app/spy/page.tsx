@@ -146,7 +146,7 @@ export default function SpyPage() {
   // ============================================================
   const todayStats = useMemo(() => {
     const totalMessages = messages.length;
-    const totalTips = messages.reduce((s, m) => s + (m.tokens || 0), 0);
+    const totalTips = messages.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').reduce((s, m) => s + (m.tokens || 0), 0);
     const uniqueUsers = new Set(messages.filter(m => m.user_name).map(m => m.user_name)).size;
     return { totalMessages, totalTips, uniqueUsers };
   }, [messages]);
@@ -160,7 +160,7 @@ export default function SpyPage() {
     // Top tippers
     const tipMap = new Map<string, number>();
     messages.forEach(m => {
-      if (m.tokens > 0 && m.user_name) {
+      if (m.tokens > 0 && m.user_name && (m.msg_type === 'tip' || m.msg_type === 'gift')) {
         tipMap.set(m.user_name, (tipMap.get(m.user_name) || 0) + m.tokens);
       }
     });

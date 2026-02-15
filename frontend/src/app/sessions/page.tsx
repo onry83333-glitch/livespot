@@ -62,7 +62,7 @@ function buildComputedSession(
     ended_at,
     total_messages: msgs.length,
     total_tips: msgs.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').length,
-    total_coins: msgs.reduce((s, m) => s + (m.tokens || 0), 0),
+    total_coins: msgs.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').reduce((s, m) => s + (m.tokens || 0), 0),
     unique_users: new Set(msgs.filter(m => m.user_name).map(m => m.user_name)).size,
   };
 }

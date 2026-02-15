@@ -61,7 +61,7 @@ export default function UserTimelinePage() {
   // ユーザーサマリー計算
   const summary = useMemo(() => {
     if (messages.length === 0) return null;
-    const totalTokens = messages.reduce((s, m) => s + (m.tokens || 0), 0);
+    const totalTokens = messages.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').reduce((s, m) => s + (m.tokens || 0), 0);
     const times = messages.map(m => new Date(m.message_time).getTime());
     const firstVisit = new Date(Math.min(...times)).toISOString();
     const lastVisit = new Date(Math.max(...times)).toISOString();
