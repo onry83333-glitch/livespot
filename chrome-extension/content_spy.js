@@ -300,9 +300,15 @@
     );
     if (userLink) {
       userName = (userLink.textContent || '').trim();
+      // hrefから正規ユーザー名を取得（数字プレフィックス修正用）
+      const hrefMatch = (userLink.href || '').match(/\/([^/\?#]+)\/?$/);
+      const hrefName = hrefMatch ? decodeURIComponent(hrefMatch[1]) : '';
       if (!userName) {
-        const hrefMatch = (userLink.href || '').match(/\/([^/]+)\/?$/);
-        userName = hrefMatch ? hrefMatch[1] : '';
+        userName = hrefName;
+      } else if (hrefName && userName !== hrefName && userName.endsWith(hrefName)) {
+        // textContent="94DrinkTea9" だが href="/DrinkTea9" → DOM数字プレフィックスを除去
+        console.log(LOG, '数字プレフィックス修正(href照合):', userName, '→', hrefName);
+        userName = hrefName;
       }
       try { userColor = window.getComputedStyle(userLink).color || null; } catch (e) { /* ignore */ }
     }
@@ -499,9 +505,18 @@
     if (!userName && msgType === 'chat') return null;
 
     // ユーザーリスト誤認ガード:
-    // chatタイプで、メッセージが空 or メッセージ=ユーザー名 → ユーザーリスト項目の可能性大
+    // chatタイプで以下のパターンはユーザーリスト項目の可能性大 → 除外
     if (msgType === 'chat') {
+      // (1) メッセージが空 or メッセージ=ユーザー名
       if (!message || message === userName) {
+        return null;
+      }
+      // (2) メッセージが数字のみ（1-3桁）→ DOMランキング番号の残骸
+      if (/^\d{1,3}$/.test(message)) {
+        return null;
+      }
+      // (3) fullText全体がユーザー名と同一（数字プレフィックス除去後に一致する場合も含む）
+      if (fullText === userName || fullText.replace(/^\d{1,3}/, '') === userName) {
         return null;
       }
     }
