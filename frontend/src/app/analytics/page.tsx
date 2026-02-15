@@ -321,6 +321,13 @@ export default function AnalyticsPage() {
             売上分析・DM効果測定
           </p>
         </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => window.location.href = '/analytics/compare'}
+            className="btn-ghost text-xs flex items-center gap-1.5"
+          >
+            📊 キャスト比較
+          </button>
         {(tab === 'dm' || tab === 'funnel') && accounts.length > 0 && (
           <select
             className="input-glass text-xs px-3 py-2 w-48"
@@ -332,6 +339,7 @@ export default function AnalyticsPage() {
             ))}
           </select>
         )}
+        </div>
       </div>
 
       {/* Tab Switch */}

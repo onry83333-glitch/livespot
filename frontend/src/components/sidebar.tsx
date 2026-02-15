@@ -48,7 +48,9 @@ export function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 px-3 space-y-1">
         {navItems.map(item => {
-          const isActive = pathname === item.href;
+          const isActive = item.href === '/'
+            ? pathname === '/'
+            : pathname === item.href || pathname.startsWith(item.href + '/');
           return (
             <Link key={item.href} href={item.href}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
