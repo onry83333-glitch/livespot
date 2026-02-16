@@ -1,17 +1,26 @@
 /**
- * Strip Live Spot - DM Executor v4
+ * Strip Live Spot - DM Executor v4.1
  * Background から SEND_DM メッセージを受け取りStripchat上でDM送信を実行
  *
- * 【確定セレクタ（Morning Hook CRM DevTools確認済み）】
- *   PMボタン:       button[aria-label="PMを送信"]
+ * 【確定セレクタ（DevTools確認済み）】
+ *   PMボタン:       #user-actions-send-pm (ID最優先)
+ *                   button[aria-label="PMを送信"]
+ *                   button[aria-label="PMを送る"] (表記揺れ)
  *   入力欄:         textarea[placeholder*="プライベートメッセージ"]
  *   送信ボタン:     button[aria-label="送信"]
- *   カメラアイコン:  button[aria-label="ファイルをアップロード"]
+ *
+ * 【親要素のDOM構造】
+ *   div.ProfilePageContent__profile-page-cover-wrapper
+ *     div.profile-cover__info
+ *       div.action-buttons.user.user-action-buttons
+ *         div.action-buttons-container
+ *           button#user-actions-send-pm  ← これ
  *
  * フロー:
  *   background.js がタブをプロフィールURLへ遷移
  *   → SEND_DM メッセージ受信
- *   → button[aria-label="PMを送信"] をクリック
+ *   → プロフィール要素のロード待ち（SPA遷移対応）
+ *   → #user-actions-send-pm をクリック（フォールバック: aria-label）
  *   → textarea[placeholder*="プライベートメッセージ"] にメッセージ入力
  *   → button[aria-label="送信"] をクリック
  *   → 結果報告
@@ -25,7 +34,14 @@
   // ============================================================
   // 確定セレクタ（DevTools実測済み）
   // ============================================================
-  const PM_SELECTOR = 'button[aria-label="PMを送信"]';
+  const PM_SELECTORS = [
+    '#user-actions-send-pm',                    // ID（最確実 — DevTools確認済み）
+    'button[aria-label="PMを送信"]',             // aria-label日本語
+    'button[aria-label="PMを送る"]',             // aria-label日本語別表記
+    'button[aria-label="Send PM"]',              // aria-label英語
+    '.user-action-buttons button.btn-outline',   // クラス指定
+  ];
+  const PROFILE_WAIT_SELECTOR = '.profile-cover__info, .ProfilePageContent__profile-page-cover-wrapper, .user-action-buttons, #user-actions-send-pm';
   const INPUT_SELECTOR = 'textarea[placeholder*="プライベートメッセージ"]';
   const SEND_SELECTOR = 'button[aria-label="送信"]';
 
@@ -36,25 +52,62 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  /**
+   * CSSセレクタで要素の出現をMutationObserverで待つ
+   */
+  function waitForElement(selector, timeout = 10000) {
+    return new Promise((resolve) => {
+      const el = document.querySelector(selector);
+      if (el) { resolve(el); return; }
+
+      const obs = new MutationObserver(() => {
+        const el = document.querySelector(selector);
+        if (el) {
+          obs.disconnect();
+          resolve(el);
+        }
+      });
+      obs.observe(document.body, { childList: true, subtree: true });
+
+      setTimeout(() => {
+        obs.disconnect();
+        resolve(null);
+      }, timeout);
+    });
+  }
+
   // ============================================================
   // Step 1: PMボタンをクリック
   // ============================================================
   async function clickPMButton() {
     console.log(LOG, 'Step 1: PMボタン検索...');
 
-    // Strategy 1: 確定セレクタ（最優先）
-    let btn = document.querySelector(PM_SELECTOR);
-    if (btn) {
-      console.log(LOG, 'PMボタン発見 (確定セレクタ): button[aria-label="PMを送信"]');
-      btn.click();
-      return true;
+    // Phase 1: プロフィール要素のロードを待つ（SPA遷移対応）
+    console.log(LOG, 'Phase 1: プロフィール要素のロード待ち (最大10秒)...');
+    const profileEl = await waitForElement(PROFILE_WAIT_SELECTOR, 10000);
+    if (profileEl) {
+      console.log(LOG, 'プロフィール要素検出:', profileEl.id || profileEl.className?.toString().substring(0, 60));
+      // ボタンの描画完了を保証
+      await sleep(500);
+    } else {
+      console.warn(LOG, 'プロフィール要素が10秒以内に見つかりません — そのまま続行');
     }
 
-    // Strategy 2: XPathで「PMを送信」テキストを含むbutton
+    // Phase 2: 確定セレクタで順番に試行
+    for (const sel of PM_SELECTORS) {
+      const btn = document.querySelector(sel);
+      if (btn) {
+        console.log(LOG, `PMボタン発見 (確定セレクタ): ${sel}`);
+        btn.click();
+        return true;
+      }
+    }
+
+    // Phase 3: XPathで「PMを送信」テキストを含むbutton
     try {
       const xpath = "//button[contains(., 'PMを送信')]";
       const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
-      btn = result.singleNodeValue;
+      const btn = result.singleNodeValue;
       if (btn) {
         console.log(LOG, 'PMボタン発見 (XPath): PMを送信');
         btn.click();
@@ -62,15 +115,12 @@
       }
     } catch (e) { /* ignore */ }
 
-    // Strategy 3: aria-label/テキストに "PM" を含むボタン（ヘッダー除外）
+    // Phase 4: aria-label/テキストに "PM" を含むボタン（ヘッダー除外）
     const allBtns = document.querySelectorAll('button');
     for (const b of allBtns) {
-      // ヘッダー/ナビ内は除外
       if (isInHeaderOrNav(b)) continue;
-
       const aria = b.getAttribute('aria-label') || '';
       const text = (b.textContent || '').trim();
-
       if (/PM/.test(aria) || /PM/.test(text)) {
         console.log(LOG, `PMボタン発見 (フォールバック): aria="${aria}" text="${text}"`);
         b.click();
@@ -78,7 +128,7 @@
       }
     }
 
-    // Strategy 4: 英語版 "Send PM" / "Send Message"
+    // Phase 5: 英語版 "Send PM"
     for (const b of allBtns) {
       if (isInHeaderOrNav(b)) continue;
       const aria = (b.getAttribute('aria-label') || '').toLowerCase();
@@ -99,7 +149,7 @@
       const aria = b.getAttribute('aria-label') || '';
       const text = (b.textContent || '').trim().substring(0, 30);
       const cls = (b.className || '').toString().substring(0, 40);
-      console.log(LOG, `  aria="${aria}" text="${text}" class="${cls}"`);
+      console.log(LOG, `  id="${b.id}" aria="${aria}" text="${text}" class="${cls}"`);
     });
 
     return false;
@@ -373,5 +423,5 @@
     }
   });
 
-  console.log(LOG, 'DM executor ready (v4 - confirmed selectors)');
+  console.log(LOG, 'DM executor ready (v4.1 - ID selector + profile wait)');
 })();
