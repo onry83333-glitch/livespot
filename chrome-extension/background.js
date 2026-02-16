@@ -625,9 +625,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // --- Popup: Coin Sync trigger ---
+  if (msg.type === 'SYNC_COINS') {
+    console.log('[LS-BG] SYNC_COINS リクエスト受信');
+    handleCoinSync().then(sendResponse).catch(err => {
+      sendResponse({ ok: false, error: err.message });
+    });
+    return true; // async
+  }
+
   // --- Popup: Get extension status ---
   if (msg.type === 'GET_STATUS') {
-    loadAuth().then((auth) => {
+    loadAuth().then(async (auth) => {
+      const syncData = await chrome.storage.local.get(['last_coin_sync', 'coin_sync_count']);
       const status = {
         ok: true,
         authenticated: !!auth.accessToken,
@@ -638,6 +648,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         spyMsgCount,
         lastHeartbeat: lastHeartbeat || null,
         bufferSize: messageBuffer.length,
+        lastCoinSync: syncData.last_coin_sync || null,
+        coinSyncCount: syncData.coin_sync_count || 0,
       };
       console.log('[LS-BG] GET_STATUS応答:', JSON.stringify(status));
       sendResponse(status);
@@ -846,6 +858,205 @@ async function processSTTQueue() {
   } finally {
     sttProcessing = false;
   }
+}
+
+// ============================================================
+// Coin Sync — Stripchat Earnings API → Supabase直接INSERT
+// ============================================================
+
+/**
+ * コイン同期メインフロー
+ * 1. Stripchatタブを検索
+ * 2. content_coin_sync.jsにFETCH_COINS送信
+ * 3. 取得データをSupabaseに保存
+ */
+async function handleCoinSync() {
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    return { ok: false, error: 'ログインしてアカウントを選択してください' };
+  }
+
+  // Stripchatタブを検索
+  const tabs = await chrome.tabs.query({
+    url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+  });
+
+  if (tabs.length === 0) {
+    return { ok: false, error: 'Stripchatタブを開いてログインしてください' };
+  }
+
+  console.log('[LS-BG] Coin同期: Stripchatタブ=', tabs[0].id, tabs[0].url);
+
+  // content scriptにFETCH_COINS送信
+  let fetchResult;
+  try {
+    fetchResult = await chrome.tabs.sendMessage(tabs[0].id, {
+      type: 'FETCH_COINS',
+      options: { maxPages: 10, limit: 100 },
+    });
+  } catch (err) {
+    console.error('[LS-BG] FETCH_COINS送信失敗:', err.message);
+    return { ok: false, error: 'Content script通信失敗: ' + err.message };
+  }
+
+  if (!fetchResult || fetchResult.error) {
+    const errMsg = fetchResult?.message || fetchResult?.error || '不明なエラー';
+    console.warn('[LS-BG] Coin取得エラー:', errMsg);
+    return { ok: false, error: errMsg };
+  }
+
+  const transactions = fetchResult.transactions || [];
+  if (transactions.length === 0) {
+    return { ok: true, synced: 0, message: 'トランザクションが見つかりませんでした' };
+  }
+
+  console.log('[LS-BG] COIN_SYNC_DATA:', transactions.length, '件受信');
+
+  // Supabaseに保存
+  const result = await processCoinSyncData(transactions);
+  return result;
+}
+
+/**
+ * コイントランザクションデータをSupabase REST APIで直接保存
+ * 1. coin_transactions INSERT
+ * 2. paid_users UPSERT（ユーザー別集計）
+ * 3. refresh_paying_users RPC（マテビュー更新）
+ */
+async function processCoinSyncData(transactions) {
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    return { ok: false, error: '認証エラー' };
+  }
+
+  // フィールドマッピング（Stripchat API → coin_transactions）
+  const txRows = [];
+  for (const tx of transactions) {
+    const userName = tx.userName || tx.user_name || tx.username || '';
+    const tokens = parseInt(tx.tokens || tx.amount || 0, 10);
+    const txType = tx.type || tx.source || 'unknown';
+    const txDate = tx.date || tx.createdAt || tx.created_at || new Date().toISOString();
+    const sourceDetail = tx.description || tx.sourceDetail || '';
+
+    if (!userName) continue;
+
+    txRows.push({
+      account_id: accountId,
+      user_name: userName,
+      tokens: tokens,
+      type: txType,
+      date: txDate,
+      source_detail: sourceDetail,
+    });
+  }
+
+  if (txRows.length === 0) {
+    return { ok: true, synced: 0, message: '有効なトランザクションがありません' };
+  }
+
+  // 1. coin_transactions INSERT
+  let insertedTx = 0;
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(txRows),
+    });
+
+    if (res.ok || res.status === 201) {
+      insertedTx = txRows.length;
+      console.log('[LS-BG] coin_transactions INSERT成功:', insertedTx, '件');
+    } else {
+      const errText = await res.text().catch(() => '');
+      console.warn('[LS-BG] coin_transactions INSERT失敗:', res.status, errText);
+      // 重複エラー(409)の場合は続行
+      if (res.status !== 409) {
+        return { ok: false, error: `DB挿入エラー: HTTP ${res.status}` };
+      }
+      console.log('[LS-BG] 一部重複あり — paid_users更新を続行');
+    }
+  } catch (err) {
+    console.error('[LS-BG] coin_transactions INSERT例外:', err.message);
+    return { ok: false, error: 'DB接続エラー: ' + err.message };
+  }
+
+  // 2. paid_users UPSERT（ユーザー別集計）
+  const userAgg = {};
+  for (const row of txRows) {
+    const un = row.user_name;
+    if (!userAgg[un]) {
+      userAgg[un] = { total_coins: 0, last_payment_date: null };
+    }
+    userAgg[un].total_coins += row.tokens;
+    if (!userAgg[un].last_payment_date || row.date > userAgg[un].last_payment_date) {
+      userAgg[un].last_payment_date = row.date;
+    }
+  }
+
+  const userRows = Object.entries(userAgg).map(([un, agg]) => ({
+    account_id: accountId,
+    user_name: un,
+    total_coins: agg.total_coins,
+    last_payment_date: agg.last_payment_date,
+  }));
+
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/paid_users`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify(userRows),
+    });
+
+    if (res.ok || res.status === 201) {
+      console.log('[LS-BG] paid_users UPSERT成功:', userRows.length, '件');
+    } else {
+      console.warn('[LS-BG] paid_users UPSERT失敗:', res.status);
+    }
+  } catch (err) {
+    console.warn('[LS-BG] paid_users UPSERT例外:', err.message);
+  }
+
+  // 3. refresh_paying_users RPC（マテビュー更新）
+  try {
+    await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/refresh_paying_users`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+    });
+    console.log('[LS-BG] paying_usersマテビュー更新完了');
+  } catch (err) {
+    console.warn('[LS-BG] マテビュー更新失敗（非致命的）:', err.message);
+  }
+
+  // 同期ステータス保存
+  await chrome.storage.local.set({
+    last_coin_sync: new Date().toISOString(),
+    coin_sync_count: insertedTx,
+  });
+
+  console.log('[LS-BG] ========== Coin同期完了 ==========');
+  console.log('[LS-BG] トランザクション:', insertedTx, '件 / ユーザー:', userRows.length, '名');
+
+  return {
+    ok: true,
+    synced: insertedTx,
+    users: userRows.length,
+    message: `${insertedTx}件のトランザクション、${userRows.length}名のユーザーを同期しました`,
+  };
 }
 
 // ============================================================

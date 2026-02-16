@@ -359,6 +359,15 @@ async function init() {
         if (response.sttEnabled !== undefined) {
           updateSTTButton(response.sttEnabled);
         }
+        // Coin同期ステータス表示
+        if (response.lastCoinSync) {
+          const syncEl = $('coinSyncStatus');
+          if (syncEl) {
+            const syncDate = new Date(response.lastCoinSync).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+            syncEl.innerHTML = `<span style="color:#475569;">前回: ${syncDate} (${response.coinSyncCount || 0}件)</span>`;
+            syncEl.classList.remove('hidden');
+          }
+        }
       }
     });
   } else {
@@ -497,6 +506,39 @@ $('sttToggleBtn').addEventListener('click', async () => {
   });
 });
 
+// --- Coin Sync ---
+$('coinSyncBtn').addEventListener('click', async () => {
+  const btn = $('coinSyncBtn');
+  const statusEl = $('coinSyncStatus');
+  btn.disabled = true;
+  btn.textContent = '同期中...';
+  statusEl.innerHTML = '<span style="color:#f59e0b;">● 取得中...</span>';
+  statusEl.classList.remove('hidden');
+
+  chrome.runtime.sendMessage({ type: 'SYNC_COINS' }, (response) => {
+    btn.disabled = false;
+    btn.textContent = '同期';
+
+    if (chrome.runtime.lastError) {
+      statusEl.innerHTML = `<span style="color:#f43f5e;">✕ 通信エラー: ${chrome.runtime.lastError.message}</span>`;
+      return;
+    }
+
+    if (!response) {
+      statusEl.innerHTML = '<span style="color:#f43f5e;">✕ 応答なし</span>';
+      return;
+    }
+
+    if (response.ok) {
+      const now = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+      statusEl.innerHTML = `<span style="color:#22c55e;">✓ ${response.message || response.synced + '件同期'}</span>`
+        + `<br><span style="color:#475569;">最終同期: ${now}</span>`;
+    } else {
+      statusEl.innerHTML = `<span style="color:#f43f5e;">✕ ${response.error || 'エラー'}</span>`;
+    }
+  });
+});
+
 // --- Save Settings (Dashboard) ---
 saveSettingsBtn.addEventListener('click', async () => {
   const url = apiUrlInput.value.trim();
@@ -530,6 +572,7 @@ logoutBtn.addEventListener('click', async () => {
     'access_token', 'refresh_token', 'account_id',
     'user_email', 'logged_in', 'spy_enabled', 'stt_enabled',
     'spy_cast', 'spy_started_at',
+    'last_coin_sync', 'coin_sync_count',
   ]);
   showLogin();
 });

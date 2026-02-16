@@ -76,7 +76,11 @@ def transcribe_chunk(audio_path: str) -> Optional[dict]:
             text = segment.text.strip()
             if text:
                 full_text += text
-                total_log_prob += segment.avg_log_prob
+                # faster-whisper v1.2+: avg_logprob (no underscore)
+                log_prob = getattr(segment, 'avg_logprob', None)
+                if log_prob is None:
+                    log_prob = getattr(segment, 'avg_log_prob', -1.0)
+                total_log_prob += log_prob
                 seg_count += 1
 
         if not full_text:

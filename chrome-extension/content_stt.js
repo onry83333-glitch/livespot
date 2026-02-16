@@ -11,7 +11,7 @@
  *   content_stt.js (MAIN) → window.postMessage → content_stt_relay.js (ISOLATED)
  *   → chrome.runtime.sendMessage → background.js → FastAPI /api/stt/transcribe
  *
- * Morning Hook CRM audio_capture.js と同アーキテクチャ。
+ * v2: AudioContext fallback + キャスト名修正 + リトライ
  */
 (function () {
   'use strict';
@@ -27,32 +27,54 @@
   var CONTROL_TYPE = 'LIVESPOT_STT_CONTROL';
   var FIND_VIDEO_INTERVAL = 3000;      // ビデオ要素検索リトライ間隔
   var FIND_VIDEO_MAX_RETRY = 20;       // 最大60秒
+  var AUDIO_RETRY_MAX = 5;             // 音声トラック検出リトライ回数
+  var AUDIO_RETRY_INTERVAL = 2000;     // 音声トラック検出リトライ間隔
 
   var mediaRecorder = null;
   var audioStream = null;
+  var audioContext = null;
   var recording = false;
   var castName = '';
   var chunkIndex = 0;
 
   // ============================================================
-  // キャスト名抽出（content_spy.jsと同ロジック）
+  // キャスト名抽出（URLパスから、言語プレフィックス対応）
   // ============================================================
   function extractCastName() {
-    var match = location.pathname.match(/^\/([^/\?#]+)/);
-    if (match && match[1]) {
-      var reserved = [
-        'user', 'favorites', 'settings', 'messages',
-        'login', 'signup', 'search', 'categories',
-      ];
-      if (reserved.indexOf(match[1].toLowerCase()) === -1) {
-        return match[1];
-      }
+    var path = location.pathname;
+    // パスセグメントに分割: /ja/cast_name → ['ja', 'cast_name']
+    var segments = path.split('/').filter(function(s) { return s.length > 0; });
+
+    if (segments.length === 0) return '';
+
+    // 言語プレフィックスのリスト
+    var langPrefixes = [
+      'ja', 'en', 'de', 'fr', 'es', 'it', 'pt', 'ru', 'ko', 'zh',
+      'nl', 'pl', 'tr', 'sv', 'cs', 'hu', 'ro', 'el', 'th', 'vi',
+      'ar', 'hi', 'id', 'ms', 'fi', 'da', 'no', 'uk', 'bg', 'hr',
+    ];
+
+    // 予約パス（キャストページではない）
+    var reserved = [
+      'user', 'favorites', 'settings', 'messages', 'earnings',
+      'login', 'signup', 'search', 'categories', 'tags',
+      'model', 'studio', 'privacy', 'terms', 'support',
+    ];
+
+    // 最初のセグメントが言語プレフィックスならスキップ
+    var startIdx = 0;
+    if (segments.length > 1 && langPrefixes.indexOf(segments[0].toLowerCase()) !== -1) {
+      startIdx = 1;
     }
-    var titleMatch = document.title.match(/^(.+?)\s*[-|–]/);
-    if (titleMatch) {
-      return titleMatch[1].trim();
-    }
-    return '';
+
+    // キャスト名候補
+    var candidate = segments[startIdx];
+    if (!candidate) return '';
+
+    // 予約パスチェック
+    if (reserved.indexOf(candidate.toLowerCase()) !== -1) return '';
+
+    return decodeURIComponent(candidate);
   }
 
   // ============================================================
@@ -205,6 +227,80 @@
   }
 
   // ============================================================
+  // 音声キャプチャ（2段階: captureStream → AudioContext fallback）
+  // ============================================================
+  function attemptAudioCapture(video, retryCount) {
+    retryCount = retryCount || 0;
+
+    // 診断ログ
+    console.log(LOG, 'Video状態:', {
+      src: (video.src || '').substring(0, 60),
+      paused: video.paused,
+      muted: video.muted,
+      volume: video.volume,
+      readyState: video.readyState,
+    });
+
+    // === 方法1: captureStream ===
+    try {
+      var fullStream = video.captureStream();
+      var audioTracks = fullStream.getAudioTracks();
+      console.log(LOG, 'captureStream: audioTracks=' + audioTracks.length);
+
+      if (audioTracks.length > 0) {
+        audioStream = new MediaStream(audioTracks);
+        recording = true;
+        chunkIndex = 0;
+        console.log(LOG, 'Audio capture started (captureStream): cast=' + castName + ' tracks=' + audioTracks.length);
+        sendStatus('recording', 'キャプチャ中');
+        startCycle();
+        return;
+      }
+    } catch (e) {
+      console.warn(LOG, 'captureStream失敗:', e.message);
+    }
+
+    // === 方法2: AudioContext + createMediaElementSource ===
+    try {
+      console.log(LOG, 'AudioContext fallback試行...');
+      var ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var source = ctx.createMediaElementSource(video);
+      var dest = ctx.createMediaStreamDestination();
+      source.connect(dest);
+      source.connect(ctx.destination); // スピーカー出力を維持
+
+      var aTracks = dest.stream.getAudioTracks();
+      console.log(LOG, 'AudioContext: audioTracks=' + aTracks.length);
+
+      if (aTracks.length > 0) {
+        audioStream = dest.stream;
+        audioContext = ctx;
+        recording = true;
+        chunkIndex = 0;
+        console.log(LOG, 'Audio capture started (AudioContext): cast=' + castName);
+        sendStatus('recording', 'キャプチャ中 (AudioContext)');
+        startCycle();
+        return;
+      }
+    } catch (e) {
+      console.warn(LOG, 'AudioContext fallback失敗:', e.message);
+      // "already connected" エラーは想定内 — Stripchat側がAudioContext使用中
+    }
+
+    // === リトライ（音声トラックがまだロードされていない場合） ===
+    if (retryCount < AUDIO_RETRY_MAX) {
+      console.log(LOG, 'オーディオトラック未検出 — ' + AUDIO_RETRY_INTERVAL + 'msで再試行 (' + (retryCount + 1) + '/' + AUDIO_RETRY_MAX + ')');
+      setTimeout(function () {
+        attemptAudioCapture(video, retryCount + 1);
+      }, AUDIO_RETRY_INTERVAL);
+      return;
+    }
+
+    console.error(LOG, 'オーディオキャプチャ失敗（全方式）: captureStream + AudioContext + リトライ全て失敗');
+    sendStatus('error', 'オーディオトラックを取得できません。配信音声が再生されているか確認してください。');
+  }
+
+  // ============================================================
   // キャプチャ開始
   // ============================================================
   function startCapture() {
@@ -215,8 +311,8 @@
 
     castName = extractCastName();
     if (!castName) {
-      console.warn(LOG, 'キャスト名を取得できません — キャストページ以外');
-      sendStatus('error', 'キャスト名を取得できません');
+      console.warn(LOG, 'キャスト名を取得できません — キャストページ以外のため開始不可');
+      sendStatus('error', 'キャストページを開いてください');
       return;
     }
 
@@ -224,28 +320,7 @@
     sendStatus('searching', 'ビデオ要素を検索中...');
 
     findVideoWithRetry(function (video) {
-      try {
-        var fullStream = video.captureStream();
-        var audioTracks = fullStream.getAudioTracks();
-
-        if (audioTracks.length === 0) {
-          console.warn(LOG, 'オーディオトラックがありません');
-          sendStatus('error', 'オーディオトラックなし');
-          return;
-        }
-
-        audioStream = new MediaStream(audioTracks);
-        recording = true;
-        chunkIndex = 0;
-
-        console.log(LOG, 'Audio capture started: cast=' + castName + ' tracks=' + audioTracks.length);
-        sendStatus('recording', 'キャプチャ中');
-
-        startCycle();
-      } catch (e) {
-        console.error(LOG, 'captureStream失敗:', e.message);
-        sendStatus('error', 'captureStream失敗: ' + e.message);
-      }
+      attemptAudioCapture(video, 0);
     });
   }
 
@@ -262,6 +337,11 @@
     if (audioStream) {
       audioStream.getTracks().forEach(function (t) { t.stop(); });
       audioStream = null;
+    }
+
+    if (audioContext) {
+      try { audioContext.close(); } catch (e) { /* ignore */ }
+      audioContext = null;
     }
 
     mediaRecorder = null;
