@@ -1,6 +1,12 @@
 /**
- * Strip Live Spot - DM Executor v4.1
+ * Strip Live Spot - DM Executor v5.0
  * Background から SEND_DM メッセージを受け取りStripchat上でDM送信を実行
+ *
+ * v5.0: 速度最適化（Morning Hook CRM同等 ~12秒/件）
+ *   - プロフィール要素待ち: 10s→8s
+ *   - PMダイアログ待ち: 2s→1s
+ *   - DM入力欄待ち: 8s→5s
+ *   - 送信後確認待ち: 2s→1s
  *
  * 【確定セレクタ（DevTools確認済み）】
  *   PMボタン:       #user-actions-send-pm (ID最優先)
@@ -55,7 +61,7 @@
   /**
    * CSSセレクタで要素の出現をMutationObserverで待つ
    */
-  function waitForElement(selector, timeout = 10000) {
+  function waitForElement(selector, timeout = 8000) {
     return new Promise((resolve) => {
       const el = document.querySelector(selector);
       if (el) { resolve(el); return; }
@@ -83,14 +89,14 @@
     console.log(LOG, 'Step 1: PMボタン検索...');
 
     // Phase 1: プロフィール要素のロードを待つ（SPA遷移対応）
-    console.log(LOG, 'Phase 1: プロフィール要素のロード待ち (最大10秒)...');
-    const profileEl = await waitForElement(PROFILE_WAIT_SELECTOR, 10000);
+    console.log(LOG, 'Phase 1: プロフィール要素のロード待ち (最大8秒)...');
+    const profileEl = await waitForElement(PROFILE_WAIT_SELECTOR, 8000);
     if (profileEl) {
       console.log(LOG, 'プロフィール要素検出:', profileEl.id || profileEl.className?.toString().substring(0, 60));
       // ボタンの描画完了を保証
-      await sleep(500);
+      await sleep(300);
     } else {
-      console.warn(LOG, 'プロフィール要素が10秒以内に見つかりません — そのまま続行');
+      console.warn(LOG, 'プロフィール要素が8秒以内に見つかりません — そのまま続行');
     }
 
     // Phase 2: 確定セレクタで順番に試行
@@ -173,7 +179,7 @@
   // ============================================================
   // Step 2: DM入力欄を探す
   // ============================================================
-  async function findDMInput(maxWait = 8000) {
+  async function findDMInput(maxWait = 5000) {
     console.log(LOG, 'Step 2: DM入力欄検索...');
     const start = Date.now();
 
@@ -353,17 +359,17 @@
       }
 
       // PMクリック後、ダイアログが開くのを待つ
-      await sleep(2000);
+      await sleep(1000);
 
       // Step 2: DM入力欄を探す
-      const chatInput = await findDMInput(8000);
+      const chatInput = await findDMInput(5000);
       if (!chatInput) {
         throw new Error('DM入力欄(placeholder="プライベートメッセージ")が見つかりません');
       }
 
       // Step 3: メッセージ入力
       await typeMessage(chatInput, message);
-      await sleep(500);
+      await sleep(300);
 
       // Step 4: 送信
       const sendOk = await clickSendButton(chatInput);
@@ -372,7 +378,7 @@
       }
 
       // 送信完了待ち
-      await sleep(2000);
+      await sleep(1000);
 
       // Step 5: 送信確認（入力欄がクリアされたか）
       const remaining = chatInput.value || chatInput.textContent || '';
@@ -380,7 +386,7 @@
         // 再試行: もう一度送信ボタンを押す
         console.log(LOG, '入力欄未クリア → 送信リトライ...');
         await clickSendButton(chatInput);
-        await sleep(2000);
+        await sleep(1000);
         const remaining2 = chatInput.value || chatInput.textContent || '';
         if (remaining2.trim() === message.trim()) {
           throw new Error('メッセージが送信されなかった可能性があります');
@@ -423,5 +429,5 @@
     }
   });
 
-  console.log(LOG, 'DM executor ready (v4.1 - ID selector + profile wait)');
+  console.log(LOG, 'DM executor ready (v5.0 - speed optimized, ~12s/件)');
 })();

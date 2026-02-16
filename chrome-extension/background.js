@@ -23,6 +23,7 @@ let whisperPollingTimer = null;
 let dmProcessing = false;
 let pendingDMResolve = null;
 let pendingDMTaskId = null;
+let dmTimeoutId = null;
 
 // A.2: Heartbeat tracking
 let lastHeartbeat = 0;
@@ -566,12 +567,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // --- DM: Result from dm_executor.js (v2: SEND_DM → DM_SEND_RESULT) ---
   if (msg.type === 'DM_SEND_RESULT') {
-    console.log('[LS-BG] DM_SEND_RESULT受信: taskId=', msg.taskId, 'success=', msg.success);
+    console.log('[LS-BG] DM_SEND_RESULT受信: taskId=', msg.taskId, 'success=', msg.success, 'error=', msg.error);
     // pendingDMResolve で待機中の Promise を解決
     if (pendingDMResolve && pendingDMTaskId === msg.taskId) {
-      pendingDMResolve({ success: msg.success, error: msg.error || null });
+      // タイムアウトタイマーをクリア（レースコンディション防止）
+      if (dmTimeoutId) {
+        clearTimeout(dmTimeoutId);
+        dmTimeoutId = null;
+      }
+      const resolve = pendingDMResolve;
       pendingDMResolve = null;
       pendingDMTaskId = null;
+      resolve({ success: msg.success, error: msg.error || null });
+      console.log('[LS-BG] DM結果をPromiseに反映済み: success=', msg.success);
+    } else {
+      console.warn('[LS-BG] DM_SEND_RESULT: 対応するPending Promiseなし (タイムアウト済みの可能性) taskId=', msg.taskId);
     }
     sendResponse({ ok: true });
     return false;
@@ -756,21 +766,61 @@ async function fetchNextDMTask() {
  */
 async function updateDMTaskStatus(taskId, status, error) {
   await loadAuth();
-  if (!accessToken) return;
+  if (!accessToken) {
+    console.warn('[LS-BG] DMステータス更新スキップ: accessToken未設定 taskId=', taskId);
+    return;
+  }
 
   const body = { status };
   if (error) body.error = error;
   if (status === 'success') body.sent_at = new Date().toISOString();
 
-  await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?id=eq.${taskId}`, {
-    method: 'PATCH',
-    headers: {
-      'apikey': CONFIG.SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  }).catch(err => console.warn('[LS-BG] DMステータス更新失敗:', err.message));
+  console.log('[LS-BG] DMステータス更新: taskId=', taskId, 'status=', status);
+
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?id=eq.${taskId}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.error('[LS-BG] DMステータス更新失敗: HTTP', res.status, errText, 'taskId=', taskId, 'status=', status);
+
+      // 401の場合はトークンリフレッシュしてリトライ
+      if (res.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          console.log('[LS-BG] DMステータス更新リトライ: taskId=', taskId);
+          const retryRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?id=eq.${taskId}`, {
+            method: 'PATCH',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal',
+            },
+            body: JSON.stringify(body),
+          });
+          if (retryRes.ok) {
+            console.log('[LS-BG] DMステータス更新成功(リトライ): taskId=', taskId, 'status=', status);
+          } else {
+            console.error('[LS-BG] DMステータス更新リトライ失敗:', retryRes.status);
+          }
+        }
+      }
+    } else {
+      console.log('[LS-BG] DMステータス更新成功: taskId=', taskId, 'status=', status);
+    }
+  } catch (err) {
+    console.error('[LS-BG] DMステータス更新例外:', err.message, 'taskId=', taskId);
+  }
 }
 
 /**
@@ -826,17 +876,23 @@ function waitForTabComplete(tabId, timeout = 15000) {
 
 /**
  * dm_executor.js からの結果を待つ（Promiseベース）
+ * タイムアウトはDM_SEND_RESULT受信時にクリアされる
  */
-function waitForDMResult(taskId, timeout = 30000) {
+function waitForDMResult(taskId, timeout = 15000) {
   return new Promise((resolve) => {
     pendingDMTaskId = taskId;
     pendingDMResolve = resolve;
 
-    setTimeout(() => {
+    // 前回のタイマーが残っていたらクリア
+    if (dmTimeoutId) clearTimeout(dmTimeoutId);
+
+    dmTimeoutId = setTimeout(() => {
       if (pendingDMResolve && pendingDMTaskId === taskId) {
+        console.warn('[LS-BG] DM結果タイムアウト: taskId=', taskId, timeout + 'ms経過');
         pendingDMResolve = null;
         pendingDMTaskId = null;
-        resolve({ success: false, error: 'タイムアウト (30秒)' });
+        dmTimeoutId = null;
+        resolve({ success: false, error: `タイムアウト (${timeout / 1000}秒)` });
       }
     }, timeout);
   });
@@ -872,8 +928,8 @@ async function processSingleDMTask(task) {
       throw new Error('ページロードタイムアウト');
     }
 
-    // ページロード後の描画安定待ち
-    await sleep_bg(3000);
+    // ページロード後の描画安定待ち（dm_executor側でもwaitForElementで待機する）
+    await sleep_bg(1500);
 
     // 5. content script に DM送信を指示
     try {
@@ -918,8 +974,8 @@ async function processDMQueue() {
 
       await processSingleDMTask(task);
 
-      // レート制限: 3-8秒ランダム待機
-      const delay = 3000 + Math.random() * 5000;
+      // レート制限: 2-4秒ランダム待機（Morning Hook CRM準拠: EST_INTERVAL=2秒）
+      const delay = 2000 + Math.random() * 2000;
       console.log('[LS-BG] DM次タスクまで', Math.round(delay / 1000), '秒待機');
       await sleep_bg(delay);
     }
