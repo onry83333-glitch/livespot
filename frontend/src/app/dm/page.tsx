@@ -143,8 +143,18 @@ export default function DmPage() {
         return;
       }
 
-      const bid = data?.batch_id;
+      const originalBid = data?.batch_id;
       const count = data?.count || usernames.length;
+
+      // 送信モード設定をキャンペーンに埋め込み（background.jsが解析）
+      const modePrefix = sendMode === 'pipeline' ? `pipe${tabs}` : 'seq';
+      const bid = `${modePrefix}_${originalBid}`;
+
+      // dm_send_logのcampaignフィールドを更新
+      await sb.from('dm_send_log')
+        .update({ campaign: bid })
+        .eq('campaign', originalBid);
+
       setBatchId(bid);
       setQueuedCount(count);
       setStatusCounts({ total: count, queued: count, sending: 0, success: 0, error: 0 });

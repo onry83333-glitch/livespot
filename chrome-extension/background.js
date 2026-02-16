@@ -21,9 +21,7 @@ let viewerStatsBuffer = [];
 let viewerStatsTimer = null;
 let whisperPollingTimer = null;
 let dmProcessing = false;
-let pendingDMResolve = null;
-let pendingDMTaskId = null;
-let dmTimeoutId = null;
+const pendingDMResults = new Map(); // taskId → { resolve, timeoutId }
 
 // A.2: Heartbeat tracking
 let lastHeartbeat = 0;
@@ -568,18 +566,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // --- DM: Result from dm_executor.js (v2: SEND_DM → DM_SEND_RESULT) ---
   if (msg.type === 'DM_SEND_RESULT') {
     console.log('[LS-BG] DM_SEND_RESULT受信: taskId=', msg.taskId, 'success=', msg.success, 'error=', msg.error);
-    // pendingDMResolve で待機中の Promise を解決
-    if (pendingDMResolve && pendingDMTaskId === msg.taskId) {
-      // タイムアウトタイマーをクリア（レースコンディション防止）
-      if (dmTimeoutId) {
-        clearTimeout(dmTimeoutId);
-        dmTimeoutId = null;
-      }
-      const resolve = pendingDMResolve;
-      pendingDMResolve = null;
-      pendingDMTaskId = null;
-      resolve({ success: msg.success, error: msg.error || null });
-      console.log('[LS-BG] DM結果をPromiseに反映済み: success=', msg.success);
+    const entry = pendingDMResults.get(msg.taskId);
+    if (entry) {
+      clearTimeout(entry.timeoutId);
+      pendingDMResults.delete(msg.taskId);
+      entry.resolve({ success: msg.success, error: msg.error || null });
+      console.log('[LS-BG] DM結果をPromiseに反映済み: taskId=', msg.taskId, 'success=', msg.success);
     } else {
       console.warn('[LS-BG] DM_SEND_RESULT: 対応するPending Promiseなし (タイムアウト済みの可能性) taskId=', msg.taskId);
     }
@@ -762,6 +754,56 @@ async function fetchNextDMTask() {
 }
 
 /**
+ * Supabase REST APIでDMキューから複数件取得（パイプライン用）
+ */
+async function fetchDMBatch(limit = 50) {
+  await loadAuth();
+  if (!accountId || !accessToken) return [];
+
+  const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+    + `?account_id=eq.${accountId}&status=eq.queued`
+    + `&order=created_at.asc&limit=${limit}`
+    + `&select=id,user_name,profile_url,message,campaign`;
+
+  const res = await fetch(url, {
+    headers: {
+      'apikey': CONFIG.SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) return [];
+      return fetchDMBatch(limit);
+    }
+    return [];
+  }
+
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * キャンペーン文字列から送信モード設定をパース
+ * Format: "pipe{N}_{batchId}" → pipeline, N tabs
+ *         "seq_{batchId}" → sequential
+ *         other → sequential (旧フォーマット互換)
+ */
+function parseBatchConfig(campaign) {
+  if (!campaign) return { mode: 'sequential', tabCount: 1 };
+  const pipeMatch = campaign.match(/^pipe(\d+)_/);
+  if (pipeMatch) {
+    return { mode: 'pipeline', tabCount: Math.min(parseInt(pipeMatch[1], 10), 5) };
+  }
+  if (campaign.startsWith('seq_')) {
+    return { mode: 'sequential', tabCount: 1 };
+  }
+  return { mode: 'sequential', tabCount: 1 };
+}
+
+/**
  * DM送信ログのステータスをSupabase直接更新
  */
 async function updateDMTaskStatus(taskId, status, error) {
@@ -875,26 +917,24 @@ function waitForTabComplete(tabId, timeout = 15000) {
 }
 
 /**
- * dm_executor.js からの結果を待つ（Promiseベース）
+ * dm_executor.js からの結果を待つ（Map管理、複数タブ同時対応）
  * タイムアウトはDM_SEND_RESULT受信時にクリアされる
  */
 function waitForDMResult(taskId, timeout = 15000) {
   return new Promise((resolve) => {
-    pendingDMTaskId = taskId;
-    pendingDMResolve = resolve;
+    // 既存のエントリがあればクリア
+    const existing = pendingDMResults.get(taskId);
+    if (existing) clearTimeout(existing.timeoutId);
 
-    // 前回のタイマーが残っていたらクリア
-    if (dmTimeoutId) clearTimeout(dmTimeoutId);
-
-    dmTimeoutId = setTimeout(() => {
-      if (pendingDMResolve && pendingDMTaskId === taskId) {
+    const timeoutId = setTimeout(() => {
+      if (pendingDMResults.has(taskId)) {
         console.warn('[LS-BG] DM結果タイムアウト: taskId=', taskId, timeout + 'ms経過');
-        pendingDMResolve = null;
-        pendingDMTaskId = null;
-        dmTimeoutId = null;
+        pendingDMResults.delete(taskId);
         resolve({ success: false, error: `タイムアウト (${timeout / 1000}秒)` });
       }
     }, timeout);
+
+    pendingDMResults.set(taskId, { resolve, timeoutId });
   });
 }
 
@@ -961,23 +1001,187 @@ async function processSingleDMTask(task) {
 }
 
 /**
- * DMキューを順次処理（ポーリングで1件ずつ取得→処理→次へ）
+ * DMキューを順次処理（1件ずつ取得→処理→次へ）
+ */
+async function processSequentialDMQueue() {
+  try {
+    while (true) {
+      const task = await fetchNextDMTask();
+      if (!task) break;
+
+      await processSingleDMTask(task);
+
+      const delay = 2000 + Math.random() * 2000;
+      console.log('[LS-BG] DM次タスクまで', Math.round(delay / 1000), '秒待機');
+      await sleep_bg(delay);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] DMキュー処理エラー:', e.message);
+  }
+}
+
+// ============================================================
+// Pipeline DM Mode — マルチタブ並列送信
+// Morning Hook CRM準拠: 各タブが独立してDM送信を処理
+// ============================================================
+
+/**
+ * 指定タブでDM送信を1件実行（タブ遷移 → 送信指示 → 結果待ち）
+ */
+async function processDMOnTab(task, tabId) {
+  console.log('[LS-BG] Pipeline DM: tab=', tabId, 'id=', task.id, 'user=', task.user_name);
+  // Note: status is already 'sending' (set by processDMPipeline batch update)
+
+  try {
+    const profileUrl = task.profile_url
+      || `https://stripchat.com/user/${task.user_name}`;
+
+    await chrome.tabs.update(tabId, { url: profileUrl });
+
+    const loaded = await waitForTabComplete(tabId, 15000);
+    if (!loaded) throw new Error('ページロードタイムアウト');
+
+    await sleep_bg(1500);
+
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'SEND_DM',
+        taskId: task.id,
+        username: task.user_name,
+        message: task.message,
+      });
+    } catch (err) {
+      throw new Error('DM executor通信失敗: ' + err.message);
+    }
+
+    const result = await waitForDMResult(task.id, CONFIG.DM_SEND_TIMEOUT);
+
+    if (result.success) {
+      await updateDMTaskStatus(task.id, 'success', null);
+      console.log('[LS-BG] Pipeline DM成功: tab=', tabId, 'user=', task.user_name);
+    } else {
+      await updateDMTaskStatus(task.id, 'error', result.error);
+      console.warn('[LS-BG] Pipeline DM失敗: tab=', tabId, 'user=', task.user_name, 'error=', result.error);
+    }
+  } catch (err) {
+    console.error('[LS-BG] Pipeline DM例外: tab=', tabId, 'user=', task.user_name, err.message);
+    await updateDMTaskStatus(task.id, 'error', err.message);
+  }
+}
+
+/**
+ * パイプライン タブワーカー:
+ * 共有キューからタスクを1件ずつ取り出し、指定タブで順次処理
+ * 複数ワーカーが並列で動作し、各タブが独立してDM送信を行う
+ */
+async function pipelineTabWorker(tabId, queue, workerIdx) {
+  console.log('[LS-BG] Pipeline Worker', workerIdx, '開始 tab=', tabId);
+
+  while (queue.length > 0) {
+    const task = queue.shift();
+    if (!task) break;
+
+    await processDMOnTab(task, tabId);
+
+    // レート制限: 1-3秒（パイプラインは並列なので短めでOK）
+    if (queue.length > 0) {
+      const delay = 1000 + Math.random() * 2000;
+      console.log('[LS-BG] Pipeline Worker', workerIdx, '次タスクまで', Math.round(delay / 1000), '秒待機');
+      await sleep_bg(delay);
+    }
+  }
+
+  console.log('[LS-BG] Pipeline Worker', workerIdx, '完了');
+}
+
+/**
+ * パイプラインDM処理メイン
+ * 複数タブを並列で使い、DMを高速に送信する
+ */
+async function processDMPipeline(tabCount) {
+  // 全queued タスクを一括取得
+  const allTasks = await fetchDMBatch(50);
+  if (allTasks.length === 0) return;
+
+  const actualTabCount = Math.min(tabCount, allTasks.length, 5);
+  console.log('[LS-BG] ========== パイプラインDM開始 ==========');
+  console.log('[LS-BG] タスク数:', allTasks.length, 'タブ数:', actualTabCount);
+
+  // 全タスクを先にsendingに更新（再取得防止）
+  for (const task of allTasks) {
+    await updateDMTaskStatus(task.id, 'sending', null);
+  }
+
+  // タブを作成（about:blankで作成 → ワーカーがプロフィールURLへ遷移）
+  const tabIds = [];
+  for (let i = 0; i < actualTabCount; i++) {
+    try {
+      const tab = await chrome.tabs.create({
+        url: 'about:blank',
+        active: false,
+      });
+      tabIds.push(tab.id);
+      console.log('[LS-BG] Pipeline タブ作成:', tab.id, '(', i + 1, '/', actualTabCount, ')');
+    } catch (err) {
+      console.warn('[LS-BG] Pipeline タブ作成失敗:', err.message);
+    }
+  }
+
+  if (tabIds.length === 0) {
+    console.error('[LS-BG] Pipeline: タブが1つも作成できませんでした');
+    // 全タスクをqueuedに戻す
+    for (const task of allTasks) {
+      await updateDMTaskStatus(task.id, 'queued', null);
+    }
+    return;
+  }
+
+  // 共有キューを作成し、全タブワーカーを並列実行
+  const queue = [...allTasks];
+
+  await Promise.all(
+    tabIds.map((tabId, idx) => pipelineTabWorker(tabId, queue, idx))
+  );
+
+  // タブをクリーンアップ
+  for (const tabId of tabIds) {
+    try {
+      await chrome.tabs.remove(tabId);
+      console.log('[LS-BG] Pipeline タブ閉じた:', tabId);
+    } catch (e) {
+      // タブが既に閉じられている場合
+    }
+  }
+
+  console.log('[LS-BG] ========== パイプラインDM完了 ==========');
+}
+
+/**
+ * DMキュー処理メイン — モード自動判定
+ * campaignフィールドから送信モード（sequential/pipeline）を検出して処理を振り分け
  */
 async function processDMQueue() {
   if (dmProcessing) return;
   dmProcessing = true;
 
   try {
-    while (true) {
-      const task = await fetchNextDMTask();
-      if (!task) break; // キューが空
+    // 最初の1件を見てモードを判定
+    const peekTask = await fetchNextDMTask();
+    if (!peekTask) return;
 
-      await processSingleDMTask(task);
+    const config = parseBatchConfig(peekTask.campaign);
 
-      // レート制限: 2-4秒ランダム待機（Morning Hook CRM準拠: EST_INTERVAL=2秒）
-      const delay = 2000 + Math.random() * 2000;
-      console.log('[LS-BG] DM次タスクまで', Math.round(delay / 1000), '秒待機');
-      await sleep_bg(delay);
+    if (config.mode === 'pipeline' && config.tabCount > 1) {
+      console.log('[LS-BG] DMモード: パイプライン (', config.tabCount, 'タブ)');
+      // peekTaskをqueuedに戻す（fetchDMBatchで再取得するため）
+      await updateDMTaskStatus(peekTask.id, 'queued', null);
+      await processDMPipeline(config.tabCount);
+    } else {
+      console.log('[LS-BG] DMモード: 順次');
+      // peekTaskは既に取得済みなので直接処理
+      await processSingleDMTask(peekTask);
+      // 残りも順次処理
+      await processSequentialDMQueue();
     }
   } catch (e) {
     console.warn('[LS-BG] DMキュー処理エラー:', e.message);
