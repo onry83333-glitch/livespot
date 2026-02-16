@@ -1,17 +1,20 @@
 /**
- * Strip Live Spot - DM Executor v3
+ * Strip Live Spot - DM Executor v4
  * Background から SEND_DM メッセージを受け取りStripchat上でDM送信を実行
  *
- * フロー:
- *   background.js がタブをプロフィールURLへ遷移させる
- *   → ページロード完了後に本スクリプトが注入される
- *   → SEND_DM メッセージを受信
- *   → プロフィール内の「PMを送る」ボタンをクリック
- *   → DMダイアログでメッセージ入力 → 送信 → 結果報告
+ * 【確定セレクタ（Morning Hook CRM DevTools確認済み）】
+ *   PMボタン:       button[aria-label="PMを送信"]
+ *   入力欄:         textarea[placeholder*="プライベートメッセージ"]
+ *   送信ボタン:     button[aria-label="送信"]
+ *   カメラアイコン:  button[aria-label="ファイルをアップロード"]
  *
- * 重要: ヘッダーナビの「メッセージ一覧」アイコンを押さないこと！
- *   ❌ header/nav 内のメッセージアイコン → サイト全体のメッセージ一覧
- *   ✅ プロフィール本体内の「PMを送る」ボタン → 個別DMダイアログ
+ * フロー:
+ *   background.js がタブをプロフィールURLへ遷移
+ *   → SEND_DM メッセージ受信
+ *   → button[aria-label="PMを送信"] をクリック
+ *   → textarea[placeholder*="プライベートメッセージ"] にメッセージ入力
+ *   → button[aria-label="送信"] をクリック
+ *   → 結果報告
  */
 
 (function () {
@@ -20,342 +23,171 @@
   const LOG = '[LS-DM]';
 
   // ============================================================
+  // 確定セレクタ（DevTools実測済み）
+  // ============================================================
+  const PM_SELECTOR = 'button[aria-label="PMを送信"]';
+  const INPUT_SELECTOR = 'textarea[placeholder*="プライベートメッセージ"]';
+  const SEND_SELECTOR = 'button[aria-label="送信"]';
+
+  // ============================================================
   // DOM Helpers
   // ============================================================
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function waitForElement(testFn, timeout = 8000) {
-    return new Promise((resolve) => {
-      const found = testFn();
-      if (found) { resolve(found); return; }
+  // ============================================================
+  // Step 1: PMボタンをクリック
+  // ============================================================
+  async function clickPMButton() {
+    console.log(LOG, 'Step 1: PMボタン検索...');
 
-      const obs = new MutationObserver(() => {
-        const el = testFn();
-        if (el) {
-          obs.disconnect();
-          resolve(el);
-        }
-      });
-      obs.observe(document.body, { childList: true, subtree: true });
+    // Strategy 1: 確定セレクタ（最優先）
+    let btn = document.querySelector(PM_SELECTOR);
+    if (btn) {
+      console.log(LOG, 'PMボタン発見 (確定セレクタ): button[aria-label="PMを送信"]');
+      btn.click();
+      return true;
+    }
 
-      setTimeout(() => {
-        obs.disconnect();
-        resolve(null);
-      }, timeout);
+    // Strategy 2: XPathで「PMを送信」テキストを含むbutton
+    try {
+      const xpath = "//button[contains(., 'PMを送信')]";
+      const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+      btn = result.singleNodeValue;
+      if (btn) {
+        console.log(LOG, 'PMボタン発見 (XPath): PMを送信');
+        btn.click();
+        return true;
+      }
+    } catch (e) { /* ignore */ }
+
+    // Strategy 3: aria-label/テキストに "PM" を含むボタン（ヘッダー除外）
+    const allBtns = document.querySelectorAll('button');
+    for (const b of allBtns) {
+      // ヘッダー/ナビ内は除外
+      if (isInHeaderOrNav(b)) continue;
+
+      const aria = b.getAttribute('aria-label') || '';
+      const text = (b.textContent || '').trim();
+
+      if (/PM/.test(aria) || /PM/.test(text)) {
+        console.log(LOG, `PMボタン発見 (フォールバック): aria="${aria}" text="${text}"`);
+        b.click();
+        return true;
+      }
+    }
+
+    // Strategy 4: 英語版 "Send PM" / "Send Message"
+    for (const b of allBtns) {
+      if (isInHeaderOrNav(b)) continue;
+      const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+      const text = (b.textContent || '').trim().toLowerCase();
+      if (/send\s*(a\s*)?pm/i.test(text) || /send\s*(a\s*)?pm/i.test(aria)) {
+        console.log(LOG, `PMボタン発見 (英語): text="${text}"`);
+        b.click();
+        return true;
+      }
+    }
+
+    // 見つからない場合: デバッグ情報を出力
+    console.error(LOG, 'PMボタンが見つかりません');
+    console.log(LOG, 'URL:', window.location.href);
+    const nonHeaderBtns = Array.from(allBtns).filter(b => !isInHeaderOrNav(b));
+    console.log(LOG, 'ヘッダー外ボタン一覧 (' + nonHeaderBtns.length + '件):');
+    nonHeaderBtns.forEach(b => {
+      const aria = b.getAttribute('aria-label') || '';
+      const text = (b.textContent || '').trim().substring(0, 30);
+      const cls = (b.className || '').toString().substring(0, 40);
+      console.log(LOG, `  aria="${aria}" text="${text}" class="${cls}"`);
     });
+
+    return false;
   }
 
   // ============================================================
-  // ヘッダー/ナビ内の要素かどうか判定
+  // ヘッダー/ナビ判定
   // ============================================================
   function isInHeaderOrNav(el) {
     let node = el;
     while (node && node !== document.body) {
       const tag = node.tagName?.toLowerCase();
       if (tag === 'header' || tag === 'nav') return true;
-
       const cls = (node.className || '').toString().toLowerCase();
-      // ヘッダー/ナビバー/トップバーに相当するクラス
-      if (/\b(header|navbar|nav-bar|top-bar|topbar|site-header|main-header|navigation)\b/.test(cls)) {
-        return true;
-      }
-      // Stripchat固有: ヘッダー内のユーティリティバー
-      if (/\b(header-|Header|HeaderMenu|headerMenu)\b/.test(cls)) {
-        return true;
-      }
+      if (/\b(header|navbar|nav-bar|top-bar|topbar|site-header)\b/.test(cls)) return true;
       node = node.parentElement;
     }
     return false;
   }
 
   // ============================================================
-  // プロフィール内の「PMを送る」ボタンを探す
+  // Step 2: DM入力欄を探す
   // ============================================================
-  async function findPMButton() {
-    // 全ボタン/リンクを取得
-    const candidates = document.querySelectorAll('button, a, [role="button"]');
-    const scored = [];
+  async function findDMInput(maxWait = 8000) {
+    console.log(LOG, 'Step 2: DM入力欄検索...');
+    const start = Date.now();
 
-    for (const el of candidates) {
-      // ヘッダー/ナビ内は除外
-      if (isInHeaderOrNav(el)) continue;
-      // form内のsubmitボタンは除外
-      if (el.closest('form')) continue;
-      // チャット入力欄周辺の送信ボタンは除外
-      if (el.closest('[class*="chat-input"], [class*="chatInput"], [class*="ChatInput"]')) continue;
-
-      const text = (el.textContent || '').trim();
-      const aria = el.getAttribute('aria-label') || '';
-      const title = el.title || '';
-      const cls = (el.className || '').toString();
-      const href = el.getAttribute('href') || '';
-      const allText = `${text}|${aria}|${title}|${cls}|${href}`.toLowerCase();
-
-      let score = 0;
-
-      // === 高スコア: PMを直接示す表現 ===
-
-      // "PMを送る" (日本語) — 最優先
-      if (/pmを送/.test(text.toLowerCase())) score += 100;
-      // "Send PM" / "Send a PM" (英語)
-      if (/send\s*(a\s*)?pm/i.test(text)) score += 100;
-      // "PM" が単独テキスト（2-3文字のボタン）
-      if (/^\s*PM\s*$/i.test(text)) score += 90;
-      // "Write PM" / "PM送信"
-      if (/write\s*pm|pm送信|pm\s*送/i.test(allText)) score += 90;
-
-      // === 中スコア: PM関連のclass/属性 ===
-
-      // class/属性に "pm" を含む（ただし "rpm" "npm" 等を除外）
-      if (/\bpm\b|send-pm|sendPm|SendPM|pm-button|pmButton/i.test(cls)) score += 70;
-      // data属性に pm を含む
-      if (el.getAttribute('data-test-id')?.toLowerCase().includes('pm')) score += 80;
-      if (el.getAttribute('data-testid')?.toLowerCase().includes('pm')) score += 80;
-
-      // === 低スコア: メッセージ関連（PMではないが候補になりうる） ===
-
-      // "メッセージを送る" / "Send Message" — プロフィール内ならPMボタンの可能性
-      if (/メッセージを送|send\s*message/i.test(text)) score += 40;
-      // "メッセージ" 単独（短い場合のみ、長文は除外）
-      if (/^.{0,10}メッセージ.{0,10}$/.test(text) && text.length <= 20) score += 20;
-      if (/^.{0,10}message.{0,10}$/i.test(text) && text.length <= 20) score += 20;
-
-      // class に message を含む（ヘッダー除外済み）
-      if (/send-message|sendMessage|SendMessage|message-button|messageButton/i.test(cls)) score += 30;
-
-      // href が /messages/ を含む + ユーザー名を含むなら個別DM
-      if (/\/messages\//.test(href)) {
-        score += 15;
+    while (Date.now() - start < maxWait) {
+      // Strategy 1: 確定セレクタ
+      let el = document.querySelector(INPUT_SELECTOR);
+      if (el && el.offsetParent !== null) {
+        console.log(LOG, 'DM入力欄発見 (確定セレクタ): textarea[placeholder*="プライベートメッセージ"]');
+        return el;
       }
 
-      // === スコア補正 ===
-
-      // プロフィールエリア内にある要素にボーナス
-      const parentClasses = getAncestorClasses(el, 5);
-      if (/profile|Profile|user-info|userInfo|UserInfo|model-info|modelInfo/.test(parentClasses)) {
-        score += 20;
-      }
-      // メインコンテンツエリア内にある要素にボーナス
-      if (/main|content|page|body/i.test(parentClasses)) {
-        score += 5;
+      // Strategy 2: 英語版placeholder
+      el = document.querySelector('textarea[placeholder*="private message" i]');
+      if (el && el.offsetParent !== null) {
+        console.log(LOG, 'DM入力欄発見 (英語placeholder)');
+        return el;
       }
 
-      if (score > 0) {
-        scored.push({ el, score, text: text.substring(0, 40), cls: cls.substring(0, 60) });
+      // Strategy 3: 任意の表示中textarea（ヘッダー外、入力可能なもの）
+      const textareas = document.querySelectorAll('textarea');
+      for (const ta of textareas) {
+        if (ta.offsetParent !== null && !isInHeaderOrNav(ta) && !ta.readOnly && !ta.disabled) {
+          const ph = ta.placeholder || '';
+          console.log(LOG, `DM入力欄発見 (フォールバック textarea): placeholder="${ph}"`);
+          return ta;
+        }
       }
+
+      // Strategy 4: contentEditable
+      const editables = document.querySelectorAll('[contenteditable="true"]');
+      for (const ce of editables) {
+        if (ce.offsetParent !== null && !isInHeaderOrNav(ce)) {
+          const cls = (ce.className || '').toString();
+          if (/message|chat|input|dm|pm/i.test(cls) || ce.closest('[class*="message" i], [class*="chat" i], [role="dialog"]')) {
+            console.log(LOG, 'DM入力欄発見 (contentEditable)');
+            return ce;
+          }
+        }
+      }
+
+      await sleep(500);
     }
 
-    // スコア順にソート
-    scored.sort((a, b) => b.score - a.score);
-
-    // デバッグ: 上位候補をログ出力
-    if (scored.length > 0) {
-      console.log(LOG, 'PMボタン候補:', scored.slice(0, 5).map(s =>
-        `score=${s.score} text="${s.text}" cls="${s.cls}"`
-      ));
-    } else {
-      console.warn(LOG, 'PMボタン候補なし — DOM内のボタン総数:', candidates.length);
-      // デバッグ: ヘッダー外の全ボタンをリスト
-      const nonHeaderBtns = Array.from(candidates).filter(el => !isInHeaderOrNav(el));
-      console.log(LOG, 'ヘッダー外ボタン:', nonHeaderBtns.length, '件');
-      nonHeaderBtns.slice(0, 10).forEach(el => {
-        console.log(LOG, '  -', el.tagName, `text="${(el.textContent || '').trim().substring(0, 30)}"`,
-          `class="${(el.className || '').toString().substring(0, 50)}"`);
-      });
-    }
-
-    return scored.length > 0 ? scored[0].el : null;
-  }
-
-  /**
-   * 祖先要素のclass名を連結して返す（最大depth階層）
-   */
-  function getAncestorClasses(el, depth) {
-    const classes = [];
-    let node = el.parentElement;
-    for (let i = 0; i < depth && node && node !== document.body; i++) {
-      if (node.className) classes.push(node.className.toString());
-      node = node.parentElement;
-    }
-    return classes.join(' ');
-  }
-
-  // ============================================================
-  // DMダイアログを開く
-  // ============================================================
-  async function openDMDialog() {
-    console.log(LOG, 'PMボタン検索開始...');
-
-    // まず即座に検索
-    let pmBtn = await findPMButton();
-
-    // 見つからない場合はDOMの遅延読み込みを待つ（最大5秒）
-    if (!pmBtn) {
-      console.log(LOG, 'PMボタン未発見 → DOM安定待ち (5秒)...');
-      pmBtn = await waitForElement(() => findPMButtonSync(), 5000);
-    }
-
-    if (!pmBtn) {
-      console.error(LOG, 'PMボタンが見つかりません。プロフィールページか確認してください。');
-      console.log(LOG, 'URL:', window.location.href);
-      return false;
-    }
-
-    console.log(LOG, 'PMボタン発見! クリック:',
-      `tag=${pmBtn.tagName}`,
-      `text="${(pmBtn.textContent || '').trim().substring(0, 30)}"`,
-      `class="${(pmBtn.className || '').toString().substring(0, 60)}"`
-    );
-
-    pmBtn.click();
-
-    // ダイアログが開くのを待つ
-    await sleep(2500);
-    return true;
-  }
-
-  /**
-   * findPMButton の同期版（waitForElement用）
-   */
-  function findPMButtonSync() {
-    const candidates = document.querySelectorAll('button, a, [role="button"]');
-    for (const el of candidates) {
-      if (isInHeaderOrNav(el)) continue;
-      if (el.closest('form')) continue;
-
-      const text = (el.textContent || '').trim().toLowerCase();
-      const aria = (el.getAttribute('aria-label') || '').toLowerCase();
-      const cls = (el.className || '').toString().toLowerCase();
-
-      // PM関連のテキスト
-      if (/pmを送|send\s*(a\s*)?pm|write\s*pm|pm送信/i.test(text)) return el;
-      if (/^\s*pm\s*$/i.test(text)) return el;
-      // PM関連のclass
-      if (/\bpm\b|send-pm|sendpm|pm-button|pmbutton/i.test(cls)) return el;
-      // data属性
-      if (el.getAttribute('data-test-id')?.toLowerCase().includes('pm')) return el;
-      if (el.getAttribute('data-testid')?.toLowerCase().includes('pm')) return el;
-    }
+    console.error(LOG, 'DM入力欄が見つかりません（タイムアウト）');
+    // デバッグ
+    const allTA = document.querySelectorAll('textarea');
+    console.log(LOG, 'ページ上のtextarea:', allTA.length, '件');
+    allTA.forEach(ta => {
+      console.log(LOG, `  placeholder="${ta.placeholder}" visible=${ta.offsetParent !== null} class="${(ta.className || '').toString().substring(0, 40)}"`);
+    });
     return null;
   }
 
   // ============================================================
-  // DM入力欄を探す
+  // Step 3: メッセージ入力
   // ============================================================
-  async function findDMInput() {
-    console.log(LOG, 'DM入力欄検索開始...');
-
-    // Strategy 1: モーダル/ダイアログ内の入力欄を優先検索
-    // （PMボタンクリック後に開くダイアログ）
-    const modalSelectors = [
-      '[role="dialog"]',
-      '[class*="modal" i]', '[class*="Modal"]',
-      '[class*="dialog" i]', '[class*="Dialog"]',
-      '[class*="popup" i]', '[class*="Popup"]',
-      '[class*="overlay" i]',
-      '[class*="messenger" i]', '[class*="Messenger"]',
-      '[class*="private-message" i]', '[class*="PrivateMessage"]',
-      '[class*="dm-" i]', '[class*="Dm"]',
-    ];
-
-    for (const mSel of modalSelectors) {
-      try {
-        const modal = document.querySelector(mSel);
-        if (!modal) continue;
-        // textarea優先
-        const textarea = modal.querySelector('textarea');
-        if (textarea) {
-          console.log(LOG, 'DM入力欄発見 (modal textarea):', mSel);
-          return textarea;
-        }
-        // contentEditable
-        const editable = modal.querySelector('[contenteditable="true"]');
-        if (editable) {
-          console.log(LOG, 'DM入力欄発見 (modal contentEditable):', mSel);
-          return editable;
-        }
-        // input[type=text]
-        const input = modal.querySelector('input[type="text"]');
-        if (input) {
-          console.log(LOG, 'DM入力欄発見 (modal input):', mSel);
-          return input;
-        }
-      } catch (e) { /* invalid selector, skip */ }
-    }
-
-    // Strategy 2: 直接セレクタで検索
-    const inputSelectors = [
-      '[data-testid="dm-input"]',
-      '[data-test-id="dm-input"]',
-      'textarea[class*="message" i]',
-      'textarea[class*="Message"]',
-      '[class*="dmInput"]', '[class*="DmInput"]', '[class*="dm-input"]',
-      'textarea[placeholder*="message" i]',
-      'textarea[placeholder*="メッセージ"]',
-      'textarea[placeholder*="Write" i]',
-      '[contenteditable="true"][class*="message" i]',
-      '[contenteditable="true"][class*="input" i]',
-    ];
-
-    for (const sel of inputSelectors) {
-      try {
-        const el = document.querySelector(sel);
-        if (el) {
-          console.log(LOG, 'DM入力欄発見 (直接):', sel);
-          return el;
-        }
-      } catch (e) { /* invalid selector */ }
-    }
-
-    // Strategy 3: 最大5秒間DOMの出現を待つ
-    console.log(LOG, 'DM入力欄未発見 → DOM出現待ち (5秒)...');
-    const found = await waitForElement(() => {
-      for (const mSel of modalSelectors) {
-        try {
-          const modal = document.querySelector(mSel);
-          if (!modal) continue;
-          const ta = modal.querySelector('textarea');
-          if (ta) return ta;
-          const ce = modal.querySelector('[contenteditable="true"]');
-          if (ce) return ce;
-          const inp = modal.querySelector('input[type="text"]');
-          if (inp) return inp;
-        } catch (e) { /* skip */ }
-      }
-      return null;
-    }, 5000);
-
-    if (found) {
-      console.log(LOG, 'DM入力欄発見 (待機後):', found.tagName);
-    } else {
-      console.error(LOG, 'DM入力欄が見つかりません');
-      // デバッグ: ページ上の全textarea/input をリスト
-      const allInputs = document.querySelectorAll('textarea, input[type="text"], [contenteditable="true"]');
-      console.log(LOG, 'ページ上の入力要素:', allInputs.length, '件');
-      Array.from(allInputs).slice(0, 10).forEach(el => {
-        console.log(LOG, '  -', el.tagName,
-          `class="${(el.className || '').toString().substring(0, 40)}"`,
-          `placeholder="${el.placeholder || ''}"`,
-          `inHeader=${isInHeaderOrNav(el)}`);
-      });
-    }
-
-    return found;
-  }
-
-  // ============================================================
-  // メッセージ入力（React controlled input対応）
-  // ============================================================
-  async function simulateTyping(element, text) {
+  async function typeMessage(element, text) {
+    console.log(LOG, 'Step 3: メッセージ入力...');
     element.focus();
     element.click();
     await sleep(100);
 
     // contentEditable 対応
     if (element.contentEditable === 'true' || element.getAttribute('contenteditable') === 'true') {
-      console.log(LOG, 'contentEditable入力モード');
       element.textContent = '';
       element.textContent = text;
       element.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }));
@@ -363,94 +195,96 @@
       return;
     }
 
-    // React controlled input: native setter で値をセット
+    // 改行を含む場合: JavaScript で value を直接セット（Enter=送信のため send_keys 不可）
     const proto = element.tagName === 'TEXTAREA'
       ? window.HTMLTextAreaElement.prototype
       : window.HTMLInputElement.prototype;
 
     const nativeSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-
     if (nativeSetter) {
       nativeSetter.call(element, text);
     } else {
       element.value = text;
     }
 
-    // React が検知するイベントをdispatch
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
-
     await sleep(300);
   }
 
   // ============================================================
-  // 送信ボタンを探してクリック
+  // Step 4: 送信ボタンをクリック
   // ============================================================
-  function findSendButton(nearElement) {
-    // 入力欄の親コンテナ（モーダル/フォーム/ダイアログ）を探す
-    const container =
-      nearElement.closest('[role="dialog"], [class*="modal" i], [class*="dialog" i], [class*="messenger" i], [class*="private-message" i], form')
-      || nearElement.closest('[class*="message" i]')
-      || nearElement.parentElement?.parentElement?.parentElement
-      || nearElement.parentElement?.parentElement
-      || nearElement.parentElement;
+  async function clickSendButton(chatInput) {
+    console.log(LOG, 'Step 4: 送信...');
 
-    if (!container) {
-      console.warn(LOG, '送信ボタン: コンテナが見つからない');
-      return null;
+    // Strategy 1: 確定セレクタ
+    let btn = document.querySelector(SEND_SELECTOR);
+    if (btn) {
+      console.log(LOG, '送信ボタン発見 (確定セレクタ): button[aria-label="送信"]');
+      btn.click();
+      return true;
     }
 
-    console.log(LOG, '送信ボタン検索: コンテナ=', container.tagName,
-      `class="${(container.className || '').toString().substring(0, 50)}"`);
+    // Strategy 2: 入力欄の近くの送信ボタン
+    const container = chatInput.closest('[role="dialog"], [class*="modal" i], [class*="messenger" i], [class*="message" i], form')
+      || chatInput.parentElement?.parentElement?.parentElement
+      || chatInput.parentElement?.parentElement
+      || chatInput.parentElement;
 
-    // 優先順位付きで検索
-    const selectors = [
-      'button[type="submit"]',
-      'button[class*="send" i]',
-      '[data-testid="send-button"]',
-      '[data-test-id="send-button"]',
-      'button[title*="Send" i]',
-      'button[title*="送信"]',
-      'button[aria-label*="Send" i]',
-      'button[aria-label*="送信"]',
-    ];
+    if (container) {
+      // type=submit
+      btn = container.querySelector('button[type="submit"]');
+      if (btn) {
+        console.log(LOG, '送信ボタン発見 (submit)');
+        btn.click();
+        return true;
+      }
 
-    for (const sel of selectors) {
-      try {
-        const btn = container.querySelector(sel);
-        if (btn) {
-          console.log(LOG, '送信ボタン発見 (セレクタ):', sel);
-          return btn;
+      // aria-label に "送信" / "Send"
+      for (const b of container.querySelectorAll('button')) {
+        const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+        if (aria.includes('送信') || aria.includes('send')) {
+          console.log(LOG, `送信ボタン発見 (aria): "${aria}"`);
+          b.click();
+          return true;
         }
-      } catch (e) { /* skip */ }
-    }
+      }
 
-    // テキストから判定
-    const buttons = container.querySelectorAll('button');
-    for (const btn of buttons) {
-      const text = (btn.textContent || '').trim().toLowerCase();
-      const title = (btn.title || '').toLowerCase();
-      const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
-      if (
-        text.includes('send') || text.includes('送信') ||
-        title.includes('send') || title.includes('送信') ||
-        aria.includes('send') || aria.includes('送信')
-      ) {
-        console.log(LOG, '送信ボタン発見 (テキスト):', text.substring(0, 20));
-        return btn;
+      // テキストに "送信" / "Send"
+      for (const b of container.querySelectorAll('button')) {
+        const text = (b.textContent || '').trim().toLowerCase();
+        if (text.includes('送信') || text === 'send') {
+          console.log(LOG, `送信ボタン発見 (text): "${text}"`);
+          b.click();
+          return true;
+        }
+      }
+
+      // SVGアイコンのみのボタン（送信矢印）
+      for (const b of container.querySelectorAll('button')) {
+        if (b.querySelector('svg') && !(b.textContent || '').trim()) {
+          console.log(LOG, '送信ボタン発見 (SVGアイコン)');
+          b.click();
+          return true;
+        }
       }
     }
 
-    // SVGアイコンのみの送信ボタン（矢印アイコン等）
-    for (const btn of buttons) {
-      if (btn.querySelector('svg') && !(btn.textContent || '').trim()) {
-        console.log(LOG, '送信ボタン発見 (SVGアイコン)');
-        return btn;
-      }
+    // Strategy 3: Enterキー（改行なしメッセージのみ）
+    const val = chatInput.value || '';
+    if (!val.includes('\n')) {
+      console.log(LOG, '送信ボタン未発見 → Enterキー送信を試行');
+      chatInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      await sleep(100);
+      chatInput.dispatchEvent(new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      await sleep(100);
+      chatInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+      return true;
     }
 
-    console.warn(LOG, '送信ボタンが見つからない。コンテナ内ボタン数:', buttons.length);
-    return null;
+    console.error(LOG, '送信ボタンが見つかりません');
+    return false;
   }
 
   // ============================================================
@@ -460,56 +294,47 @@
     console.log(LOG, '========================================');
     console.log(LOG, `DM送信開始: ${username}`);
     console.log(LOG, `URL: ${window.location.href}`);
-    console.log(LOG, `メッセージ: "${message.substring(0, 50)}..."`);
 
     try {
-      // Step 1: プロフィール内のPMボタンをクリック
-      console.log(LOG, 'Step 1: PMボタン検索...');
-      const dialogOpened = await openDMDialog();
-      if (!dialogOpened) {
-        throw new Error('PMボタンが見つかりません。プロフィールページか確認してください。');
+      // Step 1: PMボタンクリック
+      const pmOk = await clickPMButton();
+      if (!pmOk) {
+        throw new Error('PMボタン(aria-label="PMを送信")が見つかりません');
       }
 
-      // Step 2: DM入力欄を探す
-      console.log(LOG, 'Step 2: DM入力欄検索...');
-      const dmInput = await findDMInput();
-      if (!dmInput) {
-        throw new Error('DM入力欄が見つかりません。ダイアログが正しく開いたか確認してください。');
-      }
-
-      // Step 3: メッセージを入力
-      console.log(LOG, 'Step 3: メッセージ入力...');
-      await simulateTyping(dmInput, message);
-      await sleep(500);
-
-      // Step 4: 送信ボタンを探してクリック
-      console.log(LOG, 'Step 4: 送信...');
-      const sendBtn = findSendButton(dmInput);
-      if (!sendBtn) {
-        // Enter キーでの送信を試行
-        console.log(LOG, '送信ボタン未検出 → Enterキー送信を試行');
-        dmInput.dispatchEvent(new KeyboardEvent('keydown', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
-        }));
-        await sleep(300);
-        dmInput.dispatchEvent(new KeyboardEvent('keypress', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
-        }));
-        await sleep(300);
-        dmInput.dispatchEvent(new KeyboardEvent('keyup', {
-          key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
-        }));
-      } else {
-        sendBtn.click();
-      }
-
+      // PMクリック後、ダイアログが開くのを待つ
       await sleep(2000);
 
-      // Step 5: 送信確認
-      const remaining = dmInput.value || dmInput.textContent || '';
+      // Step 2: DM入力欄を探す
+      const chatInput = await findDMInput(8000);
+      if (!chatInput) {
+        throw new Error('DM入力欄(placeholder="プライベートメッセージ")が見つかりません');
+      }
+
+      // Step 3: メッセージ入力
+      await typeMessage(chatInput, message);
+      await sleep(500);
+
+      // Step 4: 送信
+      const sendOk = await clickSendButton(chatInput);
+      if (!sendOk) {
+        throw new Error('送信ボタン(aria-label="送信")が見つかりません');
+      }
+
+      // 送信完了待ち
+      await sleep(2000);
+
+      // Step 5: 送信確認（入力欄がクリアされたか）
+      const remaining = chatInput.value || chatInput.textContent || '';
       if (remaining.trim() === message.trim()) {
-        console.warn(LOG, '入力欄がクリアされていない → 送信失敗の可能性');
-        throw new Error('メッセージが送信されなかった可能性があります');
+        // 再試行: もう一度送信ボタンを押す
+        console.log(LOG, '入力欄未クリア → 送信リトライ...');
+        await clickSendButton(chatInput);
+        await sleep(2000);
+        const remaining2 = chatInput.value || chatInput.textContent || '';
+        if (remaining2.trim() === message.trim()) {
+          throw new Error('メッセージが送信されなかった可能性があります');
+        }
       }
 
       console.log(LOG, `DM送信成功: ${username}`);
@@ -530,7 +355,6 @@
       console.log(LOG, `SEND_DM受信: user=${msg.username}, taskId=${msg.taskId}`);
 
       executeDM(msg.username, msg.message).then((result) => {
-        // 結果を background.js に送信
         chrome.runtime.sendMessage({
           type: 'DM_SEND_RESULT',
           taskId: msg.taskId,
@@ -540,16 +364,14 @@
         sendResponse({ ok: true, result });
       });
 
-      return true; // 非同期レスポンス
+      return true;
     }
 
-    // レガシー: EXECUTE_DM（旧フォーマット、互換性維持）
     if (msg.type === 'EXECUTE_DM') {
-      console.log(LOG, `EXECUTE_DM受信 (レガシー): ${msg.tasks?.length || 0} tasks`);
       sendResponse({ ok: true, queued: 0, message: 'Use SEND_DM instead' });
       return false;
     }
   });
 
-  console.log(LOG, 'DM executor ready (v3)');
+  console.log(LOG, 'DM executor ready (v4 - confirmed selectors)');
 })();
