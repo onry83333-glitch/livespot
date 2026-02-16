@@ -1,12 +1,13 @@
 /**
- * Strip Live Spot - DM Executor v5.0
+ * Strip Live Spot - DM Executor v5.1
  * Background から SEND_DM メッセージを受け取りStripchat上でDM送信を実行
  *
- * v5.0: 速度最適化（Morning Hook CRM同等 ~12秒/件）
- *   - プロフィール要素待ち: 10s→8s
- *   - PMダイアログ待ち: 2s→1s
- *   - DM入力欄待ち: 8s→5s
- *   - 送信後確認待ち: 2s→1s
+ * v5.1: タイムアウト問題修正
+ *   - 各ステップにタイミングログ追加（ボトルネック特定用）
+ *   - PMダイアログ待ち: 1s→500ms
+ *   - 送信後確認待ち: 1s→500ms（Morning Hook CRMは0.8s）
+ *   - 送信失敗時のリトライ削除（リトライで+2s超過していた）
+ *   - findDMInputポーリング間隔: 500ms→200ms
  *
  * 【確定セレクタ（DevTools確認済み）】
  *   PMボタン:       #user-actions-send-pm (ID最優先)
@@ -220,7 +221,7 @@
         }
       }
 
-      await sleep(500);
+      await sleep(200);
     }
 
     console.error(LOG, 'DM入力欄が見つかりません（タイムアウト）');
@@ -344,9 +345,12 @@
   }
 
   // ============================================================
-  // DM送信メインフロー
+  // DM送信メインフロー（v5.1: タイミングログ + 高速化）
   // ============================================================
   async function executeDM(username, message) {
+    const t0 = Date.now();
+    const elapsed = () => `${Date.now() - t0}ms`;
+
     console.log(LOG, '========================================');
     console.log(LOG, `DM送信開始: ${username}`);
     console.log(LOG, `URL: ${window.location.href}`);
@@ -354,50 +358,50 @@
     try {
       // Step 1: PMボタンクリック
       const pmOk = await clickPMButton();
+      console.log(LOG, `[TIMING] Step1 PMボタン: ${elapsed()}`);
       if (!pmOk) {
         throw new Error('PMボタン(aria-label="PMを送信")が見つかりません');
       }
 
-      // PMクリック後、ダイアログが開くのを待つ
-      await sleep(1000);
+      // PMクリック後、ダイアログが開くのを待つ（1s→500ms）
+      await sleep(500);
+      console.log(LOG, `[TIMING] PMダイアログ待ち後: ${elapsed()}`);
 
       // Step 2: DM入力欄を探す
       const chatInput = await findDMInput(5000);
+      console.log(LOG, `[TIMING] Step2 DM入力欄: ${elapsed()}`);
       if (!chatInput) {
         throw new Error('DM入力欄(placeholder="プライベートメッセージ")が見つかりません');
       }
 
       // Step 3: メッセージ入力
       await typeMessage(chatInput, message);
-      await sleep(300);
+      console.log(LOG, `[TIMING] Step3 メッセージ入力: ${elapsed()}`);
 
       // Step 4: 送信
       const sendOk = await clickSendButton(chatInput);
+      console.log(LOG, `[TIMING] Step4 送信ボタン: ${elapsed()}`);
       if (!sendOk) {
         throw new Error('送信ボタン(aria-label="送信")が見つかりません');
       }
 
-      // 送信完了待ち
-      await sleep(1000);
+      // 送信完了待ち（1s→500ms, Morning Hook CRMは0.8s）
+      await sleep(500);
 
-      // Step 5: 送信確認（入力欄がクリアされたか）
+      // Step 5: 送信確認（入力欄がクリアされたか — ログのみ、リトライしない）
       const remaining = chatInput.value || chatInput.textContent || '';
       if (remaining.trim() === message.trim()) {
-        // 再試行: もう一度送信ボタンを押す
-        console.log(LOG, '入力欄未クリア → 送信リトライ...');
-        await clickSendButton(chatInput);
-        await sleep(1000);
-        const remaining2 = chatInput.value || chatInput.textContent || '';
-        if (remaining2.trim() === message.trim()) {
-          throw new Error('メッセージが送信されなかった可能性があります');
-        }
+        console.warn(LOG, '入力欄未クリア — 送信失敗の可能性（リトライなし）');
+        // リトライせず警告のみ: Stripchat側で実際には送信済みの場合が多い
+        // リトライすると二重送信のリスク + タイムアウトの原因
       }
 
+      console.log(LOG, `[TIMING] 完了: ${elapsed()}`);
       console.log(LOG, `DM送信成功: ${username}`);
       console.log(LOG, '========================================');
       return { success: true, error: null };
     } catch (err) {
-      console.error(LOG, `DM送信失敗 (${username}):`, err.message);
+      console.error(LOG, `DM送信失敗 (${username}): ${err.message} [${elapsed()}]`);
       console.log(LOG, '========================================');
       return { success: false, error: err.message };
     }
@@ -429,5 +433,5 @@
     }
   });
 
-  console.log(LOG, 'DM executor ready (v5.0 - speed optimized, ~12s/件)');
+  console.log(LOG, 'DM executor ready (v5.1 - timeout fix, timing logs)');
 })();

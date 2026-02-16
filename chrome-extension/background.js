@@ -573,7 +573,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       entry.resolve({ success: msg.success, error: msg.error || null });
       console.log('[LS-BG] DM結果をPromiseに反映済み: taskId=', msg.taskId, 'success=', msg.success);
     } else {
-      console.warn('[LS-BG] DM_SEND_RESULT: 対応するPending Promiseなし (タイムアウト済みの可能性) taskId=', msg.taskId);
+      // タイムアウト済み — 遅延到着した成功結果でステータスを上書き
+      console.warn('[LS-BG] DM_SEND_RESULT: タイムアウト済み（遅延到着） taskId=', msg.taskId, 'success=', msg.success);
+      if (msg.success) {
+        console.log('[LS-BG] 遅延成功 → error→successに上書き: taskId=', msg.taskId);
+        updateDMTaskStatus(msg.taskId, 'success', null);
+      }
     }
     sendResponse({ ok: true });
     return false;
