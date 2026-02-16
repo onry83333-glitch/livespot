@@ -114,5 +114,26 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
     };
   }, [castName, enabled, loadMessages, loadCastNames]);
 
-  return { messages, castNames, isConnected, refresh: loadMessages, insertDemoData };
+  // キャストの今日のspy_messagesを削除
+  const deleteCastMessages = useCallback(async (targetCastName: string): Promise<string | null> => {
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    const { error } = await supabaseRef.current
+      .from('spy_messages')
+      .delete()
+      .eq('cast_name', targetCastName)
+      .gte('message_time', todayStart.toISOString());
+
+    if (error) {
+      return error.message;
+    }
+
+    // ローカルステートからも削除
+    setMessages(prev => prev.filter(m => m.cast_name !== targetCastName));
+    setCastNames(prev => prev.filter(n => n !== targetCastName));
+    return null;
+  }, []);
+
+  return { messages, castNames, isConnected, refresh: loadMessages, insertDemoData, deleteCastMessages };
 }

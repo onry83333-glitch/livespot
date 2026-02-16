@@ -52,7 +52,11 @@ export default function SpyPage() {
   const [whisperSending, setWhisperSending] = useState(false);
   const whisperSbRef = useRef(createClient());
 
-  const { messages, castNames, isConnected, insertDemoData } = useRealtimeSpy({
+  // Cast visibility toggle (hidden casts)
+  const [hiddenCasts, setHiddenCasts] = useState<Set<string>>(new Set());
+  const [deletingCast, setDeletingCast] = useState<string | null>(null);
+
+  const { messages, castNames, isConnected, insertDemoData, deleteCastMessages } = useRealtimeSpy({
     castName: selectedCast,
     enabled: !!user,
   });
@@ -133,13 +137,18 @@ export default function SpyPage() {
   // B.2: Filtered messages (search)
   // ============================================================
   const filteredMessages = useMemo(() => {
-    if (!searchQuery.trim()) return messages;
+    let filtered = messages;
+    // 非表示キャストのメッセージを除外
+    if (hiddenCasts.size > 0) {
+      filtered = filtered.filter(m => !hiddenCasts.has(m.cast_name));
+    }
+    if (!searchQuery.trim()) return filtered;
     const q = searchQuery.toLowerCase();
-    return messages.filter(m =>
+    return filtered.filter(m =>
       (m.user_name?.toLowerCase().includes(q)) ||
       (m.message?.toLowerCase().includes(q))
     );
-  }, [messages, searchQuery]);
+  }, [messages, searchQuery, hiddenCasts]);
 
   // ============================================================
   // B.1: Today's cumulative stats
@@ -194,6 +203,34 @@ export default function SpyPage() {
 
     return { topTippers, activeUsers, chatSpeed: recentMsgCount, avgSpeed, isHype };
   }, [messages]);
+
+  // ============================================================
+  // Cast visibility toggle
+  // ============================================================
+  const toggleCastVisibility = useCallback((castName: string) => {
+    setHiddenCasts(prev => {
+      const next = new Set(prev);
+      if (next.has(castName)) {
+        next.delete(castName);
+      } else {
+        next.add(castName);
+      }
+      return next;
+    });
+  }, []);
+
+  // ============================================================
+  // Cast delete (today's messages)
+  // ============================================================
+  const handleDeleteCast = useCallback(async (castName: string) => {
+    if (!confirm(`${castName} の本日のログを削除しますか？`)) return;
+    setDeletingCast(castName);
+    const err = await deleteCastMessages(castName);
+    setDeletingCast(null);
+    if (err) {
+      setDemoError(`削除失敗: ${err}`);
+    }
+  }, [deleteCastMessages]);
 
   // ============================================================
   // Demo data insertion
@@ -350,26 +387,48 @@ export default function SpyPage() {
           <div className="flex-1 space-y-1 overflow-auto">
             {castNames.map(name => {
               const isActive = selectedCast === name;
+              const isHidden = hiddenCasts.has(name);
               const count = messages.filter(m => m.cast_name === name).length;
               return (
-                <button key={name}
-                  onClick={() => setSelectedCast(name)}
-                  className={`w-full text-left p-2.5 rounded-xl transition-all duration-200 text-xs ${
-                    isActive ? 'border' : 'hover:bg-white/[0.03]'
-                  }`}
-                  style={isActive ? {
-                    background: 'rgba(56,189,248,0.08)',
-                    borderColor: 'rgba(56,189,248,0.2)',
-                  } : {}}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold">{name}</span>
-                    <span className="badge-live text-[8px] py-0.5 px-1">LIVE</span>
-                  </div>
-                  <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    {count > 0 ? `${count} 件` : 'ログなし'}
-                  </p>
-                </button>
+                <div key={name} className="flex items-center gap-1">
+                  <button
+                    onClick={() => setSelectedCast(name)}
+                    className={`flex-1 text-left p-2.5 rounded-xl transition-all duration-200 text-xs ${
+                      isActive ? 'border' : 'hover:bg-white/[0.03]'
+                    } ${isHidden ? 'opacity-40' : ''}`}
+                    style={isActive ? {
+                      background: 'rgba(56,189,248,0.08)',
+                      borderColor: 'rgba(56,189,248,0.2)',
+                    } : {}}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold">{name}</span>
+                      <span className="badge-live text-[8px] py-0.5 px-1">LIVE</span>
+                    </div>
+                    <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      {count > 0 ? `${count} 件` : 'ログなし'}
+                    </p>
+                  </button>
+                  {/* Visibility toggle */}
+                  <button
+                    onClick={() => toggleCastVisibility(name)}
+                    className="p-1.5 rounded-lg hover:bg-white/5 transition-all text-[11px]"
+                    title={isHidden ? 'ログ表示' : 'ログ非表示'}
+                    style={{ color: isHidden ? 'var(--text-muted)' : 'var(--accent-primary)' }}
+                  >
+                    {isHidden ? '👁‍🗨' : '👁'}
+                  </button>
+                  {/* Delete today's logs */}
+                  <button
+                    onClick={() => handleDeleteCast(name)}
+                    disabled={deletingCast === name}
+                    className="p-1.5 rounded-lg hover:bg-rose-500/10 transition-all text-[11px] disabled:opacity-30"
+                    title="本日のログ削除"
+                    style={{ color: 'var(--accent-pink)' }}
+                  >
+                    🗑
+                  </button>
+                </div>
               );
             })}
             {castNames.length === 0 && (

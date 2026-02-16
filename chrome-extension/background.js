@@ -30,7 +30,9 @@ let heartbeatAlerted = false;
 // STT (Speech-to-Text) state
 let sttEnabled = false;
 let sttChunkQueue = [];
-let sttProcessing = false;
+let sttProcessing = 0;               // 同時処理数カウンター
+const STT_MAX_CONCURRENT = 2;        // 最大同時transcribe数
+const sttTabStates = {};              // tabId → { castName, lastChunkAt, chunkCount }
 
 const BUFFER_STORAGE_KEY = 'spy_message_buffer';
 const VIEWER_BUFFER_KEY = 'spy_viewer_buffer';
@@ -46,6 +48,26 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     flushMessageBuffer();
     flushViewerStats();
     checkHeartbeatTimeout();
+    cleanupStaleSTTTabs();
+  }
+});
+
+// STTタブの古いエントリをクリーンアップ（60秒以上チャンクなし）
+function cleanupStaleSTTTabs() {
+  const now = Date.now();
+  for (const tabId of Object.keys(sttTabStates)) {
+    if (now - sttTabStates[tabId].lastChunkAt > 60000) {
+      console.log('[LS-BG] STTタブ削除（stale）: tab=', tabId, 'cast=', sttTabStates[tabId].castName);
+      delete sttTabStates[tabId];
+    }
+  }
+}
+
+// タブが閉じられたらSTT状態をクリーンアップ
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (sttTabStates[tabId]) {
+    console.log('[LS-BG] STTタブ削除（closed）: tab=', tabId, 'cast=', sttTabStates[tabId].castName);
+    delete sttTabStates[tabId];
   }
 });
 
@@ -527,15 +549,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: false, error: 'STT not enabled' });
       return false;
     }
+    const tabId = sender.tab?.id || 0;
+    const castName = msg.castName || 'unknown';
+
+    // タブ別状態を更新
+    if (!sttTabStates[tabId]) {
+      sttTabStates[tabId] = { castName, lastChunkAt: Date.now(), chunkCount: 0 };
+      console.log('[LS-BG] STT新タブ検出: tab=', tabId, 'cast=', castName,
+        'アクティブタブ数:', Object.keys(sttTabStates).length);
+    }
+    sttTabStates[tabId].lastChunkAt = Date.now();
+    sttTabStates[tabId].chunkCount++;
+    sttTabStates[tabId].castName = castName;
+
     // キューに追加（上限超過時は古いものを破棄）
     sttChunkQueue.push({
       data: msg.data,
-      castName: msg.castName,
+      castName: castName,
+      tabId: tabId,
       timestamp: msg.timestamp,
     });
-    if (sttChunkQueue.length > (CONFIG.STT_MAX_QUEUE_SIZE || 10)) {
+    if (sttChunkQueue.length > (CONFIG.STT_MAX_QUEUE_SIZE || 20)) {
       const dropped = sttChunkQueue.shift();
-      console.warn('[LS-BG] STTキュー溢れ: 古いチャンク破棄 cast=', dropped.castName);
+      console.warn('[LS-BG] STTキュー溢れ: 古いチャンク破棄 cast=', dropped.castName, 'tab=', dropped.tabId);
     }
     processSTTQueue();
     sendResponse({ ok: true, queued: sttChunkQueue.length });
@@ -544,7 +580,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // --- STT: Status from content_stt_relay.js ---
   if (msg.type === 'STT_STATUS') {
-    console.log('[LS-BG] STTステータス:', msg.status, 'cast=', msg.castName, msg.message || '');
+    const tabId = sender.tab?.id || 0;
+    console.log('[LS-BG] STTステータス: tab=', tabId, msg.status, 'cast=', msg.castName, msg.message || '');
     sendResponse({ ok: true });
     return false;
   }
@@ -638,12 +675,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'GET_STATUS') {
     loadAuth().then(async (auth) => {
       const syncData = await chrome.storage.local.get(['last_coin_sync', 'coin_sync_count']);
+      // STTタブ情報を収集
+      const sttTabs = Object.entries(sttTabStates).map(([tid, s]) => ({
+        tabId: parseInt(tid),
+        castName: s.castName,
+        chunkCount: s.chunkCount,
+        lastChunkAt: s.lastChunkAt,
+      }));
+
       const status = {
         ok: true,
         authenticated: !!auth.accessToken,
         accountId: auth.accountId,
         spyEnabled: auth.spyEnabled,
         sttEnabled: sttEnabled,
+        sttTabs: sttTabs,
         polling: !!dmPollingTimer,
         spyMsgCount,
         lastHeartbeat: lastHeartbeat || null,
@@ -792,24 +838,53 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ============================================================
-// STT Queue Processing — 音声チャンクを順次FastAPIに送信
+// STT Queue Processing — 音声チャンクをFastAPIに送信（並行処理対応）
+// 最大STT_MAX_CONCURRENT件を同時にtranscribe
 // ============================================================
 async function processSTTQueue() {
-  if (sttProcessing || sttChunkQueue.length === 0) return;
-  sttProcessing = true;
+  if (sttChunkQueue.length === 0) return;
+  if (sttProcessing >= STT_MAX_CONCURRENT) return;
+
+  // 処理できる分だけ取り出す
+  while (sttChunkQueue.length > 0 && sttProcessing < STT_MAX_CONCURRENT) {
+    const chunk = sttChunkQueue.shift();
+    sttProcessing++;
+    processOneSTTChunk(chunk).finally(() => {
+      sttProcessing--;
+      // 残りがあれば続行
+      if (sttChunkQueue.length > 0) processSTTQueue();
+    });
+  }
+}
+
+async function processOneSTTChunk(chunk) {
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    console.warn('[LS-BG] STT: 認証未完了 チャンク破棄 cast=', chunk.castName);
+    return;
+  }
 
   try {
-    while (sttChunkQueue.length > 0) {
-      const chunk = sttChunkQueue.shift();
-      await loadAuth();
-      if (!accountId || !accessToken) {
-        console.warn('[LS-BG] STT: 認証未完了 チャンク破棄');
-        continue;
-      }
+    const endpoint = CONFIG.STT_API_ENDPOINT || '/api/stt/transcribe';
+    let res = await fetch(`${CONFIG.API_BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        account_id: accountId,
+        cast_name: chunk.castName,
+        audio_base64: chunk.data,
+        timestamp: chunk.timestamp,
+      }),
+    });
 
-      try {
-        const endpoint = CONFIG.STT_API_ENDPOINT || '/api/stt/transcribe';
-        let res = await fetch(`${CONFIG.API_BASE_URL}${endpoint}`, {
+    // 401 → トークンリフレッシュ後リトライ
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        res = await fetch(`${CONFIG.API_BASE_URL}${endpoint}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -822,41 +897,20 @@ async function processSTTQueue() {
             timestamp: chunk.timestamp,
           }),
         });
-
-        // 401 → トークンリフレッシュ後リトライ
-        if (res.status === 401) {
-          const refreshed = await refreshAccessToken();
-          if (refreshed) {
-            res = await fetch(`${CONFIG.API_BASE_URL}${endpoint}`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${accessToken}`,
-              },
-              body: JSON.stringify({
-                account_id: accountId,
-                cast_name: chunk.castName,
-                audio_base64: chunk.data,
-                timestamp: chunk.timestamp,
-              }),
-            });
-          }
-        }
-
-        if (res.ok) {
-          const data = await res.json();
-          if (data.text) {
-            console.log('[LS-BG] STT結果:', data.text.substring(0, 80), 'conf=', data.confidence);
-          }
-        } else {
-          console.warn('[LS-BG] STT API error:', res.status);
-        }
-      } catch (err) {
-        console.warn('[LS-BG] STT処理エラー:', err.message);
       }
     }
-  } finally {
-    sttProcessing = false;
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.text) {
+        console.log('[LS-BG] STT結果: tab=', chunk.tabId, 'cast=', chunk.castName,
+          'text=', data.text.substring(0, 80), 'conf=', data.confidence);
+      }
+    } else {
+      console.warn('[LS-BG] STT API error: tab=', chunk.tabId, 'cast=', chunk.castName, 'status=', res.status);
+    }
+  } catch (err) {
+    console.warn('[LS-BG] STT処理エラー: tab=', chunk.tabId, 'cast=', chunk.castName, err.message);
   }
 }
 

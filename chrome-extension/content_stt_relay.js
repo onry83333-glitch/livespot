@@ -23,7 +23,7 @@
     if (event.source !== window) return;
     if (!event.data || event.data.source !== MSG_SOURCE) return;
 
-    // 音声チャンク → background.jsに転送
+    // 音声チャンク → background.jsに転送（tabIdはbackground側でsender.tab.idから取得）
     if (event.data.type === MSG_TYPE_CHUNK) {
       chrome.runtime.sendMessage({
         type: 'AUDIO_CHUNK',
@@ -31,6 +31,7 @@
         size: event.data.size,
         castName: event.data.castName,
         chunkIndex: event.data.chunkIndex,
+        isFinal: event.data.isFinal || false,
         timestamp: event.data.timestamp,
       }, (response) => {
         if (chrome.runtime.lastError) {
@@ -40,7 +41,7 @@
         chunksSent++;
         if (chunksSent % 12 === 0) {
           // 1分に1回ログ（5秒×12=60秒）
-          console.log(LOG, 'チャンク累計送信:', chunksSent);
+          console.log(LOG, 'チャンク累計送信:', chunksSent, 'cast=', event.data.castName);
         }
       });
       return;

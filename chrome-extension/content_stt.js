@@ -11,13 +11,14 @@
  *   content_stt.js (MAIN) → window.postMessage → content_stt_relay.js (ISOLATED)
  *   → chrome.runtime.sendMessage → background.js → FastAPI /api/stt/transcribe
  *
- * v2: AudioContext fallback + キャスト名修正 + リトライ
+ * v3: MutationObserver高速検出 + マルチタブ独立動作 + 初回チャンク高速化
  */
 (function () {
   'use strict';
 
   var LOG = '[LS-STT]';
   var CHUNK_INTERVAL_MS = 5000;        // 5秒チャンク（Morning Hook実証済み）
+  var FIRST_CHUNK_MS = 3000;           // 初回チャンクは3秒で高速送信
   var MIME_TYPE = 'audio/webm;codecs=opus';
   var MIME_FALLBACK = 'audio/webm';
   var BITRATE = 64000;                 // 64kbps（音声には十分）
@@ -25,8 +26,6 @@
   var MSG_TYPE_CHUNK = 'LIVESPOT_AUDIO_CHUNK';
   var MSG_TYPE_STATUS = 'LIVESPOT_STT_STATUS';
   var CONTROL_TYPE = 'LIVESPOT_STT_CONTROL';
-  var FIND_VIDEO_INTERVAL = 3000;      // ビデオ要素検索リトライ間隔
-  var FIND_VIDEO_MAX_RETRY = 20;       // 最大60秒
   var AUDIO_RETRY_MAX = 5;             // 音声トラック検出リトライ回数
   var AUDIO_RETRY_INTERVAL = 2000;     // 音声トラック検出リトライ間隔
 
@@ -36,6 +35,7 @@
   var recording = false;
   var castName = '';
   var chunkIndex = 0;
+  var videoObserver = null;             // MutationObserver
 
   // ============================================================
   // キャスト名抽出（URLパスから、言語プレフィックス対応）
@@ -147,12 +147,14 @@
   // ============================================================
   // 録音サイクル（Morning Hook startCycle準拠）
   // ============================================================
-  function startCycle() {
+  function startCycle(isFirstChunk) {
     if (!recording || !audioStream) return;
 
     var mimeType = MediaRecorder.isTypeSupported(MIME_TYPE) ? MIME_TYPE : MIME_FALLBACK;
     var currentIndex = chunkIndex++;
     var chunks = [];
+    // 初回チャンクは短い間隔で高速送信
+    var interval = isFirstChunk ? FIRST_CHUNK_MS : CHUNK_INTERVAL_MS;
 
     try {
       mediaRecorder = new MediaRecorder(audioStream, {
@@ -174,7 +176,7 @@
     mediaRecorder.onstop = function () {
       if (chunks.length === 0) {
         // 次サイクルへ
-        if (recording) startCycle();
+        if (recording) startCycle(false);
         return;
       }
 
@@ -187,7 +189,7 @@
 
       // 再帰的に次サイクル開始
       if (recording) {
-        startCycle();
+        startCycle(false);
       }
     };
 
@@ -197,33 +199,115 @@
 
     mediaRecorder.start();
 
-    // CHUNK_INTERVAL_MS後に停止 → ondataavailable → onstop
+    // interval後に停止 → ondataavailable → onstop
     setTimeout(function () {
       if (mediaRecorder && mediaRecorder.state === 'recording') {
         mediaRecorder.stop();
       }
-    }, CHUNK_INTERVAL_MS);
+    }, interval);
   }
 
   // ============================================================
-  // ビデオ要素をリトライ付きで検出
+  // MutationObserver + ポーリング ハイブリッド検出
+  // video要素をMutationObserverで高速検出 + フォールバックポーリング
   // ============================================================
-  function findVideoWithRetry(callback, retryCount) {
-    retryCount = retryCount || 0;
+  function findVideoFast(callback) {
+    // まず即座にチェック
     var video = findVideoElement();
     if (video) {
+      console.log(LOG, 'ビデオ要素を即座に検出');
       callback(video);
       return;
     }
-    if (retryCount >= FIND_VIDEO_MAX_RETRY) {
-      console.warn(LOG, 'ビデオ要素が見つかりません（' + FIND_VIDEO_MAX_RETRY + '回リトライ済み）');
-      sendStatus('error', 'ビデオ要素が見つかりません');
+
+    console.log(LOG, 'MutationObserver + ポーリングでビデオ要素を監視中...');
+    sendStatus('searching', 'ビデオ要素を検索中...');
+
+    var found = false;
+    var timeoutId = null;
+    var pollId = null;
+
+    function onFound(v) {
+      if (found) return;
+      found = true;
+      // クリーンアップ
+      if (videoObserver) {
+        videoObserver.disconnect();
+        videoObserver = null;
+      }
+      if (timeoutId) clearTimeout(timeoutId);
+      if (pollId) clearInterval(pollId);
+      console.log(LOG, 'ビデオ要素検出完了');
+      callback(v);
+    }
+
+    // MutationObserver: DOMにvideo要素が追加されたら即座に検出
+    videoObserver = new MutationObserver(function (mutations) {
+      for (var i = 0; i < mutations.length; i++) {
+        var added = mutations[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          var node = added[j];
+          if (node.nodeType !== 1) continue;
+          // 追加されたノードがvideo、またはvideo子要素を含む
+          if (node.tagName === 'VIDEO') {
+            // videoが再生可能になるまで少し待つ
+            waitForVideoReady(node, onFound);
+            return;
+          }
+          if (node.querySelector) {
+            var v = node.querySelector('video');
+            if (v) {
+              waitForVideoReady(v, onFound);
+              return;
+            }
+          }
+        }
+      }
+    });
+    videoObserver.observe(document.body || document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+
+    // フォールバック: 1秒ごとにポーリング（MutationObserverが拾えない場合）
+    pollId = setInterval(function () {
+      var v = findVideoElement();
+      if (v) onFound(v);
+    }, 1000);
+
+    // 60秒でタイムアウト
+    timeoutId = setTimeout(function () {
+      if (!found) {
+        found = true;
+        if (videoObserver) {
+          videoObserver.disconnect();
+          videoObserver = null;
+        }
+        if (pollId) clearInterval(pollId);
+        console.warn(LOG, 'ビデオ要素が見つかりません（60秒タイムアウト）');
+        sendStatus('error', 'ビデオ要素が見つかりません');
+      }
+    }, 60000);
+  }
+
+  // video要素が再生可能になるまで待つ（最大5秒）
+  function waitForVideoReady(video, callback) {
+    if (!video.paused || video.readyState >= 2) {
+      callback(video);
       return;
     }
-    console.log(LOG, 'ビデオ要素検索リトライ (' + (retryCount + 1) + '/' + FIND_VIDEO_MAX_RETRY + ')');
-    setTimeout(function () {
-      findVideoWithRetry(callback, retryCount + 1);
-    }, FIND_VIDEO_INTERVAL);
+    var attempts = 0;
+    var checkId = setInterval(function () {
+      attempts++;
+      if (!video.paused || video.readyState >= 2) {
+        clearInterval(checkId);
+        callback(video);
+      } else if (attempts > 25) { // 5秒
+        clearInterval(checkId);
+        // それでも使う（readyState上がらないケース）
+        callback(video);
+      }
+    }, 200);
   }
 
   // ============================================================
@@ -253,7 +337,7 @@
         chunkIndex = 0;
         console.log(LOG, 'Audio capture started (captureStream): cast=' + castName + ' tracks=' + audioTracks.length);
         sendStatus('recording', 'キャプチャ中');
-        startCycle();
+        startCycle(true); // 初回チャンクは高速送信
         return;
       }
     } catch (e) {
@@ -279,7 +363,7 @@
         chunkIndex = 0;
         console.log(LOG, 'Audio capture started (AudioContext): cast=' + castName);
         sendStatus('recording', 'キャプチャ中 (AudioContext)');
-        startCycle();
+        startCycle(true); // 初回チャンクは高速送信
         return;
       }
     } catch (e) {
@@ -317,9 +401,8 @@
     }
 
     console.log(LOG, 'キャプチャ開始準備: cast=' + castName);
-    sendStatus('searching', 'ビデオ要素を検索中...');
 
-    findVideoWithRetry(function (video) {
+    findVideoFast(function (video) {
       attemptAudioCapture(video, 0);
     });
   }
@@ -329,6 +412,12 @@
   // ============================================================
   function stopCapture() {
     recording = false;
+
+    // MutationObserverクリーンアップ
+    if (videoObserver) {
+      videoObserver.disconnect();
+      videoObserver = null;
+    }
 
     if (mediaRecorder && mediaRecorder.state !== 'inactive') {
       mediaRecorder.stop(); // onstop内で最終チャンク送信
@@ -363,5 +452,5 @@
     }
   });
 
-  console.log(LOG, 'Content STT (MAIN world) loaded');
+  console.log(LOG, 'Content STT (MAIN world) v3 loaded — cast=' + extractCastName());
 })();
