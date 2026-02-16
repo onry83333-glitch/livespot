@@ -1021,58 +1021,46 @@ async function processSequentialDMQueue() {
 }
 
 // ============================================================
-// Pipeline DM Mode — マルチタブ並列送信
-// Morning Hook CRM準拠: 各タブが独立してDM送信を処理
+// Pipeline DM Mode — ステージずらし方式（Morning Hook CRM準拠）
+//
+// 同時にStripchatにリクエストを送るのは最大1タブ。
+// ページ遷移（URLの変更）は1タブずつ、最低2秒間隔。
+// DM操作（PMボタン→入力→送信）は並行OK。
+//
+// 時間 →
+// タブ1: [ページ読込] → [PM→入力→送信] → [次ページ読込] → ...
+// タブ2:              → [ページ読込]     → [PM→入力→送信] → ...
+// タブ3:                                → [ページ読込]     → ...
 // ============================================================
 
-/**
- * 指定タブでDM送信を1件実行（タブ遷移 → 送信指示 → 結果待ち）
- */
-async function processDMOnTab(task, tabId) {
-  console.log('[LS-BG] Pipeline DM: tab=', tabId, 'id=', task.id, 'user=', task.user_name);
-  // Note: status is already 'sending' (set by processDMPipeline batch update)
+// --- Navigation Lock: ページ遷移を1タブずつ制御 ---
+let navLockBusy = false;
+let lastNavTime = 0;
+const NAV_MIN_INTERVAL = 2000; // ページ遷移の最低間隔（Bot検知回避）
 
-  try {
-    const profileUrl = task.profile_url
-      || `https://stripchat.com/user/${task.user_name}`;
-
-    await chrome.tabs.update(tabId, { url: profileUrl });
-
-    const loaded = await waitForTabComplete(tabId, 15000);
-    if (!loaded) throw new Error('ページロードタイムアウト');
-
-    await sleep_bg(1500);
-
-    try {
-      await chrome.tabs.sendMessage(tabId, {
-        type: 'SEND_DM',
-        taskId: task.id,
-        username: task.user_name,
-        message: task.message,
-      });
-    } catch (err) {
-      throw new Error('DM executor通信失敗: ' + err.message);
-    }
-
-    const result = await waitForDMResult(task.id, CONFIG.DM_SEND_TIMEOUT);
-
-    if (result.success) {
-      await updateDMTaskStatus(task.id, 'success', null);
-      console.log('[LS-BG] Pipeline DM成功: tab=', tabId, 'user=', task.user_name);
-    } else {
-      await updateDMTaskStatus(task.id, 'error', result.error);
-      console.warn('[LS-BG] Pipeline DM失敗: tab=', tabId, 'user=', task.user_name, 'error=', result.error);
-    }
-  } catch (err) {
-    console.error('[LS-BG] Pipeline DM例外: tab=', tabId, 'user=', task.user_name, err.message);
-    await updateDMTaskStatus(task.id, 'error', err.message);
+async function acquireNavLock() {
+  // 他のタブが遷移中なら待つ
+  while (navLockBusy) {
+    await sleep_bg(300);
   }
+  navLockBusy = true;
+
+  // 前回の遷移から最低2秒空ける
+  const elapsed = Date.now() - lastNavTime;
+  if (elapsed < NAV_MIN_INTERVAL) {
+    await sleep_bg(NAV_MIN_INTERVAL - elapsed);
+  }
+}
+
+function releaseNavLock() {
+  lastNavTime = Date.now();
+  navLockBusy = false;
 }
 
 /**
  * パイプライン タブワーカー:
- * 共有キューからタスクを1件ずつ取り出し、指定タブで順次処理
- * 複数ワーカーが並列で動作し、各タブが独立してDM送信を行う
+ * 共有キューからタスクを取り出し処理。ページ遷移はロックで1つずつ制御、
+ * DM操作（PMボタン→入力→送信）はロック解放後に並行実行。
  */
 async function pipelineTabWorker(tabId, queue, workerIdx) {
   console.log('[LS-BG] Pipeline Worker', workerIdx, '開始 tab=', tabId);
@@ -1081,13 +1069,62 @@ async function pipelineTabWorker(tabId, queue, workerIdx) {
     const task = queue.shift();
     if (!task) break;
 
-    await processDMOnTab(task, tabId);
+    console.log('[LS-BG] Pipeline W', workerIdx, ': id=', task.id, 'user=', task.user_name);
 
-    // レート制限: 1-3秒（パイプラインは並列なので短めでOK）
+    // === Stage 1: ページ遷移（ナビロック: 同時遷移は1タブまで） ===
+    let navOk = false;
+    await acquireNavLock();
+    try {
+      const profileUrl = task.profile_url
+        || `https://stripchat.com/user/${task.user_name}`;
+      console.log('[LS-BG] Pipeline W', workerIdx, 'ナビ開始:', task.user_name);
+
+      await updateDMTaskStatus(task.id, 'sending', null);
+      await chrome.tabs.update(tabId, { url: profileUrl });
+
+      const loaded = await waitForTabComplete(tabId, 15000);
+      if (!loaded) throw new Error('ページロードタイムアウト');
+
+      // DOM安定待ち（この間は他タブの遷移をブロック）
+      await sleep_bg(1500);
+      navOk = true;
+    } catch (err) {
+      console.error('[LS-BG] Pipeline W', workerIdx, 'ナビ失敗:', err.message);
+      await updateDMTaskStatus(task.id, 'error', err.message);
+    } finally {
+      // ロック解放 → 次のタブがページ遷移を開始できる
+      releaseNavLock();
+      console.log('[LS-BG] Pipeline W', workerIdx, 'ナビロック解放');
+    }
+
+    if (!navOk) continue; // ナビ失敗 → 次のタスクへ
+
+    // === Stage 2-4: PMボタン→入力→送信（ロック不要、並行可能） ===
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'SEND_DM',
+        taskId: task.id,
+        username: task.user_name,
+        message: task.message,
+      });
+
+      const result = await waitForDMResult(task.id, CONFIG.DM_SEND_TIMEOUT);
+
+      if (result.success) {
+        await updateDMTaskStatus(task.id, 'success', null);
+        console.log('[LS-BG] Pipeline W', workerIdx, 'DM成功:', task.user_name);
+      } else {
+        await updateDMTaskStatus(task.id, 'error', result.error);
+        console.warn('[LS-BG] Pipeline W', workerIdx, 'DM失敗:', task.user_name, result.error);
+      }
+    } catch (err) {
+      console.error('[LS-BG] Pipeline W', workerIdx, 'DM例外:', err.message);
+      await updateDMTaskStatus(task.id, 'error', err.message);
+    }
+
+    // 次のタスク前に短い待機
     if (queue.length > 0) {
-      const delay = 1000 + Math.random() * 2000;
-      console.log('[LS-BG] Pipeline Worker', workerIdx, '次タスクまで', Math.round(delay / 1000), '秒待機');
-      await sleep_bg(delay);
+      await sleep_bg(500);
     }
   }
 
@@ -1095,24 +1132,19 @@ async function pipelineTabWorker(tabId, queue, workerIdx) {
 }
 
 /**
- * パイプラインDM処理メイン
- * 複数タブを並列で使い、DMを高速に送信する
+ * パイプラインDM処理メイン（ステージずらし方式）
+ * 複数タブを使うが、ページ遷移は1タブずつ順番に行い、
+ * DM操作は並行して実行する。
  */
 async function processDMPipeline(tabCount) {
-  // 全queued タスクを一括取得
   const allTasks = await fetchDMBatch(50);
   if (allTasks.length === 0) return;
 
   const actualTabCount = Math.min(tabCount, allTasks.length, 5);
-  console.log('[LS-BG] ========== パイプラインDM開始 ==========');
+  console.log('[LS-BG] ========== パイプラインDM開始（ステージずらし） ==========');
   console.log('[LS-BG] タスク数:', allTasks.length, 'タブ数:', actualTabCount);
 
-  // 全タスクを先にsendingに更新（再取得防止）
-  for (const task of allTasks) {
-    await updateDMTaskStatus(task.id, 'sending', null);
-  }
-
-  // タブを作成（about:blankで作成 → ワーカーがプロフィールURLへ遷移）
+  // タブを作成（about:blankで待機）
   const tabIds = [];
   for (let i = 0; i < actualTabCount; i++) {
     try {
@@ -1129,16 +1161,17 @@ async function processDMPipeline(tabCount) {
 
   if (tabIds.length === 0) {
     console.error('[LS-BG] Pipeline: タブが1つも作成できませんでした');
-    // 全タスクをqueuedに戻す
-    for (const task of allTasks) {
-      await updateDMTaskStatus(task.id, 'queued', null);
-    }
     return;
   }
 
-  // 共有キューを作成し、全タブワーカーを並列実行
+  // ナビロック状態をリセット
+  navLockBusy = false;
+  lastNavTime = 0;
+
+  // 共有キュー — 各ワーカーが.shift()で取り出す
   const queue = [...allTasks];
 
+  // 全タブワーカーを並列起動（ただしページ遷移はナビロックで制御）
   await Promise.all(
     tabIds.map((tabId, idx) => pipelineTabWorker(tabId, queue, idx))
   );
@@ -1147,7 +1180,6 @@ async function processDMPipeline(tabCount) {
   for (const tabId of tabIds) {
     try {
       await chrome.tabs.remove(tabId);
-      console.log('[LS-BG] Pipeline タブ閉じた:', tabId);
     } catch (e) {
       // タブが既に閉じられている場合
     }
