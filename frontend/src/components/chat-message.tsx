@@ -13,6 +13,7 @@ const typeStyles: Record<string, { color: string; bg: string; border: string; la
   leave:  { color: 'var(--accent-pink)',   bg: 'rgba(244,63,94,0.05)',  border: 'rgba(244,63,94,0.15)',  label: '\ud83d\udeaa' },
   system: { color: 'var(--text-muted)',    bg: 'rgba(100,116,139,0.04)', border: 'transparent',           label: '\ud83d\udd14' },
   viewer_count: { color: '#38bdf8',      bg: 'rgba(56,189,248,0.06)', border: 'rgba(56,189,248,0.18)', label: '\ud83d\udcca' },
+  speech: { color: 'var(--accent-purple)', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.25)', label: '\ud83c\udfa4' },
 };
 
 export function ChatMessage({ message: msg }: { message: SpyMessage }) {
@@ -61,6 +62,13 @@ export function ChatMessage({ message: msg }: { message: SpyMessage }) {
       {msg.message && (
         <span style={{ color: style.color, fontStyle: isSystem ? 'italic' : undefined }}>
           {msg.message}
+        </span>
+      )}
+
+      {/* STT信頼度インジケータ */}
+      {msg.msg_type === 'speech' && msg.metadata?.confidence != null && (
+        <span className="text-[9px] ml-1" style={{ color: 'var(--text-muted)' }}>
+          ({Math.round((msg.metadata.confidence as number) * 100)}%)
         </span>
       )}
 

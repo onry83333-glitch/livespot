@@ -9,4 +9,8 @@ const CONFIG = {
   POLL_INTERVAL: 3000,
   DM_SEND_TIMEOUT: 20000,
   SPY_BATCH_INTERVAL: 1000,
+  // STT Configuration
+  STT_CHUNK_INTERVAL: 5000,         // 5秒チャンク
+  STT_MAX_QUEUE_SIZE: 10,           // キュー最大サイズ
+  STT_API_ENDPOINT: '/api/stt/transcribe',
 };

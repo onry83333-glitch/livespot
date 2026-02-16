@@ -27,6 +27,11 @@ const pendingDMResults = new Map(); // taskId → { resolve, timeoutId }
 let lastHeartbeat = 0;
 let heartbeatAlerted = false;
 
+// STT (Speech-to-Text) state
+let sttEnabled = false;
+let sttChunkQueue = [];
+let sttProcessing = false;
+
 const BUFFER_STORAGE_KEY = 'spy_message_buffer';
 const VIEWER_BUFFER_KEY = 'spy_viewer_buffer';
 const BUFFER_MAX = 1000;
@@ -69,15 +74,16 @@ function checkHeartbeatTimeout() {
 // ============================================================
 async function loadAuth() {
   const data = await chrome.storage.local.get([
-    'access_token', 'account_id', 'api_base_url', 'spy_enabled',
+    'access_token', 'account_id', 'api_base_url', 'spy_enabled', 'stt_enabled',
   ]);
   accessToken = data.access_token || null;
   accountId = data.account_id || null;
   spyEnabled = data.spy_enabled === true;
+  sttEnabled = data.stt_enabled === true;
   if (data.api_base_url) {
     CONFIG.API_BASE_URL = data.api_base_url;
   }
-  return { accessToken, accountId, spyEnabled };
+  return { accessToken, accountId, spyEnabled, sttEnabled };
 }
 
 async function refreshAccessToken() {
@@ -186,7 +192,7 @@ async function restoreBuffers() {
 // ============================================================
 // SPY データ品質バリデーション
 // ============================================================
-const VALID_MSG_TYPES = ['chat', 'tip', 'gift', 'goal', 'enter', 'leave', 'system', 'viewer_count'];
+const VALID_MSG_TYPES = ['chat', 'tip', 'gift', 'goal', 'enter', 'leave', 'system', 'viewer_count', 'speech'];
 
 function validateSpyMessage(msg) {
   // 1. メッセージ本文が500文字超 → 連結バグの残骸
@@ -515,6 +521,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // --- STT: Audio chunk from content_stt_relay.js ---
+  if (msg.type === 'AUDIO_CHUNK') {
+    if (!sttEnabled) {
+      sendResponse({ ok: false, error: 'STT not enabled' });
+      return false;
+    }
+    // キューに追加（上限超過時は古いものを破棄）
+    sttChunkQueue.push({
+      data: msg.data,
+      castName: msg.castName,
+      timestamp: msg.timestamp,
+    });
+    if (sttChunkQueue.length > (CONFIG.STT_MAX_QUEUE_SIZE || 10)) {
+      const dropped = sttChunkQueue.shift();
+      console.warn('[LS-BG] STTキュー溢れ: 古いチャンク破棄 cast=', dropped.castName);
+    }
+    processSTTQueue();
+    sendResponse({ ok: true, queued: sttChunkQueue.length });
+    return false;
+  }
+
+  // --- STT: Status from content_stt_relay.js ---
+  if (msg.type === 'STT_STATUS') {
+    console.log('[LS-BG] STTステータス:', msg.status, 'cast=', msg.castName, msg.message || '');
+    sendResponse({ ok: true });
+    return false;
+  }
+
   // --- Whisper: Mark as read (content_whisper.jsから) ---
   if (msg.type === 'WHISPER_READ') {
     loadAuth().then(async () => {
@@ -599,6 +633,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         authenticated: !!auth.accessToken,
         accountId: auth.accountId,
         spyEnabled: auth.spyEnabled,
+        sttEnabled: sttEnabled,
         polling: !!dmPollingTimer,
         spyMsgCount,
         lastHeartbeat: lastHeartbeat || null,
@@ -674,6 +709,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // --- Popup: Toggle STT ---
+  if (msg.type === 'TOGGLE_STT') {
+    sttEnabled = msg.enabled;
+    chrome.storage.local.set({ stt_enabled: sttEnabled });
+    console.log('[LS-BG] STT切替: enabled=', sttEnabled);
+
+    // Stripchatタブに通知
+    chrome.tabs.query(
+      { url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] },
+      (tabs) => {
+        tabs.forEach((tab) => {
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'STT_STATE',
+            enabled: sttEnabled,
+          }).catch(() => {});
+        });
+      }
+    );
+    sendResponse({ ok: true, sttEnabled });
+    return false;
+  }
+
   // --- Popup: Get accounts list (Supabase REST API直接) ---
   if (msg.type === 'GET_ACCOUNTS') {
     loadAuth().then(async () => {
@@ -721,6 +778,75 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   return false;
 });
+
+// ============================================================
+// STT Queue Processing — 音声チャンクを順次FastAPIに送信
+// ============================================================
+async function processSTTQueue() {
+  if (sttProcessing || sttChunkQueue.length === 0) return;
+  sttProcessing = true;
+
+  try {
+    while (sttChunkQueue.length > 0) {
+      const chunk = sttChunkQueue.shift();
+      await loadAuth();
+      if (!accountId || !accessToken) {
+        console.warn('[LS-BG] STT: 認証未完了 チャンク破棄');
+        continue;
+      }
+
+      try {
+        const endpoint = CONFIG.STT_API_ENDPOINT || '/api/stt/transcribe';
+        let res = await fetch(`${CONFIG.API_BASE_URL}${endpoint}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            account_id: accountId,
+            cast_name: chunk.castName,
+            audio_base64: chunk.data,
+            timestamp: chunk.timestamp,
+          }),
+        });
+
+        // 401 → トークンリフレッシュ後リトライ
+        if (res.status === 401) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed) {
+            res = await fetch(`${CONFIG.API_BASE_URL}${endpoint}`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`,
+              },
+              body: JSON.stringify({
+                account_id: accountId,
+                cast_name: chunk.castName,
+                audio_base64: chunk.data,
+                timestamp: chunk.timestamp,
+              }),
+            });
+          }
+        }
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.text) {
+            console.log('[LS-BG] STT結果:', data.text.substring(0, 80), 'conf=', data.confidence);
+          }
+        } else {
+          console.warn('[LS-BG] STT API error:', res.status);
+        }
+      } catch (err) {
+        console.warn('[LS-BG] STT処理エラー:', err.message);
+      }
+    }
+  } finally {
+    sttProcessing = false;
+  }
+}
 
 // ============================================================
 // DM Queue — Supabase直接ポーリング + タブ遷移方式
@@ -1312,5 +1438,9 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.spy_enabled) {
     spyEnabled = changes.spy_enabled.newValue === true;
     console.log('[LS-BG] spy_enabled変更:', spyEnabled);
+  }
+  if (changes.stt_enabled) {
+    sttEnabled = changes.stt_enabled.newValue === true;
+    console.log('[LS-BG] stt_enabled変更:', sttEnabled);
   }
 });

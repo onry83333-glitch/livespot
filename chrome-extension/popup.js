@@ -216,6 +216,27 @@ function updateSpyButton(enabled) {
   }
 }
 
+function updateSTTButton(enabled) {
+  const btn = $('sttToggleBtn');
+  const info = $('sttStatusInfo');
+  if (!btn) return;
+  if (enabled) {
+    btn.textContent = '停止';
+    btn.style.background = 'linear-gradient(135deg, #f43f5e, #e11d48)';
+    if (info) {
+      info.innerHTML = '<span style="color:#a78bfa;">● 文字起こし中</span>';
+      info.classList.remove('hidden');
+    }
+  } else {
+    btn.textContent = '開始';
+    btn.style.background = 'linear-gradient(135deg, #a78bfa, #7c3aed)';
+    if (info) {
+      info.innerHTML = '';
+      info.classList.add('hidden');
+    }
+  }
+}
+
 let spyElapsedTimer = null;
 
 function updateSpyInfo(active, castName, startedAt) {
@@ -270,7 +291,7 @@ async function init() {
 
   const data = await chrome.storage.local.get([
     'access_token', 'refresh_token', 'logged_in', 'account_id',
-    'api_base_url', 'spy_enabled', 'spy_cast', 'spy_started_at',
+    'api_base_url', 'spy_enabled', 'spy_cast', 'spy_started_at', 'stt_enabled',
   ]);
 
   console.log('[LSP] Storage読込結果:', JSON.stringify({
@@ -311,6 +332,9 @@ async function init() {
     updateSpyButton(spyActive);
     updateSpyInfo(spyActive, data.spy_cast, data.spy_started_at);
 
+    // STT状態の復元
+    updateSTTButton(data.stt_enabled === true);
+
     // さらにbackgroundに最新状態を問い合わせて補正
     chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
       if (chrome.runtime.lastError) {
@@ -331,6 +355,10 @@ async function init() {
           updateSpyInfo(response.spyEnabled, data.spy_cast, data.spy_started_at);
         }
         spyMsgCount.textContent = response.spyMsgCount || '0';
+        // STT状態も同期
+        if (response.sttEnabled !== undefined) {
+          updateSTTButton(response.sttEnabled);
+        }
       }
     });
   } else {
@@ -452,6 +480,23 @@ spyToggleBtn.addEventListener('click', async () => {
   });
 });
 
+// --- STT Toggle ---
+$('sttToggleBtn').addEventListener('click', async () => {
+  const data = await chrome.storage.local.get(['stt_enabled']);
+  const newState = !(data.stt_enabled === true);
+  console.log('[LSP] STT切替:', data.stt_enabled, '→', newState);
+
+  chrome.runtime.sendMessage({ type: 'TOGGLE_STT', enabled: newState }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error('[LSP] TOGGLE_STT送信失敗:', chrome.runtime.lastError.message);
+      return;
+    }
+    if (response && response.ok) {
+      updateSTTButton(newState);
+    }
+  });
+});
+
 // --- Save Settings (Dashboard) ---
 saveSettingsBtn.addEventListener('click', async () => {
   const url = apiUrlInput.value.trim();
@@ -478,11 +523,12 @@ logoutBtn.addEventListener('click', async () => {
     clearInterval(spyElapsedTimer);
     spyElapsedTimer = null;
   }
-  // SPY停止をbackgroundに通知
+  // SPY/STT停止をbackgroundに通知
   chrome.runtime.sendMessage({ type: 'TOGGLE_SPY', enabled: false });
+  chrome.runtime.sendMessage({ type: 'TOGGLE_STT', enabled: false });
   await chrome.storage.local.remove([
     'access_token', 'refresh_token', 'account_id',
-    'user_email', 'logged_in', 'spy_enabled',
+    'user_email', 'logged_in', 'spy_enabled', 'stt_enabled',
     'spy_cast', 'spy_started_at',
   ]);
   showLogin();

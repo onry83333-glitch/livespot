@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from routers import auth, dm, spy, sync, analytics, ai, scripts, reports, feed
+from routers import auth, dm, spy, sync, analytics, ai, scripts, reports, feed, stt
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,6 +44,7 @@ app.include_router(ai.router, prefix="/api/ai", tags=["ai"])
 app.include_router(scripts.router, prefix="/api/scripts", tags=["scripts"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(feed.router, prefix="/api/feed", tags=["feed"])
+app.include_router(stt.router, prefix="/api/stt", tags=["stt"])
 
 @app.get("/health")
 async def health():
