@@ -3,17 +3,45 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 
-const navItems = [
-  { href: '/',          icon: '⚡', label: 'コントロールセンター' },
-  { href: '/spy',       icon: '👁', label: 'リアルタイム運営' },
-  { href: '/alerts',    icon: '🔔', label: '入室アラート' },
-  { href: '/dm',        icon: '💬', label: 'DM一斉送信' },
-  { href: '/sessions',  icon: '📺', label: '配信セッション' },
-  { href: '/users',     icon: '👥', label: 'ユーザー管理' },
-  { href: '/analytics', icon: '📊', label: '分析&スコアリング' },
-  { href: '/reports',   icon: '🤖', label: 'AIレポート' },
-  { href: '/feed',      icon: '📝', label: 'フィード管理' },
-  { href: '/settings',  icon: '⚙️', label: '管理&セキュリティ' },
+interface NavItem {
+  href: string;
+  icon: string;
+  label: string;
+}
+
+interface NavSection {
+  title: string;
+  items: NavItem[];
+}
+
+const navSections: NavSection[] = [
+  {
+    title: '自社キャスト',
+    items: [
+      { href: '/casts',      icon: '📋', label: 'キャスト一覧' },
+      { href: '/sessions',   icon: '📺', label: '配信セッション' },
+      { href: '/analytics',  icon: '📊', label: '分析&スコアリング' },
+    ],
+  },
+  {
+    title: 'スパイ（他社分析）',
+    items: [
+      { href: '/spy',        icon: '👁', label: 'リアルタイム運営' },
+    ],
+  },
+  {
+    title: 'ツール',
+    items: [
+      { href: '/dm',         icon: '💬', label: 'DM一斉送信' },
+      { href: '/alerts',     icon: '🔔', label: '入室アラート' },
+    ],
+  },
+  {
+    title: '設定',
+    items: [
+      { href: '/settings',   icon: '⚙️', label: '管理&セキュリティ' },
+    ],
+  },
 ];
 
 export function Sidebar() {
@@ -28,47 +56,57 @@ export function Sidebar() {
       }}
     >
       {/* Logo */}
-      <div className="px-5 py-6">
-        <div className="flex items-center gap-2.5">
+      <div className="px-5 py-5">
+        <Link href="/" className="flex items-center gap-2.5 group">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg"
             style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple))' }}>
             🌐
           </div>
           <div>
-            <h1 className="text-base font-bold tracking-tight" style={{ color: 'var(--accent-primary)' }}>
+            <h1 className="text-base font-bold tracking-tight group-hover:opacity-80 transition-opacity" style={{ color: 'var(--accent-primary)' }}>
               Strip Live Spot
             </h1>
             <p className="text-[10px] font-semibold uppercase tracking-[0.15em]" style={{ color: 'var(--accent-green)' }}>
               PREMIUM AGENCY
             </p>
           </div>
-        </div>
+        </Link>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 px-3 space-y-1">
-        {navItems.map(item => {
-          const isActive = item.href === '/'
-            ? pathname === '/'
-            : pathname === item.href || pathname.startsWith(item.href + '/');
-          return (
-            <Link key={item.href} href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
-                isActive
-                  ? 'text-white'
-                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
-              }`}
-              style={isActive ? {
-                background: 'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(56,189,248,0.05))',
-                borderLeft: '2px solid var(--accent-primary)',
-                boxShadow: 'var(--glow-blue)',
-              } : {}}
-            >
-              <span className="text-base w-5 text-center">{item.icon}</span>
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
+      {/* Nav Sections */}
+      <nav className="flex-1 px-3 space-y-4 overflow-auto">
+        {navSections.map(section => (
+          <div key={section.title}>
+            <p className="text-[9px] font-bold uppercase tracking-[0.15em] px-3 mb-1.5"
+              style={{ color: 'var(--text-muted)' }}>
+              {section.title}
+            </p>
+            <div className="space-y-0.5">
+              {section.items.map(item => {
+                const isActive = item.href === '/'
+                  ? pathname === '/'
+                  : pathname === item.href || pathname.startsWith(item.href + '/');
+                return (
+                  <Link key={item.href} href={item.href}
+                    className={`flex items-center gap-3 px-3 py-2 rounded-xl text-[13px] font-medium transition-all duration-200 ${
+                      isActive
+                        ? 'text-white'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
+                    }`}
+                    style={isActive ? {
+                      background: 'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(56,189,248,0.05))',
+                      borderLeft: '2px solid var(--accent-primary)',
+                      boxShadow: 'var(--glow-blue)',
+                    } : {}}
+                  >
+                    <span className="text-sm w-5 text-center">{item.icon}</span>
+                    <span>{item.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
       {/* User & Go Live */}

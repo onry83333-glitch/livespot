@@ -18,6 +18,17 @@ interface ViewerStat {
   recorded_at: string;
 }
 
+// メッセージタイプフィルタ定義
+const MSG_TYPE_FILTERS = [
+  { key: 'chat',    label: '💬 チャット', types: ['chat'] },
+  { key: 'tip',     label: '🪙 チップ',   types: ['tip', 'gift'] },
+  { key: 'speech',  label: '🎤 音声',     types: ['speech'] },
+  { key: 'enter',   label: '🚪 入退室',   types: ['enter', 'leave'] },
+  { key: 'system',  label: '⚙️ システム', types: ['goal', 'viewer_count', 'system'] },
+] as const;
+
+type FilterKey = typeof MSG_TYPE_FILTERS[number]['key'];
+
 /* ============================================================
    Main Page
    ============================================================ */
@@ -28,21 +39,26 @@ export default function SpyPage() {
   const [demoError, setDemoError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // B.2: Auto-scroll toggle
+  // Auto-scroll toggle
   const [autoScroll, setAutoScroll] = useState(true);
 
-  // B.2: Search filter
+  // Search filter
   const [searchQuery, setSearchQuery] = useState('');
 
-  // B.1: Status panel
+  // Message type filter (all ON by default)
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(
+    () => new Set(MSG_TYPE_FILTERS.map(f => f.key))
+  );
+
+  // Status panel
   const [sessionStart] = useState(() => new Date());
   const [elapsedStr, setElapsedStr] = useState('00:00:00');
   const [lastMsgAgo, setLastMsgAgo] = useState('--');
 
-  // B.1: Viewer stats
+  // Viewer stats
   const [latestViewer, setLatestViewer] = useState<ViewerStat | null>(null);
 
-  // B.3: Side panel collapse (mobile)
+  // Side panel collapse (mobile)
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
 
   // Whisper: accountId for sending
@@ -56,7 +72,7 @@ export default function SpyPage() {
   const [hiddenCasts, setHiddenCasts] = useState<Set<string>>(new Set());
   const [deletingCast, setDeletingCast] = useState<string | null>(null);
 
-  const { messages, castNames, isConnected, insertDemoData, deleteCastMessages } = useRealtimeSpy({
+  const { messages, allMessages, castNames, isConnected, insertDemoData, deleteCastMessages } = useRealtimeSpy({
     castName: selectedCast,
     enabled: !!user,
   });
@@ -70,7 +86,7 @@ export default function SpyPage() {
   }, [user]);
 
   // ============================================================
-  // B.2: Auto-scroll on new messages
+  // Auto-scroll on new messages
   // ============================================================
   useEffect(() => {
     if (autoScroll && scrollRef.current) {
@@ -79,7 +95,7 @@ export default function SpyPage() {
   }, [messages, autoScroll]);
 
   // ============================================================
-  // B.1: Elapsed time counter
+  // Elapsed time counter
   // ============================================================
   useEffect(() => {
     const timer = setInterval(() => {
@@ -93,7 +109,7 @@ export default function SpyPage() {
   }, [sessionStart]);
 
   // ============================================================
-  // B.1: Last message relative time updater
+  // Last message relative time updater
   // ============================================================
   useEffect(() => {
     const timer = setInterval(() => {
@@ -108,7 +124,7 @@ export default function SpyPage() {
   }, [messages]);
 
   // ============================================================
-  // B.1: Load latest viewer stats
+  // Load latest viewer stats
   // ============================================================
   useEffect(() => {
     if (!user) return;
@@ -134,41 +150,58 @@ export default function SpyPage() {
   }, [user]);
 
   // ============================================================
-  // B.2: Filtered messages (search)
+  // Filtered messages (hidden casts + msg_type filter + search)
   // ============================================================
+  const allFilterTypes = useMemo(() => {
+    const types = new Set<string>();
+    for (const f of MSG_TYPE_FILTERS) {
+      if (activeFilters.has(f.key)) {
+        f.types.forEach(t => types.add(t));
+      }
+    }
+    return types;
+  }, [activeFilters]);
+
   const filteredMessages = useMemo(() => {
     let filtered = messages;
     // 非表示キャストのメッセージを除外
     if (hiddenCasts.size > 0) {
       filtered = filtered.filter(m => !hiddenCasts.has(m.cast_name));
     }
-    if (!searchQuery.trim()) return filtered;
-    const q = searchQuery.toLowerCase();
-    return filtered.filter(m =>
-      (m.user_name?.toLowerCase().includes(q)) ||
-      (m.message?.toLowerCase().includes(q))
-    );
-  }, [messages, searchQuery, hiddenCasts]);
+    // msg_typeフィルタ
+    if (activeFilters.size < MSG_TYPE_FILTERS.length) {
+      filtered = filtered.filter(m => allFilterTypes.has(m.msg_type));
+    }
+    // テキスト検索
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(m =>
+        (m.user_name?.toLowerCase().includes(q)) ||
+        (m.message?.toLowerCase().includes(q))
+      );
+    }
+    return filtered;
+  }, [messages, searchQuery, hiddenCasts, activeFilters, allFilterTypes]);
 
   // ============================================================
-  // B.1: Today's cumulative stats
+  // Today's cumulative stats (uses allMessages for accurate totals)
   // ============================================================
   const todayStats = useMemo(() => {
-    const totalMessages = messages.length;
-    const totalTips = messages.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').reduce((s, m) => s + (m.tokens || 0), 0);
-    const uniqueUsers = new Set(messages.filter(m => m.user_name).map(m => m.user_name)).size;
+    const totalMessages = allMessages.length;
+    const totalTips = allMessages.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').reduce((s, m) => s + (m.tokens || 0), 0);
+    const uniqueUsers = new Set(allMessages.filter(m => m.user_name).map(m => m.user_name)).size;
     return { totalMessages, totalTips, uniqueUsers };
-  }, [messages]);
+  }, [allMessages]);
 
   // ============================================================
-  // B.3: Real-time stats
+  // Real-time stats
   // ============================================================
   const realtimeStats = useMemo(() => {
     const now = Date.now();
 
-    // Top tippers
+    // Top tippers (from all messages)
     const tipMap = new Map<string, number>();
-    messages.forEach(m => {
+    allMessages.forEach(m => {
       if (m.tokens > 0 && m.user_name && (m.msg_type === 'tip' || m.msg_type === 'gift')) {
         tipMap.set(m.user_name, (tipMap.get(m.user_name) || 0) + m.tokens);
       }
@@ -181,56 +214,83 @@ export default function SpyPage() {
     // Active users (last 5 min)
     const fiveMinAgo = now - 300000;
     const activeUsers = new Set(
-      messages.filter(m => m.user_name && new Date(m.message_time).getTime() > fiveMinAgo)
+      allMessages.filter(m => m.user_name && new Date(m.message_time).getTime() > fiveMinAgo)
         .map(m => m.user_name)
     ).size;
 
     // Chat speed (messages in last 1 min)
     const oneMinAgo = now - 60000;
-    const recentMsgCount = messages.filter(m =>
+    const recentMsgCount = allMessages.filter(m =>
       new Date(m.message_time).getTime() > oneMinAgo
     ).length;
 
     // Average speed (overall)
-    const totalMinutes = messages.length > 1
-      ? (new Date(messages[messages.length - 1].message_time).getTime() -
-         new Date(messages[0].message_time).getTime()) / 60000
+    const totalMinutes = allMessages.length > 1
+      ? (new Date(allMessages[allMessages.length - 1].message_time).getTime() -
+         new Date(allMessages[0].message_time).getTime()) / 60000
       : 1;
-    const avgSpeed = totalMinutes > 0 ? messages.length / totalMinutes : 0;
+    const avgSpeed = totalMinutes > 0 ? allMessages.length / totalMinutes : 0;
 
     // Hype indicator
     const isHype = recentMsgCount > avgSpeed * 1.5 && recentMsgCount > 3;
 
     return { topTippers, activeUsers, chatSpeed: recentMsgCount, avgSpeed, isHype };
-  }, [messages]);
+  }, [allMessages]);
 
   // ============================================================
   // Cast visibility toggle
   // ============================================================
-  const toggleCastVisibility = useCallback((castName: string) => {
+  const toggleCastVisibility = useCallback((cn: string) => {
     setHiddenCasts(prev => {
       const next = new Set(prev);
-      if (next.has(castName)) {
-        next.delete(castName);
+      if (next.has(cn)) {
+        next.delete(cn);
       } else {
-        next.add(castName);
+        next.add(cn);
       }
       return next;
     });
   }, []);
 
   // ============================================================
+  // Message type filter toggle
+  // ============================================================
+  const toggleMsgFilter = useCallback((key: FilterKey) => {
+    setActiveFilters(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleAllFilters = useCallback(() => {
+    setActiveFilters(prev => {
+      if (prev.size === MSG_TYPE_FILTERS.length) {
+        return new Set<FilterKey>();
+      }
+      return new Set(MSG_TYPE_FILTERS.map(f => f.key));
+    });
+  }, []);
+
+  // ============================================================
   // Cast delete (today's messages)
   // ============================================================
-  const handleDeleteCast = useCallback(async (castName: string) => {
-    if (!confirm(`${castName} の本日のログを削除しますか？`)) return;
-    setDeletingCast(castName);
-    const err = await deleteCastMessages(castName);
+  const handleDeleteCast = useCallback(async (cn: string) => {
+    if (!confirm(`${cn} の本日のログを削除しますか？`)) return;
+    setDeletingCast(cn);
+    const err = await deleteCastMessages(cn);
     setDeletingCast(null);
     if (err) {
       setDemoError(`削除失敗: ${err}`);
+    } else {
+      // 削除したキャストが選択中なら選択解除
+      if (selectedCast === cn) setSelectedCast(undefined);
     }
-  }, [deleteCastMessages]);
+  }, [deleteCastMessages, selectedCast]);
 
   // ============================================================
   // Demo data insertion
@@ -241,16 +301,16 @@ export default function SpyPage() {
     try {
       const supabase = createClient();
       const { data: existing } = await supabase.from('accounts').select('id').limit(1).single();
-      let accountId = existing?.id;
-      if (!accountId) {
+      let acctId = existing?.id;
+      if (!acctId) {
         const { data: created, error: createErr } = await supabase
           .from('accounts')
           .insert({ user_id: user!.id, account_name: 'デモ事務所' })
           .select('id').single();
         if (createErr) { setDemoError(`accounts作成失敗: ${createErr.message}`); setDemoLoading(false); return; }
-        accountId = created!.id;
+        acctId = created!.id;
       }
-      const err = await insertDemoData(accountId);
+      const err = await insertDemoData(acctId);
       if (err) setDemoError(err);
     } catch (e: unknown) {
       setDemoError(e instanceof Error ? e.message : String(e));
@@ -266,10 +326,10 @@ export default function SpyPage() {
     if (!text || !accountId) return;
     setWhisperSending(true);
     try {
-      const castName = selectedCast || castNames[0] || null;
+      const cn = selectedCast || castNames[0] || null;
       const { error } = await whisperSbRef.current.from('whispers').insert({
         account_id: accountId,
-        cast_name: castName,
+        cast_name: cn,
         message: text,
         template_name: whisperTemplate,
       });
@@ -287,14 +347,14 @@ export default function SpyPage() {
   // Connection status
   // ============================================================
   const connectionStatus = useMemo(() => {
-    if (isConnected && messages.length > 0) {
-      const lastTime = new Date(messages[messages.length - 1].message_time).getTime();
+    if (isConnected && allMessages.length > 0) {
+      const lastTime = new Date(allMessages[allMessages.length - 1].message_time).getTime();
       if (Date.now() - lastTime > 120000) return 'paused'; // 2分以上無通信
       return 'active';
     }
     if (isConnected) return 'active';
     return 'stopped';
-  }, [isConnected, messages]);
+  }, [isConnected, allMessages]);
 
   const statusConfig = {
     active:  { dot: 'bg-emerald-400', text: '監視中',   color: '#22c55e' },
@@ -307,7 +367,7 @@ export default function SpyPage() {
 
   return (
     <div className="h-[calc(100vh-48px)] flex flex-col gap-3 overflow-hidden">
-      {/* ============ B.1: Status Panel ============ */}
+      {/* ============ Status Panel ============ */}
       <div className="glass-card px-5 py-3 flex-shrink-0">
         <div className="flex items-center gap-6 flex-wrap">
           {/* Connection status */}
@@ -380,7 +440,7 @@ export default function SpyPage() {
           >
             <span className="font-semibold">📡 全キャスト</span>
             <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-              {messages.length} 件のログ
+              {allMessages.length} 件のログ
             </p>
           </button>
 
@@ -388,7 +448,8 @@ export default function SpyPage() {
             {castNames.map(name => {
               const isActive = selectedCast === name;
               const isHidden = hiddenCasts.has(name);
-              const count = messages.filter(m => m.cast_name === name).length;
+              // allMessagesから件数を計算（選択キャストに関係なく正確な数を表示）
+              const count = allMessages.filter(m => m.cast_name === name).length;
               return (
                 <div key={name} className="flex items-center gap-1">
                   <button
@@ -453,7 +514,7 @@ export default function SpyPage() {
         {/* ===== Center: Chat Log ===== */}
         <div className="flex-1 glass-card p-4 flex flex-col min-w-0">
           {/* Header */}
-          <div className="flex items-center justify-between mb-3 flex-shrink-0">
+          <div className="flex items-center justify-between mb-2 flex-shrink-0">
             <div>
               <h2 className="text-sm font-bold flex items-center gap-2">
                 🔍 スパイログ
@@ -480,7 +541,43 @@ export default function SpyPage() {
             </div>
           </div>
 
-          {/* B.2: Search filter */}
+          {/* Message type filter buttons */}
+          <div className="flex-shrink-0 flex gap-1.5 mb-2 flex-wrap">
+            <button
+              onClick={toggleAllFilters}
+              className="text-[10px] px-2.5 py-1 rounded-lg transition-all"
+              style={{
+                background: activeFilters.size === MSG_TYPE_FILTERS.length
+                  ? 'rgba(56,189,248,0.15)' : 'rgba(100,116,139,0.1)',
+                color: activeFilters.size === MSG_TYPE_FILTERS.length
+                  ? 'var(--accent-primary)' : 'var(--text-muted)',
+                border: `1px solid ${activeFilters.size === MSG_TYPE_FILTERS.length
+                  ? 'rgba(56,189,248,0.25)' : 'rgba(100,116,139,0.15)'}`,
+              }}
+            >
+              全部
+            </button>
+            {MSG_TYPE_FILTERS.map(f => {
+              const isOn = activeFilters.has(f.key);
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => toggleMsgFilter(f.key)}
+                  className="text-[10px] px-2.5 py-1 rounded-lg transition-all"
+                  style={{
+                    background: isOn ? 'rgba(56,189,248,0.12)' : 'rgba(100,116,139,0.06)',
+                    color: isOn ? '#e2e8f0' : 'var(--text-muted)',
+                    border: `1px solid ${isOn ? 'rgba(56,189,248,0.2)' : 'rgba(100,116,139,0.1)'}`,
+                    opacity: isOn ? 1 : 0.5,
+                  }}
+                >
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Search filter */}
           <div className="flex-shrink-0 mb-2">
             <input
               type="text"
@@ -511,7 +608,7 @@ export default function SpyPage() {
             )}
           </div>
 
-          {/* B.2: Auto-scroll floating button */}
+          {/* Auto-scroll floating button */}
           <div className="flex-shrink-0 flex justify-end mt-1">
             <button
               onClick={() => setAutoScroll(!autoScroll)}
@@ -526,7 +623,7 @@ export default function SpyPage() {
             </button>
           </div>
 
-          {/* Whisper input — functional */}
+          {/* Whisper input */}
           <div className="mt-2 pt-3 border-t flex-shrink-0" style={{ borderColor: 'var(--border-glass)' }}>
             <div className="flex gap-2 mb-2 flex-wrap">
               {[
@@ -565,7 +662,7 @@ export default function SpyPage() {
           </div>
         </div>
 
-        {/* ===== Right: Stats Sidebar (B.3) ===== */}
+        {/* ===== Right: Stats Sidebar ===== */}
         <div className={`w-64 flex-shrink-0 space-y-3 overflow-auto ${sidePanelOpen ? 'block' : 'hidden'} xl:block`}>
 
           {/* Top Tippers */}
@@ -652,6 +749,7 @@ export default function SpyPage() {
               <div className="flex items-center gap-2"><span>💬</span><span>チャット</span></div>
               <div className="flex items-center gap-2"><span>💰</span><span style={{ color: 'var(--accent-amber)' }}>チップ</span></div>
               <div className="flex items-center gap-2"><span>🎁</span><span style={{ color: 'var(--accent-amber)' }}>ギフト</span></div>
+              <div className="flex items-center gap-2"><span>🎤</span><span style={{ color: 'var(--accent-purple, #a855f7)' }}>音声(STT)</span></div>
               <div className="flex items-center gap-2"><span>👋</span><span style={{ color: 'var(--accent-green)' }}>入室</span></div>
               <div className="flex items-center gap-2"><span>🚪</span><span style={{ color: 'var(--accent-pink)' }}>退室</span></div>
               <div className="flex items-center gap-2"><span>⚙️</span><span style={{ color: 'var(--text-muted)' }}>システム</span></div>

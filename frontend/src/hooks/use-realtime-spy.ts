@@ -10,7 +10,7 @@ interface UseRealtimeSpyOptions {
 }
 
 export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptions) {
-  const [messages, setMessages] = useState<SpyMessage[]>([]);
+  const [allMessages, setAllMessages] = useState<SpyMessage[]>([]);
   const [castNames, setCastNames] = useState<string[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const supabaseRef = useRef(createClient());
@@ -31,26 +31,21 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
     }
   }, []);
 
-  // 初回ロード: 直近50件を取得
+  // 初回ロード: 直近200件を取得（全キャスト）
   const loadMessages = useCallback(async () => {
-    let query = supabaseRef.current
+    const { data, error } = await supabaseRef.current
       .from('spy_messages')
       .select('*')
       .order('message_time', { ascending: false })
-      .limit(50);
+      .limit(200);
 
-    if (castName) {
-      query = query.eq('cast_name', castName);
-    }
-
-    const { data, error } = await query;
     if (error) {
       return;
     }
     if (data) {
-      setMessages(data.reverse()); // 古い順に並べる
+      setAllMessages(data.reverse()); // 古い順に並べる
     }
-  }, [castName]);
+  }, []);
 
   // デモデータ挿入 — エラーメッセージを返す
   const insertDemoData = useCallback(async (accountId: string): Promise<string | null> => {
@@ -74,7 +69,7 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
     return null;
   }, []);
 
-  // Realtime subscription
+  // Realtime subscription — 全メッセージを購読（フィルタはUI側で行う）
   useEffect(() => {
     if (!enabled) return;
 
@@ -93,10 +88,7 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
         (payload) => {
           const msg = payload.new as SpyMessage;
 
-          // cast_nameフィルタ
-          if (castName && msg.cast_name !== castName) return;
-
-          setMessages(prev => [...prev, msg].slice(-200));
+          setAllMessages(prev => [...prev, msg].slice(-500));
 
           // キャスト一覧にない新しいキャストなら追加
           setCastNames(prev =>
@@ -112,9 +104,14 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
       supabaseRef.current.removeChannel(channel);
       setIsConnected(false);
     };
-  }, [castName, enabled, loadMessages, loadCastNames]);
+  }, [enabled, loadMessages, loadCastNames]);
 
-  // キャストの今日のspy_messagesを削除
+  // キャストフィルタ適用済みメッセージ
+  const messages = castName
+    ? allMessages.filter(m => m.cast_name === castName)
+    : allMessages;
+
+  // キャストの今日のspy_messagesを削除（account_idフィルタ付き）
   const deleteCastMessages = useCallback(async (targetCastName: string): Promise<string | null> => {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
@@ -130,10 +127,10 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
     }
 
     // ローカルステートからも削除
-    setMessages(prev => prev.filter(m => m.cast_name !== targetCastName));
+    setAllMessages(prev => prev.filter(m => m.cast_name !== targetCastName));
     setCastNames(prev => prev.filter(n => n !== targetCastName));
     return null;
   }, []);
 
-  return { messages, castNames, isConnected, refresh: loadMessages, insertDemoData, deleteCastMessages };
+  return { messages, allMessages, castNames, isConnected, refresh: loadMessages, insertDemoData, deleteCastMessages };
 }
