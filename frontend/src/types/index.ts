@@ -177,6 +177,21 @@ export interface VIPRule {
 }
 
 // ============================================================
+// Registered Casts
+// ============================================================
+export interface RegisteredCast {
+  id: number;
+  account_id: string;
+  cast_name: string;
+  display_name: string | null;
+  stripchat_url: string | null;
+  is_active: boolean;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ============================================================
 // Sync
 // ============================================================
 export interface SyncStatus {

@@ -72,16 +72,33 @@ export default function SpyPage() {
   const [hiddenCasts, setHiddenCasts] = useState<Set<string>>(new Set());
   const [deletingCast, setDeletingCast] = useState<string | null>(null);
 
+  // Cast registration (registered_casts)
+  const [registeredCastNames, setRegisteredCastNames] = useState<Set<string>>(new Set());
+  const [registeringCast, setRegisteringCast] = useState<string | null>(null);
+
   const { messages, allMessages, castNames, isConnected, insertDemoData, deleteCastMessages } = useRealtimeSpy({
     castName: selectedCast,
     enabled: !!user,
   });
 
-  // Whisper: accountId取得
+  // Whisper: accountId取得 + registered_casts取得
   useEffect(() => {
     if (!user) return;
     whisperSbRef.current.from('accounts').select('id').limit(1).single().then(({ data }) => {
-      if (data) setAccountId(data.id);
+      if (data) {
+        setAccountId(data.id);
+        // 登録済みキャスト名を取得
+        whisperSbRef.current
+          .from('registered_casts')
+          .select('cast_name')
+          .eq('account_id', data.id)
+          .eq('is_active', true)
+          .then(({ data: casts }) => {
+            if (casts) {
+              setRegisteredCastNames(new Set(casts.map(c => c.cast_name)));
+            }
+          });
+      }
     });
   }, [user]);
 
@@ -293,6 +310,28 @@ export default function SpyPage() {
   }, [deleteCastMessages, selectedCast]);
 
   // ============================================================
+  // Quick register cast to registered_casts
+  // ============================================================
+  const handleQuickRegister = useCallback(async (cn: string) => {
+    if (!accountId) return;
+    setRegisteringCast(cn);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from('registered_casts')
+      .insert({
+        account_id: accountId,
+        cast_name: cn,
+        stripchat_url: `https://stripchat.com/${cn}`,
+      });
+
+    if (!error || error.code === '23505') {
+      // 成功 or 既に登録済み
+      setRegisteredCastNames(prev => { const next = new Set(prev); next.add(cn); return next; });
+    }
+    setRegisteringCast(null);
+  }, [accountId]);
+
+  // ============================================================
   // Demo data insertion
   // ============================================================
   const handleInsertDemo = async () => {
@@ -479,6 +518,22 @@ export default function SpyPage() {
                   >
                     {isHidden ? '👁‍🗨' : '👁'}
                   </button>
+                  {/* Quick register as own cast */}
+                  {registeredCastNames.has(name) ? (
+                    <span className="p-1.5 text-[10px]" style={{ color: 'var(--accent-amber)' }} title="登録済み">
+                      ★
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleQuickRegister(name)}
+                      disabled={registeringCast === name}
+                      className="p-1.5 rounded-lg hover:bg-amber-500/10 transition-all text-[10px] disabled:opacity-30"
+                      title="自社キャストとして登録"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      {registeringCast === name ? '...' : '☆'}
+                    </button>
+                  )}
                   {/* Delete today's logs */}
                   <button
                     onClick={() => handleDeleteCast(name)}
