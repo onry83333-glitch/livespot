@@ -508,7 +508,7 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, sb]);
 
   // ============================================================
-  // Analytics: 直近チップ（このキャスト）+ チケットチャット（アカウント全体）
+  // Analytics: 直近チップ（このキャスト）+ チケットチャット（このキャスト）
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
@@ -522,11 +522,12 @@ function CastDetailInner() {
       .limit(5)
       .then(({ data }) => setLastTips((data || []) as typeof lastTips));
 
-    // 直近のチケットチャット（coin_transactionsにcast_nameなし → アカウント全体）
+    // 直近のチケットチャット（このキャスト）
     sb.from('coin_transactions')
       .select('user_name, tokens, date')
       .eq('account_id', accountId)
       .eq('type', 'ticketShow')
+      .eq('cast_name', castName)
       .order('date', { ascending: false })
       .limit(5)
       .then(({ data }) => setLastTicketChats((data || []) as typeof lastTicketChats));
@@ -1111,11 +1112,11 @@ function CastDetailInner() {
                                 </div>
                               </div>
                             )}
-                            {/* 直近のチケットチャット（アカウント全体） */}
+                            {/* 直近のチケットチャット（このキャスト） */}
                             {lastTicketChats.length > 0 && (
                               <div className="glass-panel p-3 rounded-xl">
                                 <p className="text-[10px] font-bold mb-2" style={{ color: 'var(--text-muted)' }}>
-                                  🎟 直近のチケットチャット（アカウント全体）
+                                  🎟 直近のチケットチャット（{castName}）
                                 </p>
                                 <div className="space-y-1">
                                   {lastTicketChats.map((t, i) => (
