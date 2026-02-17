@@ -14,6 +14,7 @@ let accessToken = null;
 let accountId = null;
 let dmPollingTimer = null;
 let spyEnabled = false;
+let currentSessionId = null; // SPYセッションID（spy_messages.session_id）
 let messageBuffer = [];
 let bufferTimer = null;
 let spyMsgCount = 0;
@@ -109,12 +110,13 @@ function checkHeartbeatTimeout() {
 // ============================================================
 async function loadAuth() {
   const data = await chrome.storage.local.get([
-    'access_token', 'account_id', 'api_base_url', 'spy_enabled', 'stt_enabled',
+    'access_token', 'account_id', 'api_base_url', 'spy_enabled', 'stt_enabled', 'current_session_id',
   ]);
   accessToken = data.access_token || null;
   accountId = data.account_id || null;
   spyEnabled = data.spy_enabled === true;
   sttEnabled = data.stt_enabled === true;
+  currentSessionId = data.current_session_id || null;
   if (data.api_base_url) {
     CONFIG.API_BASE_URL = data.api_base_url;
   }
@@ -344,9 +346,11 @@ async function flushMessageBuffer() {
     is_vip: false,
     user_color: msg.user_color || null,
     metadata: msg.metadata || {},
+    session_id: msg.session_id || null,
   }));
 
-  console.log('[LS-BG] SPYメッセージ一括送信:', rows.length, '件 → Supabase REST API');
+  const hasSessionId = rows.some(r => r.session_id);
+  console.log('[LS-BG] SPYメッセージ一括送信:', rows.length, '件 → Supabase REST API', `session_id: ${hasSessionId ? rows[0].session_id : 'NULL'}`);
 
   try {
     let res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/spy_messages`, {
@@ -529,6 +533,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       tokens: msg.tokens || 0,
       user_color: msg.user_color || null,
       metadata: msg.metadata || {},
+      session_id: currentSessionId || null,
     };
 
     messageBuffer.push(payload);
@@ -783,15 +788,22 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     updateBadge();
     console.log('[LS-BG] SPY切替: enabled=', spyEnabled, 'accountId=', accountId);
     if (spyEnabled) {
+      // セッションID生成: spy_YYYYMMDD_HHmmss_random
+      const ts = new Date().toISOString().replace(/[-:T]/g, '').replace(/\..+/, '');
+      const rand = Math.random().toString(36).substring(2, 8);
+      currentSessionId = `spy_${ts}_${rand}`;
+      console.log('[LS-BG] SPYセッション開始: session_id=', currentSessionId);
       lastHeartbeat = Date.now();
       heartbeatAlerted = false;
-      chrome.storage.local.set({ spy_started_at: new Date().toISOString() });
+      chrome.storage.local.set({ spy_started_at: new Date().toISOString(), current_session_id: currentSessionId });
       // SPY開始時にaccountIdが未設定なら警告
       if (!accountId) {
         console.warn('[LS-BG] 注意: SPY有効化されたがaccountId未設定 メッセージはバッファされflush時に付与');
       }
     } else {
-      chrome.storage.local.set({ spy_started_at: null, spy_cast: null });
+      console.log('[LS-BG] SPYセッション終了: session_id=', currentSessionId);
+      currentSessionId = null;
+      chrome.storage.local.set({ spy_started_at: null, spy_cast: null, current_session_id: null });
     }
     chrome.tabs.query(
       { url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] },

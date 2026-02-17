@@ -825,7 +825,10 @@
         if (m2) others = parseInt(m2[1], 10);
       }
 
-      if (total === null && coinUsers === null) return;
+      if (total === null && coinUsers === null) {
+        console.log(LOG, 'viewer_stats: DOMセレクタでヒットなし — スキップ');
+        return;
+      }
 
       const stats = { total, coin_users: coinUsers, others };
       const key = `${stats.total}:${stats.coin_users}:${stats.others}`;
@@ -866,7 +869,7 @@
           });
         }
 
-        console.log(LOG, '視聴者数送信:', stats, delta !== 0 ? `(${delta >= 0 ? '+' : ''}${delta})` : '');
+        console.log(LOG, `viewer_stats: ${stats.total} viewers recorded for ${castName}`, delta !== 0 ? `(${delta >= 0 ? '+' : ''}${delta})` : '');
       }
     } catch (e) {
       // DOM not ready yet
@@ -876,8 +879,8 @@
   function startViewerStatsPolling() {
     if (viewerStatsTimer) return;
     getViewerStats();
-    viewerStatsTimer = setInterval(getViewerStats, 60000);
-    console.log(LOG, '視聴者数ポーリング開始(60秒間隔)');
+    viewerStatsTimer = setInterval(getViewerStats, 180000);
+    console.log(LOG, '視聴者数ポーリング開始(180秒間隔)');
   }
 
   function stopViewerStatsPolling() {
