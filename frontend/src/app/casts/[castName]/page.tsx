@@ -1050,7 +1050,7 @@ function CastDetailInner() {
                   <div className="glass-card p-4">
                     <h3 className="text-sm font-bold mb-3">📊 ユーザーセグメント分析</h3>
                     <p className="text-[10px] mb-4" style={{ color: 'var(--text-muted)' }}>
-                      このキャストの有料ユーザーをコイン累計額 × 最終課金日の2軸で10パターンに分類（SPYデータ基準）
+                      このキャストの有料ユーザーをコイン累計額 × 最終課金日の2軸で10パターンに分類（コイン同期データ基準）
                     </p>
 
                     {segmentsLoading ? (
@@ -1141,7 +1141,7 @@ function CastDetailInner() {
 
                         {/* セグメント一覧 */}
                         <div className="space-y-1.5">
-                          {segments.map(seg => {
+                          {[...segments].sort((a, b) => parseInt(a.segment_id.replace('S','')) - parseInt(b.segment_id.replace('S',''))).map(seg => {
                             const isExpanded = expandedSegment === seg.segment_id;
                             const grandTotal = segments.reduce((s, x) => s + x.total_coins, 0);
                             const coinPct = grandTotal > 0 ? (seg.total_coins / grandTotal * 100).toFixed(1) : '0';
