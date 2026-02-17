@@ -48,36 +48,52 @@ export default function CastsPage() {
     });
   }, [user]);
 
-  // registered_casts + spy_messages を取得
+  // registered_casts → そのcast_nameでspy_messagesをフィルタ取得
   useEffect(() => {
     if (!selectedAccount) return;
     setLoading(true);
 
     const supabase = createClient();
-    Promise.all([
-      supabase
-        .from('registered_casts')
-        .select('*')
-        .eq('account_id', selectedAccount)
-        .eq('is_active', true)
-        .order('created_at', { ascending: true }),
-      supabase
-        .from('spy_messages')
-        .select('cast_name, message_time, msg_type, user_name, tokens')
-        .eq('account_id', selectedAccount)
-        .order('message_time', { ascending: false })
-        .limit(5000),
-    ]).then(([castsRes, msgsRes]) => {
-      console.log('[Casts] account_id:', selectedAccount);
-      console.log('[Casts] registered_casts:', castsRes.data?.length, castsRes.error?.message || 'OK');
-      console.log('[Casts] spy_messages:', msgsRes.data?.length, msgsRes.error?.message || 'OK');
-      if (castsRes.data) {
-        console.log('[Casts] registered cast_names:', castsRes.data.map((c: RegisteredCast) => c.cast_name));
-      }
-      setRegisteredCasts(castsRes.data || []);
-      setSpyMessages((msgsRes.data || []) as SpyMessage[]);
-      setLoading(false);
-    });
+
+    // Step 1: registered_casts を取得
+    supabase
+      .from('registered_casts')
+      .select('*')
+      .eq('account_id', selectedAccount)
+      .eq('is_active', true)
+      .order('created_at', { ascending: true })
+      .then(async (castsRes) => {
+        const casts = castsRes.data || [];
+        setRegisteredCasts(casts);
+        console.log('[Casts] registered_casts:', casts.length, castsRes.error?.message || 'OK');
+
+        if (casts.length === 0) {
+          setSpyMessages([]);
+          setLoading(false);
+          return;
+        }
+
+        // Step 2: registered cast_namesでspy_messagesをフィルタ取得
+        const castNames = casts.map(c => c.cast_name);
+        console.log('[Casts] fetching spy_messages for:', castNames);
+
+        const { data: msgs, error: msgErr } = await supabase
+          .from('spy_messages')
+          .select('cast_name, message_time, msg_type, user_name, tokens')
+          .eq('account_id', selectedAccount)
+          .in('cast_name', castNames)
+          .order('message_time', { ascending: false })
+          .limit(10000);
+
+        console.log('[Casts] spy_messages:', msgs?.length, msgErr?.message || 'OK');
+        for (const cn of castNames) {
+          const count = msgs?.filter(m => m.cast_name === cn).length || 0;
+          console.log(`[Casts]   ${cn}: ${count} msgs`);
+        }
+
+        setSpyMessages((msgs || []) as SpyMessage[]);
+        setLoading(false);
+      });
   }, [selectedAccount]);
 
   // registered_casts + spy_messages を結合してstatsを計算
