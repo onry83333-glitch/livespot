@@ -960,14 +960,24 @@ async function handleCoinSync() {
   }
 
   const transactions = fetchResult.transactions || [];
-  if (transactions.length === 0) {
+  const payingUsers = fetchResult.payingUsers || [];
+
+  if (transactions.length === 0 && payingUsers.length === 0) {
     return { ok: true, synced: 0, message: 'トランザクションが見つかりませんでした' };
   }
 
-  console.log('[LS-BG] COIN_SYNC_DATA:', transactions.length, '件受信');
+  console.log('[LS-BG] COIN_SYNC_DATA:', transactions.length, '件受信, 有料ユーザー:', payingUsers.length, '名');
 
   // Supabaseに保存
   const result = await processCoinSyncData(transactions);
+
+  // 有料ユーザー一覧をpaid_usersにUPSERT（transactions APIとは別に）
+  if (payingUsers.length > 0) {
+    await processPayingUsersData(payingUsers);
+    result.payingUsers = payingUsers.length;
+    result.message = `${result.synced || 0}件のトランザクション、${payingUsers.length}名の有料ユーザーを同期しました`;
+  }
+
   return result;
 }
 
@@ -1111,6 +1121,46 @@ async function processCoinSyncData(transactions) {
     users: userRows.length,
     message: `${insertedTx}件のトランザクション、${userRows.length}名のユーザーを同期しました`,
   };
+}
+
+/**
+ * 有料ユーザー一覧データ（/transactions/users API）をpaid_usersにUPSERT
+ */
+async function processPayingUsersData(payingUsers) {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+
+  const rows = payingUsers
+    .filter(u => u.userName)
+    .map(u => ({
+      account_id: accountId,
+      user_name: u.userName,
+      total_coins: u.totalTokens || 0,
+      last_payment_date: u.lastPaid || null,
+    }));
+
+  if (rows.length === 0) return;
+
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/paid_users`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates,return=minimal',
+      },
+      body: JSON.stringify(rows),
+    });
+
+    if (res.ok || res.status === 201) {
+      console.log('[LS-BG] paid_users UPSERT成功（有料ユーザー一覧API）:', rows.length, '名');
+    } else {
+      console.warn('[LS-BG] paid_users UPSERT失敗:', res.status);
+    }
+  } catch (err) {
+    console.warn('[LS-BG] paid_users UPSERT例外:', err.message);
+  }
 }
 
 // ============================================================

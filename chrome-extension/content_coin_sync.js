@@ -24,6 +24,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     return true; // async response
   }
+
+  if (msg.type === 'FETCH_PAYING_USERS') {
+    console.log(LOG, '有料ユーザー一覧リクエスト受信');
+    const baseUrl = window.location.origin;
+    const userId = getUserId();
+    if (!userId) {
+      sendResponse({ error: 'no_user_id', message: 'ユーザーIDを取得できません' });
+      return true;
+    }
+    fetchPayingUsers(baseUrl, userId, msg.options || {})
+      .then(users => sendResponse({ ok: true, users }))
+      .catch(err => sendResponse({ error: 'fetch_error', message: err.message }));
+    return true;
+  }
 });
 
 // ============================================================
@@ -99,6 +113,18 @@ async function fetchCoinHistory(options = {}) {
   if (userId) {
     console.log(LOG, 'Morning Hook API使用: userId=', userId);
     const result = await fetchViaUserTransactions(baseUrl, userId, options);
+
+    // 有料ユーザー一覧も同時取得
+    if (result.ok) {
+      try {
+        const payingUsers = await fetchPayingUsers(baseUrl, userId, { maxPages: 5 });
+        result.payingUsers = payingUsers;
+        console.log(LOG, '有料ユーザー一覧:', payingUsers.length, '名同時取得');
+      } catch (e) {
+        console.warn(LOG, '有料ユーザー一覧取得失敗（非致命的）:', e.message);
+      }
+    }
+
     if (result.ok && result.transactions.length > 0) {
       return result;
     }
@@ -219,6 +245,80 @@ function parseTransaction(tx) {
 }
 
 // ============================================================
+// 方法2: /api/front/users/{uid}/transactions/users（有料ユーザー一覧）
+// Morning Hook CRM実証済み — ユーザー別集計を取得
+// ============================================================
+async function fetchPayingUsers(baseUrl, userId, options = {}) {
+  const maxPages = options.maxPages || 10;
+  const limit = options.limit || 100;
+  const allUsers = [];
+  let offset = 0;
+  let page = 0;
+
+  while (page < maxPages) {
+    page++;
+    const uniq = Math.random().toString(36).substring(2, 10);
+    const url = `${baseUrl}/api/front/users/${userId}/transactions/users`
+      + `?offset=${offset}&limit=${limit}`
+      + `&sort=lastPaid&order=desc`
+      + `&uniq=${uniq}`;
+
+    console.log(LOG, `[users] ページ ${page} 取得中... (offset=${offset})`);
+
+    try {
+      const res = await fetch(url, {
+        credentials: 'include',
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          console.warn(LOG, '[users] 認証エラー:', res.status);
+          break;
+        }
+        if (res.status === 429) {
+          console.warn(LOG, '[users] レート制限 — 3秒待機');
+          await sleep(3000);
+          page--;
+          continue;
+        }
+        console.warn(LOG, '[users] API error:', res.status);
+        break;
+      }
+
+      const data = await res.json();
+      const users = data.transactions || [];
+
+      if (users.length === 0) {
+        console.log(LOG, `[users] ページ ${page}: データなし — 取得完了`);
+        break;
+      }
+
+      for (const u of users) {
+        allUsers.push({
+          userName: u.username || '',
+          totalTokens: u.totalTokens || 0,
+          lastPaid: u.lastPaid || '',
+          userId: u.userId || 0,
+        });
+      }
+
+      console.log(LOG, `[users] ページ ${page}: ${users.length}件取得 (累計: ${allUsers.length}件)`);
+
+      if (users.length < limit) break;
+      offset += limit;
+      await sleep(500);
+    } catch (err) {
+      console.error(LOG, `[users] ページ ${page} 取得失敗:`, err.message);
+      break;
+    }
+  }
+
+  console.log(LOG, `[users] 取得完了: ${allUsers.length}名`);
+  return allUsers;
+}
+
+// ============================================================
 // 方法2: /api/front/v2/earnings/coins-history（フォールバック）
 // ============================================================
 async function fetchViaEarningsAPI(baseUrl, options = {}) {
@@ -243,6 +343,11 @@ async function fetchViaEarningsAPI(baseUrl, options = {}) {
             return { ok: true, transactions: allTransactions, pages: page - 1, partial: true };
           }
           return { error: 'auth_expired', message: 'Stripchatにログインしてください' };
+        }
+        // 404: このAPIは存在しない可能性あり — エラーではなく空を返す
+        if (res.status === 404) {
+          console.warn(LOG, '[v2] 404 — このAPIは利用不可');
+          return { ok: true, transactions: [], pages: 0 };
         }
         return { error: 'api_error', message: `HTTP ${res.status}` };
       }

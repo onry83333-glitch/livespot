@@ -69,6 +69,21 @@ interface DMLogItem {
   sent_at: string | null;
 }
 
+interface CoinTxItem {
+  id: number;
+  user_name: string;
+  tokens: number;
+  type: string;
+  date: string;
+  source_detail: string | null;
+}
+
+interface PaidUserItem {
+  user_name: string;
+  total_coins: number;
+  last_payment_date: string | null;
+}
+
 const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'overview',  icon: '📊', label: '概要' },
   { key: 'sessions',  icon: '📺', label: '配信' },
@@ -129,6 +144,7 @@ function CastDetailInner() {
   // DM state
   const [dmLogs, setDmLogs] = useState<DMLogItem[]>([]);
   const [dmTargets, setDmTargets] = useState<Set<string>>(new Set());
+  const [dmTargetsText, setDmTargetsText] = useState('');
   const [dmMessage, setDmMessage] = useState('');
   const [dmCampaign, setDmCampaign] = useState('');
   const [dmSendMode, setDmSendMode] = useState<'sequential' | 'pipeline'>('pipeline');
@@ -138,6 +154,14 @@ function CastDetailInner() {
   const [dmResult, setDmResult] = useState<{ count: number; batch_id: string } | null>(null);
   const [dmStatusCounts, setDmStatusCounts] = useState({ total: 0, queued: 0, sending: 0, success: 0, error: 0 });
   const [dmBatchId, setDmBatchId] = useState<string | null>(null);
+
+  // Sales state
+  const [coinTxs, setCoinTxs] = useState<CoinTxItem[]>([]);
+  const [paidUsers, setPaidUsers] = useState<PaidUserItem[]>([]);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [salesThisWeek, setSalesThisWeek] = useState(0);
+  const [salesLastWeek, setSalesLastWeek] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<{ last: string | null; count: number }>({ last: null, count: 0 });
 
   // Analytics: retention
   const [retentionUsers, setRetentionUsers] = useState<RetentionUser[]>([]);
@@ -332,6 +356,27 @@ function CastDetailInner() {
     setDmTargets(new Set(filtered.map(f => f.user_name)));
   }, [fans]);
 
+  // DM text input: parse URLs/usernames and add to targets
+  const handleAddTextTargets = useCallback(() => {
+    const lines = dmTargetsText.split('\n').map(l => l.trim()).filter(Boolean);
+    const usernames = lines.map(l => l.replace(/.*\/user\//, '').replace(/\/$/, '').trim()).filter(Boolean);
+    if (usernames.length === 0) return;
+    setDmTargets(prev => {
+      const next = new Set(prev);
+      usernames.forEach(un => next.add(un));
+      return next;
+    });
+    setDmTargetsText('');
+  }, [dmTargetsText]);
+
+  const removeTarget = useCallback((un: string) => {
+    setDmTargets(prev => {
+      const next = new Set(prev);
+      next.delete(un);
+      return next;
+    });
+  }, []);
+
   // ============================================================
   // Analytics: retention + campaign effectiveness
   // ============================================================
@@ -346,6 +391,58 @@ function CastDetailInner() {
       setCampaignEffects((campRes.data || []) as CampaignEffect[]);
       setAnalyticsLoading(false);
     }).catch(() => setAnalyticsLoading(false));
+  }, [accountId, castName, activeTab, sb]);
+
+  // ============================================================
+  // Sales: coin_transactions + paid_users
+  // ============================================================
+  useEffect(() => {
+    if (!accountId || activeTab !== 'sales') return;
+    setSalesLoading(true);
+    const thisMonday = getWeekStart(0);
+    const lastMonday = getWeekStart(1);
+
+    Promise.all([
+      // Recent coin_transactions (latest 100)
+      sb.from('coin_transactions')
+        .select('id, user_name, tokens, type, date, source_detail')
+        .eq('account_id', accountId)
+        .order('date', { ascending: false })
+        .limit(100),
+      // Paid users who appear in this cast's spy_messages
+      sb.rpc('get_cast_fans', { p_account_id: accountId, p_cast_name: castName, p_limit: 50 }),
+      // This week coin_transactions
+      sb.from('coin_transactions')
+        .select('tokens')
+        .eq('account_id', accountId)
+        .gte('date', thisMonday.toISOString()),
+      // Last week coin_transactions
+      sb.from('coin_transactions')
+        .select('tokens')
+        .eq('account_id', accountId)
+        .gte('date', lastMonday.toISOString())
+        .lt('date', thisMonday.toISOString()),
+      // Sync status
+      sb.from('coin_transactions')
+        .select('date')
+        .eq('account_id', accountId)
+        .order('date', { ascending: false })
+        .limit(1),
+    ]).then(([txRes, fansRes, thisWeekRes, lastWeekRes, lastTxRes]) => {
+      setCoinTxs((txRes.data || []) as CoinTxItem[]);
+      // Convert fans to paid user format
+      const fanData = (fansRes.data || []) as FanItem[];
+      setPaidUsers(fanData.map(f => ({
+        user_name: f.user_name,
+        total_coins: f.total_tokens,
+        last_payment_date: f.last_seen,
+      })));
+      setSalesThisWeek((thisWeekRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
+      setSalesLastWeek((lastWeekRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
+      const lastTx = lastTxRes.data?.[0];
+      setSyncStatus({ last: lastTx?.date || null, count: txRes.data?.length || 0 });
+      setSalesLoading(false);
+    }).catch(() => setSalesLoading(false));
   }, [accountId, castName, activeTab, sb]);
 
   // Retention stats
@@ -685,36 +782,79 @@ function CastDetailInner() {
               </div>
 
               {/* Target selection */}
-              <div className="glass-card p-4">
-                <h3 className="text-sm font-bold mb-2">ターゲット選択</h3>
-                <div className="flex gap-1.5 mb-3 flex-wrap">
-                  <button onClick={() => addFansAsTargets('all')} className="btn-ghost text-[9px] py-1 px-2">全ファン</button>
-                  <button onClick={() => addFansAsTargets('vip')} className="btn-ghost text-[9px] py-1 px-2">VIP (100tk+)</button>
-                  <button onClick={() => addFansAsTargets('regular')} className="btn-ghost text-[9px] py-1 px-2">常連 (3回+)</button>
-                  <button onClick={() => setDmTargets(new Set())} className="btn-ghost text-[9px] py-1 px-2">クリア</button>
+              <div className="space-y-4">
+                {/* Text input for targets */}
+                <div className="glass-card p-4">
+                  <h3 className="text-sm font-bold mb-2">テキスト入力</h3>
+                  <p className="text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
+                    URLまたはユーザー名を1行ずつ入力
+                  </p>
+                  <textarea
+                    value={dmTargetsText}
+                    onChange={e => setDmTargetsText(e.target.value)}
+                    className="input-glass font-mono text-[11px] leading-relaxed w-full h-28 resize-none"
+                    placeholder={'https://ja.stripchat.com/user/username\nまたはユーザー名を1行ずつ'}
+                  />
+                  <button onClick={handleAddTextTargets}
+                    disabled={!dmTargetsText.trim()}
+                    className="btn-primary text-[10px] py-1.5 px-4 mt-2 w-full disabled:opacity-50">
+                    ターゲットに追加 ({dmTargetsText.split('\n').filter(l => l.trim()).length}件)
+                  </button>
                 </div>
-                {fans.length === 0 ? (
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ファンデータなし</p>
-                ) : (
-                  <div className="space-y-1 max-h-96 overflow-auto">
-                    {fans.map(f => {
-                      const checked = dmTargets.has(f.user_name);
-                      return (
-                        <button key={f.user_name} onClick={() => toggleTarget(f.user_name)}
-                          className={`w-full text-left p-2 rounded-lg text-[11px] transition-all ${checked ? 'border' : 'hover:bg-white/[0.03]'}`}
-                          style={checked ? { background: 'rgba(56,189,248,0.08)', borderColor: 'rgba(56,189,248,0.2)' } : {}}>
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <span className={`w-3 h-3 rounded-sm border ${checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'}`} />
-                              <span className="font-medium">{f.user_name}</span>
-                            </div>
-                            <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{f.total_tokens.toLocaleString()} tk</span>
-                          </div>
-                        </button>
-                      );
-                    })}
+
+                {/* Confirmed targets */}
+                {dmTargets.size > 0 && (
+                  <div className="glass-card p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-sm font-bold">確定ターゲット ({dmTargets.size}名)</h3>
+                      <button onClick={() => setDmTargets(new Set())}
+                        className="text-[9px] px-2 py-1 rounded-lg hover:bg-rose-500/10 transition-all"
+                        style={{ color: 'var(--accent-pink)' }}>全クリア</button>
+                    </div>
+                    <div className="space-y-0.5 max-h-40 overflow-auto">
+                      {Array.from(dmTargets).map(un => (
+                        <div key={un} className="flex items-center justify-between px-2 py-1.5 rounded-lg text-[11px] hover:bg-white/[0.03]">
+                          <span className="font-medium truncate">{un}</span>
+                          <button onClick={() => removeTarget(un)}
+                            className="text-slate-500 hover:text-rose-400 transition-colors text-xs flex-shrink-0 ml-2"
+                            title="削除">x</button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
+
+                {/* Fan list selection */}
+                <div className="glass-card p-4">
+                  <h3 className="text-sm font-bold mb-2">ファン選択</h3>
+                  <div className="flex gap-1.5 mb-3 flex-wrap">
+                    <button onClick={() => addFansAsTargets('all')} className="btn-ghost text-[9px] py-1 px-2">全ファン</button>
+                    <button onClick={() => addFansAsTargets('vip')} className="btn-ghost text-[9px] py-1 px-2">VIP (100tk+)</button>
+                    <button onClick={() => addFansAsTargets('regular')} className="btn-ghost text-[9px] py-1 px-2">常連 (3回+)</button>
+                  </div>
+                  {fans.length === 0 ? (
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ファンデータなし</p>
+                  ) : (
+                    <div className="space-y-1 max-h-60 overflow-auto">
+                      {fans.map(f => {
+                        const checked = dmTargets.has(f.user_name);
+                        return (
+                          <button key={f.user_name} onClick={() => toggleTarget(f.user_name)}
+                            className={`w-full text-left p-2 rounded-lg text-[11px] transition-all ${checked ? 'border' : 'hover:bg-white/[0.03]'}`}
+                            style={checked ? { background: 'rgba(56,189,248,0.08)', borderColor: 'rgba(56,189,248,0.2)' } : {}}>
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-3 h-3 rounded-sm border ${checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'}`} />
+                                <span className="font-medium">{f.user_name}</span>
+                              </div>
+                              <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{f.total_tokens.toLocaleString()} tk</span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -849,11 +989,152 @@ function CastDetailInner() {
             </div>
           )}
 
-          {/* ============ SALES (placeholder) ============ */}
+          {/* ============ SALES ============ */}
           {activeTab === 'sales' && (
-            <div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>
-              <p className="text-sm">売上機能は準備中です</p>
-              <p className="text-xs mt-2">コイン履歴、有料ユーザー一覧、売上推移グラフを実装予定</p>
+            <div className="space-y-4">
+              {salesLoading ? (
+                <div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>
+              ) : (
+                <>
+                  {/* Weekly summary cards */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="glass-card p-4 text-center">
+                      <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
+                        {tokensToJPY(thisWeekCoins, coinRate)}
+                      </p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-primary)' }}>SPY (tip/gift)</p>
+                    </div>
+                    <div className="glass-card p-4 text-center">
+                      <p className="text-xl font-bold" style={{ color: 'var(--accent-amber)' }}>
+                        {tokensToJPY(salesThisWeek, coinRate)}
+                      </p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週コイン API</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>coin_transactions</p>
+                    </div>
+                    <div className="glass-card p-4 text-center">
+                      <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
+                        {tokensToJPY(salesLastWeek, coinRate)}
+                      </p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週コイン API</p>
+                    </div>
+                    <div className="glass-card p-4 text-center">
+                      <p className="text-xl font-bold" style={{
+                        color: salesLastWeek > 0 ? ((salesThisWeek - salesLastWeek) >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)') : 'var(--text-muted)'
+                      }}>
+                        {salesLastWeek > 0
+                          ? `${(salesThisWeek - salesLastWeek) >= 0 ? '↑' : '↓'} ${Math.abs(Math.round((salesThisWeek - salesLastWeek) / salesLastWeek * 100))}%`
+                          : '--'}
+                      </p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比 (API)</p>
+                    </div>
+                  </div>
+
+                  {/* Data source info + sync */}
+                  <div className="glass-card p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-bold">データソース</h3>
+                      <div className="flex items-center gap-2">
+                        {syncStatus.last && (
+                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                            最終同期: {timeAgo(syncStatus.last)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="glass-panel p-3 rounded-xl">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="w-2 h-2 rounded-full bg-sky-400" />
+                          <span className="text-[11px] font-semibold">SPY (spy_messages)</span>
+                        </div>
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          リアルタイムチャット監視からのtip/giftデータ。このキャスト固有。
+                        </p>
+                        <p className="text-xs mt-1 font-bold" style={{ color: 'var(--accent-amber)' }}>
+                          {formatTokens(stats?.total_coins || 0)}
+                        </p>
+                      </div>
+                      <div className="glass-panel p-3 rounded-xl">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="w-2 h-2 rounded-full bg-purple-400" />
+                          <span className="text-[11px] font-semibold">Coin API (coin_transactions)</span>
+                        </div>
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          Stripchat Earnings APIからの課金履歴。アカウント全体。
+                        </p>
+                        <p className="text-xs mt-1 font-bold" style={{ color: 'var(--accent-amber)' }}>
+                          {coinTxs.length > 0 ? `${coinTxs.length}件取得済み` : '未同期'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Paid users for this cast */}
+                    <div className="glass-card p-4">
+                      <h3 className="text-sm font-bold mb-3">有料ユーザー (このキャスト)</h3>
+                      {paidUsers.length === 0 ? (
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>有料ユーザーデータなし</p>
+                      ) : (
+                        <div className="space-y-1.5 max-h-80 overflow-auto">
+                          {paidUsers.map((u, i) => (
+                            <div key={u.user_name} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className="font-bold w-4 text-center" style={{
+                                  color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
+                                }}>{i + 1}</span>
+                                <span className="truncate font-medium">{u.user_name}</span>
+                              </div>
+                              <div className="flex-shrink-0 text-right">
+                                <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                  {u.total_coins.toLocaleString()} tk
+                                </span>
+                                <p className="text-[9px]" style={{ color: 'var(--accent-green)' }}>
+                                  {tokensToJPY(u.total_coins, coinRate)}
+                                </p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Recent coin transactions */}
+                    <div className="glass-card p-4">
+                      <h3 className="text-sm font-bold mb-3">直近のコイン履歴 (アカウント全体)</h3>
+                      {coinTxs.length === 0 ? (
+                        <div className="text-center py-6">
+                          <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>コイン履歴なし</p>
+                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                            Chrome拡張からStripchatにログインし、Popupの「名簿同期」で取得できます
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-1 max-h-80 overflow-auto">
+                          {coinTxs.slice(0, 50).map(tx => (
+                            <div key={tx.id} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
+                              <div className="min-w-0 flex-1">
+                                <span className="font-semibold">{tx.user_name}</span>
+                                <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded"
+                                  style={{ background: 'rgba(168,139,250,0.1)', color: 'var(--accent-purple, #a855f7)' }}>
+                                  {tx.type}
+                                </span>
+                              </div>
+                              <div className="flex-shrink-0 ml-2 text-right">
+                                <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                  {tx.tokens.toLocaleString()} tk
+                                </span>
+                                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgo(tx.date)}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
