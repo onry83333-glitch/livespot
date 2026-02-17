@@ -11,7 +11,13 @@
  *   2. /api/front/v2/earnings/coins-history — v2 earnings API
  */
 
-const LOG = '[LS-COIN]';
+// 二重注入ガード（manifest.json content_scripts + chrome.scripting.executeScript 両方で読み込まれる）
+if (window._lsCoinSyncLoaded) {
+  console.log('[LS-COIN] 既にロード済み — スキップ');
+} else {
+window._lsCoinSyncLoaded = true;
+
+var LOG = '[LS-COIN]';
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'FETCH_COINS') {
@@ -201,7 +207,26 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
 
       retryCount = 0; // 成功したらリトライカウンタリセット
       const data = await res.json();
-      const transactions = data.transactions || [];
+
+      // デバッグ: レスポンス構造を確認（最初の2ページのみ）
+      if (page <= 2) {
+        console.log(LOG, `レスポンスtype: ${typeof data}, isArray: ${Array.isArray(data)}`);
+        if (Array.isArray(data)) {
+          console.log(LOG, `レスポンス: Array[${data.length}]`);
+        } else {
+          console.log(LOG, `レスポンスkeys: ${Object.keys(data)}`);
+        }
+      }
+
+      // coin_api.py: data.get("transactions", [])
+      // フォールバック: レスポンスが配列の場合、items/data キーも試行
+      const transactions = Array.isArray(data) ? data
+        : (data.transactions || data.items || data.data || []);
+
+      if (page <= 2 && transactions.length > 0) {
+        console.log(LOG, `items[0] keys: ${Object.keys(transactions[0])}`);
+        console.log(LOG, `items[0]: ${JSON.stringify(transactions[0]).substring(0, 800)}`);
+      }
 
       if (transactions.length === 0) {
         console.log(LOG, `ページ ${page}: データなし → 取得完了`);
@@ -209,9 +234,17 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
       }
 
       // Morning Hook形式のトランザクションをパース（coin_api.py: _parse_transaction準拠）
+      let parsedCount = 0;
       for (const tx of transactions) {
         const parsed = parseTransaction(tx);
-        if (parsed) allTransactions.push(parsed);
+        if (parsed) {
+          allTransactions.push(parsed);
+          parsedCount++;
+        }
+      }
+
+      if (page <= 2) {
+        console.log(LOG, `ページ ${page} パース結果: ${parsedCount}/${transactions.length}件成功`);
       }
 
       console.log(LOG, `ページ ${page}: ${transactions.length}件取得（累計 ${allTransactions.length}件）`);
@@ -240,27 +273,37 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
 /**
  * Morning Hook API形式のトランザクションをフラット化
  * coin_api.py: _parse_transaction 準拠
- * { extra: { source: { user: { username, id } }, tipData: { user: { username }, isAnonymous, triggerType } } }
+ *
+ * 既知のレスポンス構造:
+ *   { id, type, date, tokens, amount, extra: { source: { type, user: { id, username } }, tipData: { user: { username }, isAnonymous, triggerType } } }
+ *
+ * フォールバック: フィールド名が異なる場合にも対応
  */
 function parseTransaction(tx) {
+  // coin_api.py準拠: extra.source / extra.tipData
   const extra = tx.extra || {};
   const tipData = extra.tipData || {};
   const source = extra.source || {};
-  // ユーザー情報: extra.source.user または extra.tipData.user
   const userInfo = source.user || tipData.user || {};
 
-  const userName = userInfo.username || '';
-  if (!userName) return null; // 匿名やシステムトランザクションはスキップ
+  // ユーザー名: 複数パスで探索
+  const userName = userInfo.username || userInfo.userName || userInfo.name
+    || tx.username || tx.userName || tx.user_name || tx.from_user || '';
+
+  // coin_api.py: parsed["id"] is not None でフィルタ（usernameではない）
+  const txId = tx.id ?? null;
+  if (txId === null) return null;
 
   return {
-    id: tx.id || null,
+    id: txId,
     userName: userName,
-    tokens: tx.tokens || 0,
+    userId: userInfo.id || tx.userId || tx.user_id || 0,
+    tokens: tx.tokens || tx.amount || tx.coins || tx.token || 0,
     amount: tx.amount || 0,
-    type: tx.type || '',
-    date: tx.date || '',
-    sourceType: source.type || '',
-    triggerType: tipData.triggerType || '',
+    type: tx.type || tx.transaction_type || tx.transactionType || tx.category || '',
+    date: tx.date || tx.created_at || tx.createdAt || tx.timestamp || '',
+    sourceType: source.type || tx.sourceType || tx.source_type || '',
+    triggerType: tipData.triggerType || tx.triggerType || tx.trigger_type || '',
     sourceDetail: source.type || tipData.triggerType || '',
     isAnonymous: tipData.isAnonymous ? 1 : 0,
   };
@@ -441,3 +484,5 @@ function sleep(ms) {
 }
 
 console.log(LOG, 'Content script loaded on', window.location.origin);
+
+} // end double-injection guard
