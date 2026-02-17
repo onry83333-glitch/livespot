@@ -1,38 +1,40 @@
 /**
- * Stripchat公式リーグシステムに準拠したユーザー名色マッピング
+ * Stripchat公式リーグ名をラベルに使いつつ、
+ * paid_usersのtotal_coins（自部屋での累計消費額）に基づいて
+ * ダーク背景で視認性の高い色を割り当てる。
  *
- * 公式リーグ体系（7段階・100レベル）:
- *   Grey    (Lv.1-9)   → グレー     — 無課金
- *   Bronze  (Lv.10-19) → ブロンズ   — 初回コイン購入(500XP)で到達
- *   Silver  (Lv.20-34) → シルバー
- *   Gold    (Lv.35-54) → ゴールド   — 永久保持
- *   Diamond (Lv.55-79) → 紫(violet) — 永久・マスク機能
- *   Royal   (Lv.80-99) → 赤(red)    — 永久・Ultimate会員無料付与
- *   Legend  (Lv.100)   → 赤(特別星バッジ) — 最上位
+ * 注意: total_coinsは自部屋の消費のみ。ユーザーの実際のStripchatレベルとは異なる。
+ * あくまで「このキャストにとっての重要度」を色で示すもの。
  *
- * XP計算: 1コイン消費 = 5XP + 初回購入ボーナス500XP
+ * Stripchat公式リーグ（参考）:
+ *   Grey(1-9) / Bronze(10-19) / Silver(20-34) / Gold(35-54)
+ *   Diamond(55-79) / Royal(80-99) / Legend(100)
+ *   色: Grey→グレー, Bronze→ブロンズ, Silver→シルバー,
+ *       Gold→ゴールド, Diamond→紫, Royal→赤, Legend→赤+星
  */
 
 export function getUserColorFromCoins(totalCoins: number): string {
-  const estimatedXP = totalCoins > 0 ? totalCoins * 5 + 500 : 0;
-
-  if (estimatedXP >= 5000000) return '#cc0000';   // Legend
-  if (estimatedXP >= 600000)  return '#e53935';   // Royal
-  if (estimatedXP >= 200000)  return '#9c27b0';   // Diamond
-  if (estimatedXP >= 50000)   return '#ffc107';   // Gold
-  if (estimatedXP >= 10000)   return '#9e9e9e';   // Silver
-  if (estimatedXP >= 500)     return '#e67e22';   // Bronze
-  return '#888888';                                // Grey
+  if (totalCoins >= 100000) return '#ff1744';   // 鮮やかな赤 — Royal級（10万tk+）
+  if (totalCoins >= 50000)  return '#e53935';   // 赤 — Royal級（5万tk+）
+  if (totalCoins >= 20000)  return '#d500f9';   // マゼンタ紫 — Diamond上位（2万tk+）
+  if (totalCoins >= 10000)  return '#aa00ff';   // 紫 — Diamond（1万tk+）
+  if (totalCoins >= 5000)   return '#ffc107';   // ゴールド — Gold（5千tk+）
+  if (totalCoins >= 3000)   return '#ffab00';   // 濃いゴールド — Gold下位（3千tk+）
+  if (totalCoins >= 1000)   return '#ff9100';   // オレンジ — Silver/Bronze上位（1千tk+）
+  if (totalCoins >= 300)    return '#e67e22';   // ブロンズ — Bronze（300tk+）
+  if (totalCoins >= 50)     return '#8d6e63';   // 暗めブロンズ — Bronze下位（50tk+）
+  return '#78909c';                              // ブルーグレー — Grey（50tk未満）
 }
 
 export function getUserColorInfo(totalCoins: number): { color: string; label: string } {
-  const estimatedXP = totalCoins > 0 ? totalCoins * 5 + 500 : 0;
-
-  if (estimatedXP >= 5000000) return { color: '#cc0000', label: '⭐ Legend' };
-  if (estimatedXP >= 600000)  return { color: '#e53935', label: '🔴 Royal' };
-  if (estimatedXP >= 200000)  return { color: '#9c27b0', label: '🟣 Diamond' };
-  if (estimatedXP >= 50000)   return { color: '#ffc107', label: '🏅 Gold' };
-  if (estimatedXP >= 10000)   return { color: '#9e9e9e', label: '🪙 Silver' };
-  if (estimatedXP >= 500)     return { color: '#e67e22', label: '🟠 Bronze' };
-  return { color: '#888888', label: '⚪ Grey' };
+  if (totalCoins >= 100000) return { color: '#ff1744', label: '🔴 Royal+' };
+  if (totalCoins >= 50000)  return { color: '#e53935', label: '🔴 Royal' };
+  if (totalCoins >= 20000)  return { color: '#d500f9', label: '🟣 Diamond+' };
+  if (totalCoins >= 10000)  return { color: '#aa00ff', label: '🟣 Diamond' };
+  if (totalCoins >= 5000)   return { color: '#ffc107', label: '🏅 Gold+' };
+  if (totalCoins >= 3000)   return { color: '#ffab00', label: '🏅 Gold' };
+  if (totalCoins >= 1000)   return { color: '#ff9100', label: '🟠 Silver+' };
+  if (totalCoins >= 300)    return { color: '#e67e22', label: '🟠 Bronze' };
+  if (totalCoins >= 50)     return { color: '#8d6e63', label: '🟤 Bronze-' };
+  return { color: '#78909c', label: '⚪ Grey' };
 }
