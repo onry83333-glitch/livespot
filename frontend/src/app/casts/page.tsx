@@ -16,12 +16,20 @@ interface CastStats {
   last_activity: string | null;
 }
 
+interface PaidUserStats {
+  cast_name: string;
+  total_coins: number;
+  user_count: number;
+}
+
 interface CastWithStats extends RegisteredCast {
   total_messages: number;
-  total_coins: number;
-  unique_users: number;
+  total_coins: number;      // paid_users基準
+  unique_users: number;      // paid_users基準
   last_activity: string | null;
   tip_count: number;
+  spy_coins: number;         // spy_messages基準（参考）
+  spy_users: number;         // spy_messages基準（参考）
 }
 
 export default function CastsPage() {
@@ -30,6 +38,7 @@ export default function CastsPage() {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [registeredCasts, setRegisteredCasts] = useState<RegisteredCast[]>([]);
   const [castStats, setCastStats] = useState<CastStats[]>([]);
+  const [paidStats, setPaidStats] = useState<PaidUserStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [coinRate] = useState(7.7);
 
@@ -81,30 +90,57 @@ export default function CastsPage() {
         }
 
         const castNames = casts.map(c => c.cast_name);
+
+        // SPYデータ（メッセージ数、チップ数、最終活動）
         const { data: stats } = await supabase.rpc('get_cast_stats', {
           p_account_id: selectedAccount,
           p_cast_names: castNames,
         });
-
         setCastStats((stats || []) as CastStats[]);
+
+        // paid_usersから売上データ（総コイン、ユーザー数）
+        const { data: paidRows } = await supabase
+          .from('paid_users')
+          .select('cast_name, total_coins')
+          .eq('account_id', selectedAccount)
+          .in('cast_name', castNames)
+          .gt('total_coins', 0);
+
+        // cast_name別に集計
+        const paidMap = new Map<string, { total_coins: number; user_count: number }>();
+        (paidRows || []).forEach((row: { cast_name: string; total_coins: number }) => {
+          const prev = paidMap.get(row.cast_name) || { total_coins: 0, user_count: 0 };
+          paidMap.set(row.cast_name, {
+            total_coins: prev.total_coins + (row.total_coins || 0),
+            user_count: prev.user_count + 1,
+          });
+        });
+        const paidArr: PaidUserStats[] = Array.from(paidMap.entries()).map(([cast_name, v]) => ({
+          cast_name, ...v,
+        }));
+        setPaidStats(paidArr);
+
         setLoading(false);
       });
   }, [selectedAccount]);
 
-  // registered_casts + RPC stats を結合
+  // registered_casts + SPY stats + paid_users stats を結合
   const castsWithStats = useMemo((): CastWithStats[] => {
     return registeredCasts.map(cast => {
-      const stats = castStats.find(s => s.cast_name === cast.cast_name);
+      const spy = castStats.find(s => s.cast_name === cast.cast_name);
+      const paid = paidStats.find(s => s.cast_name === cast.cast_name);
       return {
         ...cast,
-        total_messages: stats?.total_messages || 0,
-        total_coins: stats?.total_coins || 0,
-        unique_users: stats?.unique_users || 0,
-        last_activity: stats?.last_activity || null,
-        tip_count: stats?.total_tips || 0,
+        total_messages: spy?.total_messages || 0,
+        total_coins: paid?.total_coins || 0,        // paid_users基準
+        unique_users: paid?.user_count || 0,          // paid_users基準
+        last_activity: spy?.last_activity || null,
+        tip_count: spy?.total_tips || 0,
+        spy_coins: spy?.total_coins || 0,
+        spy_users: spy?.unique_users || 0,
       };
     });
-  }, [registeredCasts, castStats]);
+  }, [registeredCasts, castStats, paidStats]);
 
   // 全体統計
   const totals = useMemo(() => ({
@@ -253,7 +289,7 @@ export default function CastsPage() {
         </div>
         <div className="glass-card p-4 text-center">
           <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(totals.coins)}</p>
-          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>総チップ</p>
+          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>総コイン（名簿）</p>
         </div>
         <div className="glass-card p-4 text-center">
           <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(totals.coins, coinRate)}</p>
