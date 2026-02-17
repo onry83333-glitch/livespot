@@ -965,10 +965,11 @@ async function processOneSTTChunk(chunk) {
 // ============================================================
 
 /**
- * コイン同期メインフロー
- * 1. Stripchatタブを検索
- * 2. content_coin_sync.jsにFETCH_COINS送信
- * 3. 取得データをSupabaseに保存
+ * コイン同期メインフロー（coin_api.py準拠）
+ * 1. /earnings/tokens-history ページのタブを探す or 遷移
+ * 2. content_coin_sync.jsを動的注入
+ * 3. FETCH_COINSメッセージ送信（365日分、全ページ取得）
+ * 4. 取得データをSupabaseに保存
  */
 async function handleCoinSync() {
   await loadAuth();
@@ -976,38 +977,62 @@ async function handleCoinSync() {
     return { ok: false, error: 'ログインしてアカウントを選択してください' };
   }
 
-  // Stripchatタブを検索
-  const tabs = await chrome.tabs.query({
-    url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+  // Step 1: earningsページのタブを探す、なければStripchatタブを遷移
+  let targetTab;
+
+  // まず /earnings/ 配下のタブがあるか確認
+  let earningsTabs = await chrome.tabs.query({
+    url: ['*://stripchat.com/earnings/*', '*://*.stripchat.com/earnings/*'],
   });
 
-  if (tabs.length === 0) {
-    return { ok: false, error: 'Stripchatタブを開いてログインしてください' };
+  if (earningsTabs.length > 0) {
+    targetTab = earningsTabs[0];
+    console.log('[LS-BG] Coin同期: 既存earningsタブ使用 tab=', targetTab.id, targetTab.url);
+  } else {
+    // Stripchatタブを /earnings/tokens-history に遷移
+    const tabs = await chrome.tabs.query({
+      url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+    });
+
+    if (tabs.length === 0) {
+      return { ok: false, error: 'Stripchatタブを開いてログインしてください' };
+    }
+
+    targetTab = tabs[0];
+    console.log('[LS-BG] Coin同期: earningsページへ遷移 tab=', targetTab.id);
+
+    await chrome.tabs.update(targetTab.id, {
+      url: 'https://ja.stripchat.com/earnings/tokens-history',
+    });
+
+    // ページロード完了待ち
+    const loaded = await waitForTabComplete(targetTab.id, 15000);
+    if (!loaded) {
+      return { ok: false, error: 'earningsページのロードがタイムアウトしました' };
+    }
+    // DOMとCookie安定待ち（coin_api.pyと同様に十分な時間を確保）
+    await sleep_bg(3000);
   }
 
-  const targetTab = tabs[0];
-  console.log('[LS-BG] Coin同期: Stripchatタブ=', targetTab.id, targetTab.url);
-
-  // content_coin_sync.jsを動的注入（既にロード済みでも再注入は安全）
+  // Step 2: content_coin_sync.jsを動的注入
   try {
     await chrome.scripting.executeScript({
       target: { tabId: targetTab.id },
       files: ['content_coin_sync.js'],
     });
     console.log('[LS-BG] content_coin_sync.js 動的注入成功: tab=', targetTab.id);
-    // スクリプト初期化を待つ
     await sleep_bg(500);
   } catch (injectErr) {
     console.error('[LS-BG] content_coin_sync.js 注入失敗:', injectErr.message);
     return { ok: false, error: 'Content script注入失敗: ' + injectErr.message };
   }
 
-  // content scriptにFETCH_COINS送信
+  // Step 3: FETCH_COINS送信（coin_api.py準拠: 365日分、ページ制限なし）
   let fetchResult;
   try {
     fetchResult = await chrome.tabs.sendMessage(targetTab.id, {
       type: 'FETCH_COINS',
-      options: { maxPages: 10, limit: 100 },
+      options: { maxPages: 50, limit: 100 },
     });
   } catch (err) {
     console.error('[LS-BG] FETCH_COINS送信失敗:', err.message);

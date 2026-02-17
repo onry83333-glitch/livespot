@@ -140,21 +140,27 @@ async function fetchCoinHistory(options = {}) {
 // 方法1: /api/front/users/{uid}/transactions（Morning Hook実証済み）
 // ============================================================
 async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
-  const maxPages = options.maxPages || 10;
+  const maxPages = options.maxPages || 50;
   const limit = options.limit || 100;
+  const MAX_RETRIES = 3;          // coin_api.py: _MAX_RETRIES = 3
+  const RATE_LIMIT_SLEEP = 10000; // coin_api.py: _RATE_LIMIT_SLEEP = 10
   const allTransactions = [];
   let offset = 0;
   let page = 0;
+  let retryCount = 0;
 
-  // 365日分のデータを取得
+  // 365日分のデータを取得（coin_api.py: COIN_API_DAYS_BACK = 365）
   const now = new Date();
   const from = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+  from.setHours(0, 0, 0, 0);
   const fromISO = from.toISOString().replace(/\.\d{3}Z/, 'Z');
   const untilISO = now.toISOString().replace(/\.\d{3}Z/, 'Z');
 
+  console.log(LOG, `取得期間: ${from.toISOString().split('T')[0]} 〜 ${now.toISOString().split('T')[0]}（365日間）`);
+
   while (page < maxPages) {
     page++;
-    const uniq = Math.random().toString(36).substring(2, 10);
+    const uniq = Math.random().toString(36).substring(2, 18);
     const url = `${baseUrl}/api/front/users/${userId}/transactions`
       + `?from=${fromISO}&until=${untilISO}`
       + `&offset=${offset}&limit=${limit}`
@@ -165,51 +171,61 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
     try {
       const res = await fetch(url, {
         credentials: 'include',
-        headers: { 'Accept': 'application/json' },
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+        },
       });
 
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
-          console.warn(LOG, 'Stripchat認証エラー:', res.status);
+          console.warn(LOG, `認証エラー（${res.status}）。Stripchatに再ログインしてください。`);
           if (allTransactions.length > 0) {
             return { ok: true, transactions: allTransactions, pages: page - 1, partial: true };
           }
           return { error: 'auth_expired', message: 'Stripchatにログインしてください' };
         }
         if (res.status === 429) {
-          console.warn(LOG, 'レート制限 — 3秒待機後リトライ');
-          await sleep(3000);
+          retryCount++;
+          if (retryCount > MAX_RETRIES) {
+            console.warn(LOG, `レート制限超過（${MAX_RETRIES}回リトライ後）。取得済み分を返します。`);
+            break;
+          }
+          console.warn(LOG, `レート制限。${RATE_LIMIT_SLEEP / 1000}秒待機してリトライ（${retryCount}/${MAX_RETRIES}）...`);
+          await sleep(RATE_LIMIT_SLEEP);
           page--; // retry same page
           continue;
         }
         return { error: 'api_error', message: `HTTP ${res.status}` };
       }
 
+      retryCount = 0; // 成功したらリトライカウンタリセット
       const data = await res.json();
       const transactions = data.transactions || [];
 
       if (transactions.length === 0) {
-        console.log(LOG, `ページ ${page}: データなし — 取得完了`);
+        console.log(LOG, `ページ ${page}: データなし → 取得完了`);
         break;
       }
 
-      // Morning Hook形式のトランザクションをパース
+      // Morning Hook形式のトランザクションをパース（coin_api.py: _parse_transaction準拠）
       for (const tx of transactions) {
         const parsed = parseTransaction(tx);
         if (parsed) allTransactions.push(parsed);
       }
 
-      console.log(LOG, `ページ ${page}: ${transactions.length}件取得 (累計: ${allTransactions.length}件)`);
+      console.log(LOG, `ページ ${page}: ${transactions.length}件取得（累計 ${allTransactions.length}件）`);
 
       if (transactions.length < limit) {
-        console.log(LOG, '最終ページ到達');
+        console.log(LOG, '最終ページ到達 → 取得完了');
         break;
       }
 
       offset += limit;
-      await sleep(500); // レート制限対策
+      await sleep(500); // coin_api.py: COIN_API_RATE_LIMIT = 0.5
     } catch (err) {
-      console.error(LOG, `ページ ${page} 取得失敗:`, err.message);
+      console.error(LOG, `ネットワークエラー: ${err.message}`);
+      console.log(LOG, '取得済み分を返します。');
       if (allTransactions.length > 0) {
         return { ok: true, transactions: allTransactions, pages: page - 1, partial: true };
       }
@@ -217,30 +233,36 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
     }
   }
 
-  console.log(LOG, `取得完了: ${allTransactions.length}件 (${page}ページ)`);
+  console.log(LOG, `合計 ${allTransactions.length}件 のトランザクションを取得`);
   return { ok: true, transactions: allTransactions, pages: page };
 }
 
 /**
  * Morning Hook API形式のトランザクションをフラット化
- * { extra: { source: { user: { username } }, tipData: { user: { username } } } }
+ * coin_api.py: _parse_transaction 準拠
+ * { extra: { source: { user: { username, id } }, tipData: { user: { username }, isAnonymous, triggerType } } }
  */
 function parseTransaction(tx) {
   const extra = tx.extra || {};
   const tipData = extra.tipData || {};
   const source = extra.source || {};
+  // ユーザー情報: extra.source.user または extra.tipData.user
   const userInfo = source.user || tipData.user || {};
 
   const userName = userInfo.username || '';
   if (!userName) return null; // 匿名やシステムトランザクションはスキップ
 
   return {
+    id: tx.id || null,
     userName: userName,
     tokens: tx.tokens || 0,
-    type: tx.type || source.type || 'unknown',
+    amount: tx.amount || 0,
+    type: tx.type || '',
     date: tx.date || '',
+    sourceType: source.type || '',
+    triggerType: tipData.triggerType || '',
     sourceDetail: source.type || tipData.triggerType || '',
-    isAnonymous: tipData.isAnonymous || false,
+    isAnonymous: tipData.isAnonymous ? 1 : 0,
   };
 }
 
@@ -249,15 +271,20 @@ function parseTransaction(tx) {
 // Morning Hook CRM実証済み — ユーザー別集計を取得
 // ============================================================
 async function fetchPayingUsers(baseUrl, userId, options = {}) {
-  const maxPages = options.maxPages || 10;
+  const maxPages = options.maxPages || 50;
   const limit = options.limit || 100;
+  const MAX_RETRIES = 3;
+  const RATE_LIMIT_SLEEP = 10000;
   const allUsers = [];
   let offset = 0;
   let page = 0;
+  let retryCount = 0;
+  let totalCount = null;
 
   while (page < maxPages) {
     page++;
-    const uniq = Math.random().toString(36).substring(2, 10);
+    const uniq = Math.random().toString(36).substring(2, 18);
+    // coin_api.py: /transactions/users?offset=...&limit=...&sort=lastPaid&order=desc
     const url = `${baseUrl}/api/front/users/${userId}/transactions/users`
       + `?offset=${offset}&limit=${limit}`
       + `&sort=lastPaid&order=desc`
@@ -268,17 +295,25 @@ async function fetchPayingUsers(baseUrl, userId, options = {}) {
     try {
       const res = await fetch(url, {
         credentials: 'include',
-        headers: { 'Accept': 'application/json' },
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'Mozilla/5.0',
+        },
       });
 
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
-          console.warn(LOG, '[users] 認証エラー:', res.status);
+          console.warn(LOG, `[users] 認証エラー（${res.status}）。Stripchatに再ログインしてください。`);
           break;
         }
         if (res.status === 429) {
-          console.warn(LOG, '[users] レート制限 — 3秒待機');
-          await sleep(3000);
+          retryCount++;
+          if (retryCount > MAX_RETRIES) {
+            console.warn(LOG, `[users] レート制限超過（${MAX_RETRIES}回リトライ後）。取得済み分を返します。`);
+            break;
+          }
+          console.warn(LOG, `[users] レート制限。${RATE_LIMIT_SLEEP / 1000}秒待機してリトライ（${retryCount}/${MAX_RETRIES}）...`);
+          await sleep(RATE_LIMIT_SLEEP);
           page--;
           continue;
         }
@@ -286,35 +321,57 @@ async function fetchPayingUsers(baseUrl, userId, options = {}) {
         break;
       }
 
+      retryCount = 0;
       const data = await res.json();
       const users = data.transactions || [];
 
+      // 初回でtotalCountを取得（coin_api.py準拠）
+      if (totalCount === null && data.totalCount !== undefined) {
+        totalCount = data.totalCount;
+        console.log(LOG, `[users] 有料ユーザー総数: ${totalCount.toLocaleString()}名`);
+      }
+
       if (users.length === 0) {
-        console.log(LOG, `[users] ページ ${page}: データなし — 取得完了`);
+        console.log(LOG, `[users] ページ ${page}: データなし → 取得完了`);
         break;
       }
 
+      // coin_api.py: _parse_paying_user準拠
       for (const u of users) {
+        if (!u.userId) continue;
         allUsers.push({
           userName: u.username || '',
           totalTokens: u.totalTokens || 0,
           lastPaid: u.lastPaid || '',
           userId: u.userId || 0,
+          publicTip: u.publicTip || 0,
+          privateTip: u.privateTip || 0,
+          ticketShow: u.ticketShow || 0,
+          groupShow: u.groupShow || 0,
+          content: u.content || 0,
+          cam2cam: u.cam2cam || 0,
+          fanClub: u.fanClub || 0,
+          spy: u.spy || 0,
+          private: u.private || 0,
         });
       }
 
-      console.log(LOG, `[users] ページ ${page}: ${users.length}件取得 (累計: ${allUsers.length}件)`);
+      const totalStr = totalCount !== null ? ` / ${totalCount.toLocaleString()}名` : '';
+      console.log(LOG, `[users] ページ ${page}: ${users.length}名取得（累計 ${allUsers.length}名${totalStr}）`);
 
-      if (users.length < limit) break;
+      if (users.length < limit) {
+        console.log(LOG, '[users] 最終ページ到達 → 取得完了');
+        break;
+      }
       offset += limit;
       await sleep(500);
     } catch (err) {
-      console.error(LOG, `[users] ページ ${page} 取得失敗:`, err.message);
+      console.error(LOG, `[users] ネットワークエラー: ${err.message}`);
       break;
     }
   }
 
-  console.log(LOG, `[users] 取得完了: ${allUsers.length}名`);
+  console.log(LOG, `[users] 合計 ${allUsers.length}名 の有料ユーザーを取得`);
   return allUsers;
 }
 
