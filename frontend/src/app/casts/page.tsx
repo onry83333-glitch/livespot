@@ -68,6 +68,12 @@ export default function CastsPage() {
         .order('message_time', { ascending: false })
         .limit(5000),
     ]).then(([castsRes, msgsRes]) => {
+      console.log('[Casts] account_id:', selectedAccount);
+      console.log('[Casts] registered_casts:', castsRes.data?.length, castsRes.error?.message || 'OK');
+      console.log('[Casts] spy_messages:', msgsRes.data?.length, msgsRes.error?.message || 'OK');
+      if (castsRes.data) {
+        console.log('[Casts] registered cast_names:', castsRes.data.map((c: RegisteredCast) => c.cast_name));
+      }
       setRegisteredCasts(castsRes.data || []);
       setSpyMessages((msgsRes.data || []) as SpyMessage[]);
       setLoading(false);
