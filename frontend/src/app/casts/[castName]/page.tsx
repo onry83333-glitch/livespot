@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
 import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST } from '@/lib/utils';
-import type { RegisteredCast, SpyMessage } from '@/types';
+import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
 
 /* ============================================================
    Types
@@ -172,6 +172,11 @@ function CastDetailInner() {
   const [retentionUsers, setRetentionUsers] = useState<RetentionUser[]>([]);
   const [campaignEffects, setCampaignEffects] = useState<CampaignEffect[]>([]);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  // Analytics: segments
+  const [segments, setSegments] = useState<UserSegment[]>([]);
+  const [segmentsLoading, setSegmentsLoading] = useState(false);
+  const [expandedSegment, setExpandedSegment] = useState<string | null>(null);
 
   // Realtime
   const { messages: realtimeMessages, isConnected } = useRealtimeSpy({
@@ -423,14 +428,18 @@ function CastDetailInner() {
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
     setAnalyticsLoading(true);
+    setSegmentsLoading(true);
     Promise.all([
       sb.rpc('get_user_retention_status', { p_account_id: accountId, p_cast_name: castName }),
       sb.rpc('get_dm_campaign_effectiveness', { p_account_id: accountId, p_cast_name: castName, p_window_days: 7 }),
-    ]).then(([retRes, campRes]) => {
+      sb.rpc('get_user_segments', { p_account_id: accountId }),
+    ]).then(([retRes, campRes, segRes]) => {
       setRetentionUsers((retRes.data || []) as RetentionUser[]);
       setCampaignEffects((campRes.data || []) as CampaignEffect[]);
+      setSegments((segRes.data || []) as UserSegment[]);
       setAnalyticsLoading(false);
-    }).catch(() => setAnalyticsLoading(false));
+      setSegmentsLoading(false);
+    }).catch(() => { setAnalyticsLoading(false); setSegmentsLoading(false); });
   }, [accountId, castName, activeTab, sb]);
 
   // ============================================================
@@ -503,6 +512,17 @@ function CastDetailInner() {
     retentionUsers.forEach(u => { if (u.status in counts) (counts as Record<string, number>)[u.status]++; });
     return counts;
   }, [retentionUsers]);
+
+  // Navigate to DM tab with segment targets
+  const sendSegmentDm = useCallback((segmentId: string, segmentName: string) => {
+    const seg = segments.find(s => s.segment_id === segmentId);
+    if (!seg) return;
+    const usernames = seg.users.map(u => u.user_name);
+    setDmTargets(new Set(usernames));
+    setDmCampaign(`${segmentName}_復帰DM`);
+    setDmMessage('{username}さん、お久しぶりです！また配信の方に来てくれたら嬉しいです！');
+    setTab('dm');
+  }, [segments, setTab]);
 
   // Navigate to DM tab with pre-filled targets
   const sendRetentionDm = useCallback((usernames: string[], campaign: string) => {
@@ -918,6 +938,134 @@ function CastDetailInner() {
                 <div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>
               ) : (
                 <>
+                  {/* ============ SEGMENT ANALYSIS ============ */}
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3">📊 ユーザーセグメント分析</h3>
+                    <p className="text-[10px] mb-4" style={{ color: 'var(--text-muted)' }}>
+                      有料ユーザー全体をコイン累計額 × 最終課金日の2軸で10パターンに分類（アカウント全体）
+                    </p>
+
+                    {segmentsLoading ? (
+                      <div className="text-center py-4 text-xs" style={{ color: 'var(--text-muted)' }}>セグメント分析中...</div>
+                    ) : segments.length === 0 ? (
+                      <div className="text-center py-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        セグメントデータなし（コイン同期を先に実行してください）
+                      </div>
+                    ) : (
+                      <>
+                        {/* パレートサマリー */}
+                        <div className="grid grid-cols-3 gap-3 mb-4">
+                          <div className="glass-panel p-3 rounded-xl text-center">
+                            <p className="text-lg font-bold" style={{ color: 'var(--accent-amber)' }}>
+                              {segments.reduce((s, seg) => s + seg.user_count, 0).toLocaleString()}
+                            </p>
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>有料ユーザー総数</p>
+                          </div>
+                          <div className="glass-panel p-3 rounded-xl text-center">
+                            <p className="text-lg font-bold" style={{ color: 'var(--accent-green)' }}>
+                              {segments.reduce((s, seg) => s + seg.total_coins, 0).toLocaleString()} tk
+                            </p>
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>総コイン</p>
+                          </div>
+                          <div className="glass-panel p-3 rounded-xl text-center">
+                            <p className="text-lg font-bold" style={{ color: 'var(--accent-primary)' }}>
+                              {segments.filter(s => ['S1','S2','S3','S4','S5'].includes(s.segment_id)).reduce((s, seg) => s + seg.user_count, 0).toLocaleString()}
+                            </p>
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>高優先ターゲット</p>
+                          </div>
+                        </div>
+
+                        {/* セグメント一覧 */}
+                        <div className="space-y-1.5">
+                          {segments.map(seg => {
+                            const isExpanded = expandedSegment === seg.segment_id;
+                            const grandTotal = segments.reduce((s, x) => s + x.total_coins, 0);
+                            const coinPct = grandTotal > 0 ? (seg.total_coins / grandTotal * 100).toFixed(1) : '0';
+                            const priorityColor =
+                              seg.priority.includes('最優先') ? '#ef4444' :
+                              seg.priority.includes('高') ? '#f59e0b' :
+                              seg.priority.includes('中') ? '#eab308' :
+                              seg.priority.includes('通常') ? '#22c55e' :
+                              seg.priority.includes('低') ? '#38bdf8' : '#64748b';
+
+                            return (
+                              <div key={seg.segment_id} className="glass-panel rounded-xl overflow-hidden">
+                                {/* Header row */}
+                                <button
+                                  onClick={() => setExpandedSegment(isExpanded ? null : seg.segment_id)}
+                                  className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-xs">{isExpanded ? '▼' : '▶'}</span>
+                                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: priorityColor }} />
+                                    <div>
+                                      <span className="text-xs font-bold">{seg.segment_id}: {seg.segment_name}</span>
+                                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{seg.tier}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-4 text-[11px]">
+                                    <span className="tabular-nums">{seg.user_count.toLocaleString()}名</span>
+                                    <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
+                                      {seg.total_coins.toLocaleString()} tk
+                                    </span>
+                                    <span className="tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                                      ({coinPct}%)
+                                    </span>
+                                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                      平均 {Math.round(seg.avg_coins).toLocaleString()} tk
+                                    </span>
+                                  </div>
+                                </button>
+
+                                {/* Expanded: user list + DM button */}
+                                {isExpanded && (
+                                  <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-glass)' }}>
+                                    <div className="flex items-center justify-between mb-2">
+                                      <span className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+                                        ユーザー一覧（コイン順・上位50名表示）
+                                      </span>
+                                      <button
+                                        onClick={() => sendSegmentDm(seg.segment_id, seg.segment_name)}
+                                        className="btn-primary text-[10px] py-1 px-3"
+                                      >
+                                        📩 {seg.user_count}名にDM送信
+                                      </button>
+                                    </div>
+                                    <div className="max-h-60 overflow-auto space-y-0.5">
+                                      {seg.users.slice(0, 50).map((u, i) => (
+                                        <div key={u.user_name} className="flex items-center justify-between text-[11px] px-2 py-1 rounded hover:bg-white/[0.03]">
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <span className="font-bold w-5 text-center text-[10px]" style={{
+                                              color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
+                                            }}>{i + 1}</span>
+                                            <span className="truncate font-medium">{u.user_name}</span>
+                                          </div>
+                                          <div className="flex items-center gap-3 flex-shrink-0">
+                                            <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
+                                              {u.total_coins.toLocaleString()} tk
+                                            </span>
+                                            <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                              {u.last_payment_date ? new Date(u.last_payment_date).toLocaleDateString('ja-JP') : '--'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                      {seg.users.length > 50 && (
+                                        <p className="text-[10px] text-center py-1" style={{ color: 'var(--text-muted)' }}>
+                                          ... 他 {seg.users.length - 50}名
+                                        </p>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
                   {/* Retention status badges */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="glass-card p-4 text-center">

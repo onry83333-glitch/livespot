@@ -211,6 +211,21 @@ export interface SpyCast {
 }
 
 // ============================================================
+// User Segments
+// ============================================================
+export interface UserSegment {
+  segment_id: string;
+  segment_name: string;
+  tier: string;
+  recency: string;
+  priority: string;
+  user_count: number;
+  total_coins: number;
+  avg_coins: number;
+  users: { user_name: string; total_coins: number; last_payment_date: string | null }[];
+}
+
+// ============================================================
 // Sync
 // ============================================================
 export interface SyncStatus {
