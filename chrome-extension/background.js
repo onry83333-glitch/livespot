@@ -48,6 +48,9 @@ const BUFFER_STORAGE_KEY = 'spy_message_buffer';
 const VIEWER_BUFFER_KEY = 'spy_viewer_buffer';
 const BUFFER_MAX = 1000;
 
+// 自社キャスト名キャッシュ（STTフィルタ用）
+let registeredCastNames = new Set();
+
 // ============================================================
 // A.1: Service Worker Keepalive via chrome.alarms
 // ============================================================
@@ -116,6 +119,31 @@ async function loadAuth() {
     CONFIG.API_BASE_URL = data.api_base_url;
   }
   return { accessToken, accountId, spyEnabled, sttEnabled };
+}
+
+/**
+ * 自社キャスト名をSupabaseから取得してキャッシュ（STTフィルタ用）
+ */
+async function loadRegisteredCasts() {
+  if (!accessToken || !accountId) return;
+  try {
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      registeredCastNames = new Set(data.map(r => r.cast_name));
+      console.log('[LS-BG] 自社キャスト名キャッシュ更新:', [...registeredCastNames]);
+    }
+  } catch (err) {
+    console.warn('[LS-BG] 自社キャスト名取得失敗:', err.message);
+  }
 }
 
 async function refreshAccessToken() {
@@ -562,6 +590,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const tabId = sender.tab?.id || 0;
     const castName = msg.castName || 'unknown';
 
+    // STTは自社キャスト（registered_casts）のみ処理
+    if (registeredCastNames.size > 0 && !registeredCastNames.has(castName)) {
+      console.log('[LS-BG] STTスキップ: 他社キャスト cast=', castName);
+      sendResponse({ ok: false, error: '他社キャストはSTT対象外' });
+      return false;
+    }
+
     // タブ別状態を更新
     if (!sttTabStates[tabId]) {
       sttTabStates[tabId] = { castName, lastChunkAt: Date.now(), chunkCount: 0 };
@@ -950,12 +985,27 @@ async function handleCoinSync() {
     return { ok: false, error: 'Stripchatタブを開いてログインしてください' };
   }
 
-  console.log('[LS-BG] Coin同期: Stripchatタブ=', tabs[0].id, tabs[0].url);
+  const targetTab = tabs[0];
+  console.log('[LS-BG] Coin同期: Stripchatタブ=', targetTab.id, targetTab.url);
+
+  // content_coin_sync.jsを動的注入（既にロード済みでも再注入は安全）
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      files: ['content_coin_sync.js'],
+    });
+    console.log('[LS-BG] content_coin_sync.js 動的注入成功: tab=', targetTab.id);
+    // スクリプト初期化を待つ
+    await sleep_bg(500);
+  } catch (injectErr) {
+    console.error('[LS-BG] content_coin_sync.js 注入失敗:', injectErr.message);
+    return { ok: false, error: 'Content script注入失敗: ' + injectErr.message };
+  }
 
   // content scriptにFETCH_COINS送信
   let fetchResult;
   try {
-    fetchResult = await chrome.tabs.sendMessage(tabs[0].id, {
+    fetchResult = await chrome.tabs.sendMessage(targetTab.id, {
       type: 'FETCH_COINS',
       options: { maxPages: 10, limit: 100 },
     });
@@ -1720,6 +1770,7 @@ restoreBuffers().then(() => {
     if (accessToken && accountId) {
       startDMPolling();
       startWhisperPolling();
+      loadRegisteredCasts();
       console.log('[LS-BG] 初期化完了 DM/Whisperポーリング開始');
     } else if (accessToken && !accountId) {
       console.log('[LS-BG] 初期化完了 accountId未設定 → Supabase REST APIでアカウント自動取得');
@@ -1738,6 +1789,7 @@ restoreBuffers().then(() => {
             console.log('[LS-BG] アカウント自動設定:', accountId, data[0].account_name);
             startDMPolling();
             startWhisperPolling();
+            loadRegisteredCasts();
             if (messageBuffer.length > 0) flushMessageBuffer();
           }
         } else {
@@ -1760,6 +1812,7 @@ chrome.storage.onChanged.addListener((changes) => {
       if (accessToken && accountId) {
         startDMPolling();
         startWhisperPolling();
+        loadRegisteredCasts();
         // バッファflush試行
         if (messageBuffer.length > 0) {
           console.log('[LS-BG] Storage変更でaccountId取得 → バッファflush試行:', messageBuffer.length, '件');

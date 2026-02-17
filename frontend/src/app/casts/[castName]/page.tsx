@@ -442,32 +442,44 @@ function CastDetailInner() {
     const thisMonday = getWeekStart(0);
     const lastMonday = getWeekStart(1);
 
+    // registeredAt以降のデータのみ表示（データ分離）
+    const regFilter = registeredAt || null;
+    const thisWeekStart = regFilter && regFilter > thisMonday.toISOString() ? regFilter : thisMonday.toISOString();
+    const lastWeekStart = regFilter && regFilter > lastMonday.toISOString() ? regFilter : lastMonday.toISOString();
+
+    // coin_transactions: registeredAt以降のみ取得
+    let recentTxQuery = sb.from('coin_transactions')
+      .select('id, user_name, tokens, type, date, source_detail')
+      .eq('account_id', accountId)
+      .order('date', { ascending: false })
+      .limit(100);
+    if (regFilter) recentTxQuery = recentTxQuery.gte('date', regFilter);
+
+    let thisWeekTxQuery = sb.from('coin_transactions')
+      .select('tokens')
+      .eq('account_id', accountId)
+      .gte('date', thisWeekStart);
+
+    let lastWeekTxQuery = sb.from('coin_transactions')
+      .select('tokens')
+      .eq('account_id', accountId)
+      .gte('date', lastWeekStart)
+      .lt('date', thisMonday.toISOString());
+
+    let syncQuery = sb.from('coin_transactions')
+      .select('date')
+      .eq('account_id', accountId)
+      .order('date', { ascending: false })
+      .limit(1);
+    if (regFilter) syncQuery = syncQuery.gte('date', regFilter);
+
     Promise.all([
-      // Recent coin_transactions (latest 100)
-      sb.from('coin_transactions')
-        .select('id, user_name, tokens, type, date, source_detail')
-        .eq('account_id', accountId)
-        .order('date', { ascending: false })
-        .limit(100),
+      recentTxQuery,
       // Paid users who appear in this cast's spy_messages
       sb.rpc('get_cast_fans', { p_account_id: accountId, p_cast_name: castName, p_limit: 50 }),
-      // This week coin_transactions
-      sb.from('coin_transactions')
-        .select('tokens')
-        .eq('account_id', accountId)
-        .gte('date', thisMonday.toISOString()),
-      // Last week coin_transactions
-      sb.from('coin_transactions')
-        .select('tokens')
-        .eq('account_id', accountId)
-        .gte('date', lastMonday.toISOString())
-        .lt('date', thisMonday.toISOString()),
-      // Sync status
-      sb.from('coin_transactions')
-        .select('date')
-        .eq('account_id', accountId)
-        .order('date', { ascending: false })
-        .limit(1),
+      thisWeekTxQuery,
+      lastWeekTxQuery,
+      syncQuery,
     ]).then(([txRes, fansRes, thisWeekRes, lastWeekRes, lastTxRes]) => {
       setCoinTxs((txRes.data || []) as CoinTxItem[]);
       // Convert fans to paid user format
@@ -483,7 +495,7 @@ function CastDetailInner() {
       setSyncStatus({ last: lastTx?.date || null, count: txRes.data?.length || 0 });
       setSalesLoading(false);
     }).catch(() => setSalesLoading(false));
-  }, [accountId, castName, activeTab, sb]);
+  }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // Retention stats
   const retentionCounts = useMemo(() => {

@@ -8,7 +8,8 @@
     "tabs",
     "activeTab",
     "alarms",
-    "notifications"
+    "notifications",
+    "scripting"
   ],
   "host_permissions": [
     "*://stripchat.com/*",
