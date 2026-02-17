@@ -192,6 +192,25 @@ export interface RegisteredCast {
 }
 
 // ============================================================
+// Spy Casts (他社キャスト)
+// ============================================================
+export interface SpyCast {
+  id: number;
+  account_id: string;
+  cast_name: string;
+  display_name: string | null;
+  stripchat_url: string | null;
+  category: string | null;
+  format_tag: string | null;
+  notes: string | null;
+  is_active: boolean;
+  auto_monitor: boolean;
+  screenshot_interval: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ============================================================
 // Sync
 // ============================================================
 export interface SyncStatus {

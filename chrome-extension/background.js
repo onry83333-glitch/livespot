@@ -27,6 +27,16 @@ const pendingDMResults = new Map(); // taskId → { resolve, timeoutId }
 let lastHeartbeat = 0;
 let heartbeatAlerted = false;
 
+// Badge: SPY稼働インジケーター
+function updateBadge() {
+  if (spyEnabled) {
+    chrome.action.setBadgeText({ text: 'REC' });
+    chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
+  } else {
+    chrome.action.setBadgeText({ text: '' });
+  }
+}
+
 // STT (Speech-to-Text) state
 let sttEnabled = false;
 let sttChunkQueue = [];
@@ -735,6 +745,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'TOGGLE_SPY') {
     spyEnabled = msg.enabled;
     chrome.storage.local.set({ spy_enabled: spyEnabled });
+    updateBadge();
     console.log('[LS-BG] SPY切替: enabled=', spyEnabled, 'accountId=', accountId);
     if (spyEnabled) {
       lastHeartbeat = Date.now();
@@ -1702,6 +1713,8 @@ function stopDMPolling() {
 console.log('[LS-BG] === Service Worker起動 ===');
 
 restoreBuffers().then(() => {
+  // 起動時にバッジ更新
+  updateBadge();
   loadAuth().then(async () => {
     console.log('[LS-BG] 認証状態: token=', !!accessToken, 'account=', accountId, 'spy=', spyEnabled);
     if (accessToken && accountId) {
@@ -1760,6 +1773,7 @@ chrome.storage.onChanged.addListener((changes) => {
   }
   if (changes.spy_enabled) {
     spyEnabled = changes.spy_enabled.newValue === true;
+    updateBadge();
     console.log('[LS-BG] spy_enabled変更:', spyEnabled);
   }
   if (changes.stt_enabled) {

@@ -46,6 +46,13 @@ const castTabs = [
   { tab: 'realtime',  icon: '👁', label: 'リアルタイム' },
 ];
 
+const spyTabs = [
+  { tab: 'overview',  icon: '📊', label: '概要' },
+  { tab: 'sessions',  icon: '📺', label: '配信ログ' },
+  { tab: 'users',     icon: '👥', label: 'ユーザー分析' },
+  { tab: 'format',    icon: '📋', label: 'フォーマット' },
+];
+
 function SidebarInner() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -56,8 +63,15 @@ function SidebarInner() {
   const activeCastName = castMatch ? decodeURIComponent(castMatch[1]) : null;
   const activeTab = searchParams.get('tab') || 'overview';
 
+  // スパイキャスト個別ページかどうかを判定
+  const spyMatch = pathname.match(/^\/spy\/([^/]+)$/);
+  const activeSpyCastName = spyMatch && spyMatch[1] !== 'users' ? decodeURIComponent(spyMatch[1]) : null;
+  const activeSpyTab = searchParams.get('tab') || 'overview';
+
   // キャストの表示名を取得
   const [castDisplayName, setCastDisplayName] = useState<string | null>(null);
+  const [spyCastDisplayName, setSpyCastDisplayName] = useState<string | null>(null);
+
   useEffect(() => {
     if (!activeCastName) { setCastDisplayName(null); return; }
     const supabase = createClient();
@@ -72,6 +86,21 @@ function SidebarInner() {
         setCastDisplayName(data?.display_name || null);
       });
   }, [activeCastName]);
+
+  useEffect(() => {
+    if (!activeSpyCastName) { setSpyCastDisplayName(null); return; }
+    const supabase = createClient();
+    supabase
+      .from('spy_casts')
+      .select('display_name')
+      .eq('cast_name', activeSpyCastName)
+      .eq('is_active', true)
+      .limit(1)
+      .single()
+      .then(({ data }) => {
+        setSpyCastDisplayName(data?.display_name || null);
+      });
+  }, [activeSpyCastName]);
 
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-[220px] flex flex-col border-r z-50"
@@ -130,6 +159,45 @@ function SidebarInner() {
                 );
               })}
             </div>
+
+            {/* Spy submenu: スパイセクションの直後に表示 */}
+            {section.title === 'スパイ（他社分析）' && activeSpyCastName && (
+              <div className="mt-2 ml-2 pl-3 border-l" style={{ borderColor: 'rgba(56,189,248,0.15)' }}>
+                <Link href="/spy"
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px] text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-all mb-1"
+                >
+                  <span className="text-[10px]">←</span>
+                  <span>戻る</span>
+                </Link>
+                <div className="px-2 py-1.5 mb-1">
+                  <p className="text-[12px] font-bold text-white truncate">
+                    🔍 {activeSpyCastName}
+                  </p>
+                  {spyCastDisplayName && (
+                    <p className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
+                      {spyCastDisplayName}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-0.5">
+                  {spyTabs.map(t => {
+                    const isTabActive = activeSpyTab === t.tab;
+                    const href = `/spy/${encodeURIComponent(activeSpyCastName)}?tab=${t.tab}`;
+                    return (
+                      <Link key={t.tab} href={href}
+                        className={`flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all duration-200 ${
+                          isTabActive ? 'text-white' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'
+                        }`}
+                        style={isTabActive ? { background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' } : {}}
+                      >
+                        <span className="text-[10px] w-4 text-center">{t.icon}</span>
+                        <span>{t.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Cast submenu: キャスト一覧セクションの直後に表示 */}
             {section.title === 'メイン' && activeCastName && (

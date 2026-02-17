@@ -239,9 +239,22 @@ function updateSTTButton(enabled) {
 
 let spyElapsedTimer = null;
 
+function updateRecIndicator(active, castName) {
+  const recEl = $('recIndicator');
+  const recCast = $('recCastName');
+  if (!recEl) return;
+  if (active) {
+    recEl.classList.add('active');
+    if (recCast) recCast.textContent = castName ? `— ${castName}` : '';
+  } else {
+    recEl.classList.remove('active');
+  }
+}
+
 function updateSpyInfo(active, castName, startedAt) {
   const infoEl = $('spyStatusInfo');
   if (!infoEl) return;
+  updateRecIndicator(active, castName);
   if (spyElapsedTimer) {
     clearInterval(spyElapsedTimer);
     spyElapsedTimer = null;
