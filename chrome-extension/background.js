@@ -1647,6 +1647,14 @@ async function processDMQueue() {
     const peekTask = await fetchNextDMTask();
     if (!peekTask) return;
 
+    // Safety: userInitiatedチェック — campaign接頭辞が正規UIフロー経由であることを確認
+    // フロントエンドの3段階確認を経たDMのみ処理（pipe{N}_ または seq_ 接頭辞が必須）
+    if (!peekTask.campaign || (!peekTask.campaign.startsWith('pipe') && !peekTask.campaign.startsWith('seq'))) {
+      console.warn('[LS-BG] DM安全ブロック: 不正なcampaign形式 — UI経由でない可能性 campaign=', peekTask.campaign, 'id=', peekTask.id);
+      await updateDMTaskStatus(peekTask.id, 'error', 'DM安全ブロック: 正規UIフロー以外からのDM送信は拒否されました');
+      return;
+    }
+
     const config = parseBatchConfig(peekTask.campaign);
 
     if (config.mode === 'pipeline' && config.tabCount > 1) {

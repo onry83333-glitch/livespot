@@ -155,6 +155,11 @@ function CastDetailInner() {
   const [dmStatusCounts, setDmStatusCounts] = useState({ total: 0, queued: 0, sending: 0, success: 0, error: 0 });
   const [dmBatchId, setDmBatchId] = useState<string | null>(null);
 
+  // DM Safety: 3-step confirmation
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [sendUnlocked, setSendUnlocked] = useState(false);
+  const unlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Sales state
   const [coinTxs, setCoinTxs] = useState<CoinTxItem[]>([]);
   const [paidUsers, setPaidUsers] = useState<PaidUserItem[]>([]);
@@ -201,6 +206,9 @@ function CastDetailInner() {
       .then(({ data }) => setCastInfo(data as RegisteredCast | null));
   }, [accountId, castName, sb]);
 
+  // データ分離: キャスト登録日以降のデータのみ表示
+  const registeredAt = useMemo(() => castInfo?.created_at || null, [castInfo]);
+
   // ============================================================
   // Load stats + fans via RPC
   // ============================================================
@@ -226,26 +234,29 @@ function CastDetailInner() {
     const thisMonday = getWeekStart(0);
     const lastMonday = getWeekStart(1);
 
-    // spy_messagesからtip/giftの週間集計
+    // spy_messagesからtip/giftの週間集計（registeredAt以降のみ）
+    const thisStart = registeredAt && registeredAt > thisMonday.toISOString() ? registeredAt : thisMonday.toISOString();
+    const lastStart = registeredAt && registeredAt > lastMonday.toISOString() ? registeredAt : lastMonday.toISOString();
+
     Promise.all([
       sb.from('spy_messages')
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
         .in('msg_type', ['tip', 'gift'])
-        .gte('message_time', thisMonday.toISOString()),
+        .gte('message_time', thisStart),
       sb.from('spy_messages')
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
         .in('msg_type', ['tip', 'gift'])
-        .gte('message_time', lastMonday.toISOString())
+        .gte('message_time', lastStart)
         .lt('message_time', thisMonday.toISOString()),
     ]).then(([thisRes, lastRes]) => {
       setThisWeekCoins((thisRes.data || []).reduce((s, r) => s + (r.tokens || 0), 0));
       setLastWeekCoins((lastRes.data || []).reduce((s, r) => s + (r.tokens || 0), 0));
     });
-  }, [accountId, castName, activeTab, sb]);
+  }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // ============================================================
   // Sessions: RPC
@@ -255,9 +266,9 @@ function CastDetailInner() {
     sb.rpc('get_cast_sessions', {
       p_account_id: accountId,
       p_cast_name: castName,
-      p_since: '2026-02-15',
+      p_since: registeredAt ? new Date(registeredAt).toISOString().split('T')[0] : '2026-01-01',
     }).then(({ data }) => setSessions((data || []) as SessionItem[]));
-  }, [accountId, castName, activeTab, sb]);
+  }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // Session expand: load logs
   const handleExpandSession = useCallback(async (sessionKey: string, start: string, end: string) => {
@@ -284,10 +295,11 @@ function CastDetailInner() {
     sb.from('dm_send_log')
       .select('id, user_name, message, status, error, campaign, queued_at, sent_at')
       .eq('account_id', accountId)
+      .eq('cast_name', castName)
       .order('created_at', { ascending: false })
       .limit(200)
       .then(({ data }) => setDmLogs((data || []) as DMLogItem[]));
-  }, [accountId, activeTab, sb]);
+  }, [accountId, castName, activeTab, sb]);
 
   // DM Realtime status polling
   useEffect(() => {
@@ -327,7 +339,7 @@ function CastDetailInner() {
       const tag = dmCampaign.trim() ? `${dmCampaign.trim()}_` : '';
       const bid = `${modePrefix}_${tag}${originalBid}`;
 
-      await sb.from('dm_send_log').update({ campaign: bid }).eq('campaign', originalBid);
+      await sb.from('dm_send_log').update({ campaign: bid, cast_name: castName }).eq('campaign', originalBid);
       setDmBatchId(bid);
       setDmResult({ count, batch_id: bid });
       setDmStatusCounts({ total: count, queued: count, sending: 0, success: 0, error: 0 });
@@ -338,11 +350,11 @@ function CastDetailInner() {
       // ログ再取得
       const { data: logs } = await sb.from('dm_send_log')
         .select('id, user_name, message, status, error, campaign, queued_at, sent_at')
-        .eq('account_id', accountId).order('created_at', { ascending: false }).limit(200);
+        .eq('account_id', accountId).eq('cast_name', castName).order('created_at', { ascending: false }).limit(200);
       setDmLogs((logs || []) as DMLogItem[]);
     } catch (e: unknown) { setDmError(e instanceof Error ? e.message : String(e)); }
     setDmSending(false);
-  }, [dmTargets, dmMessage, dmCampaign, dmSendMode, dmTabs, accountId, sb]);
+  }, [dmTargets, dmMessage, dmCampaign, dmSendMode, dmTabs, accountId, castName, sb]);
 
   const toggleTarget = useCallback((un: string) => {
     setDmTargets(prev => { const n = new Set(prev); if (n.has(un)) n.delete(un); else n.add(un); return n; });
@@ -375,6 +387,34 @@ function CastDetailInner() {
       next.delete(un);
       return next;
     });
+  }, []);
+
+  // DM Safety: unlock toggle + 10秒自動ロック
+  const handleUnlockToggle = useCallback(() => {
+    if (sendUnlocked) {
+      setSendUnlocked(false);
+      if (unlockTimerRef.current) { clearTimeout(unlockTimerRef.current); unlockTimerRef.current = null; }
+    } else {
+      setSendUnlocked(true);
+      unlockTimerRef.current = setTimeout(() => {
+        setSendUnlocked(false);
+        unlockTimerRef.current = null;
+      }, 10000);
+    }
+  }, [sendUnlocked]);
+
+  // DM Safety: 3段階確認済み送信
+  const handleConfirmedSend = useCallback(() => {
+    if (!sendUnlocked) return;
+    setSendUnlocked(false);
+    if (unlockTimerRef.current) { clearTimeout(unlockTimerRef.current); unlockTimerRef.current = null; }
+    setShowConfirmModal(false);
+    handleDmSend();
+  }, [sendUnlocked, handleDmSend]);
+
+  // Cleanup: unlock timer
+  useEffect(() => {
+    return () => { if (unlockTimerRef.current) clearTimeout(unlockTimerRef.current); };
   }, []);
 
   // ============================================================
@@ -725,10 +765,10 @@ function CastDetailInner() {
                     <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                       選択中: <span className="font-bold text-white">{dmTargets.size}</span> 名
                     </span>
-                    <button onClick={handleDmSend}
+                    <button onClick={() => setShowConfirmModal(true)}
                       disabled={dmSending || dmTargets.size === 0 || !dmMessage.trim()}
                       className="btn-primary text-xs py-1.5 px-5 disabled:opacity-50">
-                      {dmSending ? '送信中...' : '送信'}
+                      {dmSending ? '送信中...' : '送信確認'}
                     </button>
                   </div>
 
@@ -1161,6 +1201,95 @@ function CastDetailInner() {
             </div>
           )}
         </>
+      )}
+
+      {/* DM Safety: 3段階確認モーダル */}
+      {showConfirmModal && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center"
+          style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
+          <div className="glass-card p-6 w-full max-w-md mx-4 anim-fade-up">
+            <h3 className="text-base font-bold mb-4 flex items-center gap-2">
+              <span style={{ color: 'var(--accent-pink)' }}>⚠</span>
+              DM送信確認
+            </h3>
+
+            <div className="space-y-3 mb-4">
+              <div className="glass-panel p-3 rounded-xl">
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>ターゲット</p>
+                <p className="text-sm font-bold">{dmTargets.size} 名</p>
+                <div className="mt-1 max-h-20 overflow-auto">
+                  {Array.from(dmTargets).slice(0, 10).map(un => (
+                    <span key={un} className="inline-block text-[10px] mr-1.5 mb-1 px-1.5 py-0.5 rounded"
+                      style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>{un}</span>
+                  ))}
+                  {dmTargets.size > 10 && (
+                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>... 他{dmTargets.size - 10}名</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="glass-panel p-3 rounded-xl">
+                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>メッセージ</p>
+                <p className="text-xs whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>{dmMessage}</p>
+              </div>
+
+              {dmCampaign && (
+                <div className="glass-panel p-3 rounded-xl">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>キャンペーン</p>
+                  <p className="text-xs">{dmCampaign}</p>
+                </div>
+              )}
+
+              <div className="p-3 rounded-xl" style={{ background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.2)' }}>
+                <p className="text-[11px] font-semibold" style={{ color: 'var(--accent-pink)' }}>
+                  DM送信は取り消せません。ターゲットとメッセージを必ず確認してください。
+                </p>
+              </div>
+            </div>
+
+            {/* 送信ロックトグル */}
+            <div className="flex items-center justify-between mb-4 p-3 rounded-xl"
+              style={{
+                background: sendUnlocked ? 'rgba(244,63,94,0.1)' : 'rgba(15,23,42,0.4)',
+                border: `1px solid ${sendUnlocked ? 'rgba(244,63,94,0.3)' : 'var(--border-glass)'}`,
+              }}>
+              <div>
+                <p className="text-[11px] font-semibold">{sendUnlocked ? '送信ロック解除済み' : '送信ロック中'}</p>
+                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                  {sendUnlocked ? '10秒後に自動ロックされます' : 'トグルで解除してください'}
+                </p>
+              </div>
+              <button onClick={handleUnlockToggle}
+                className="w-12 h-6 rounded-full relative transition-all duration-300"
+                style={{ background: sendUnlocked ? 'var(--accent-pink)' : 'rgba(100,116,139,0.3)' }}>
+                <span className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all duration-300"
+                  style={{ left: sendUnlocked ? '26px' : '2px' }} />
+              </button>
+            </div>
+
+            {/* アクションボタン */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowConfirmModal(false);
+                  setSendUnlocked(false);
+                  if (unlockTimerRef.current) { clearTimeout(unlockTimerRef.current); unlockTimerRef.current = null; }
+                }}
+                className="btn-ghost text-xs py-2 px-4 flex-1">
+                キャンセル
+              </button>
+              <button onClick={handleConfirmedSend}
+                disabled={!sendUnlocked || dmSending}
+                className="text-xs py-2 px-4 flex-1 rounded-xl font-semibold transition-all disabled:opacity-30"
+                style={{
+                  background: sendUnlocked ? 'linear-gradient(135deg, var(--accent-pink), #dc2626)' : 'rgba(100,116,139,0.2)',
+                  color: 'white',
+                }}>
+                {dmSending ? '送信中...' : '送信実行'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
