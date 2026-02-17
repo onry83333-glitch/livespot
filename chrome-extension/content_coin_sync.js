@@ -146,7 +146,7 @@ async function fetchCoinHistory(options = {}) {
 // 方法1: /api/front/users/{uid}/transactions（Morning Hook実証済み）
 // ============================================================
 async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
-  const maxPages = options.maxPages || 50;
+  const maxPages = options.maxPages || 600;
   const limit = options.limit || 100;
   const MAX_RETRIES = 3;          // coin_api.py: _MAX_RETRIES = 3
   const RATE_LIMIT_SLEEP = 10000; // coin_api.py: _RATE_LIMIT_SLEEP = 10
@@ -173,7 +173,8 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
       + `&offset=${offset}&limit=${limit}`
       + `&uniq=${uniq}`;
 
-    console.log(LOG, `ページ ${page} 取得中... (offset=${offset})`);
+    const totalStr2 = numberOfTransactions !== null ? `, 全${numberOfTransactions.toLocaleString()}件中` : '';
+    console.log(LOG, `ページ ${page} 取得中... (offset=${offset}${totalStr2})`);
 
     try {
       const res = await fetch(url, {

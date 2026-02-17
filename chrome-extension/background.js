@@ -1032,7 +1032,7 @@ async function handleCoinSync() {
   try {
     fetchResult = await chrome.tabs.sendMessage(targetTab.id, {
       type: 'FETCH_COINS',
-      options: { maxPages: 50, limit: 100 },
+      options: { maxPages: 600, limit: 100 },
     });
   } catch (err) {
     console.error('[LS-BG] FETCH_COINS送信失敗:', err.message);
@@ -1070,8 +1070,8 @@ async function handleCoinSync() {
 /**
  * コイントランザクションデータをSupabase REST APIで直接保存
  * 1. coin_transactions UPSERT（500件バッチ、stripchat_tx_idで重複排除）
- * 2. paid_users UPSERT（ユーザー別集計、500件バッチ）
- * 3. refresh_paying_users RPC（マテビュー更新）
+ * 2. refresh_paying_users RPC（マテビュー更新）
+ * ※ paid_usersはprocessPayingUsersData()が担当（二重書き込み防止）
  */
 async function processCoinSyncData(transactions) {
   await loadAuth();
@@ -1085,14 +1085,13 @@ async function processCoinSyncData(transactions) {
   // フィールドマッピング（content_coin_sync.js parseTransaction → coin_transactions）
   const txRows = [];
   for (const tx of transactions) {
-    const userName = tx.userName || tx.user_name || tx.username || '';
+    const rawName = tx.userName || tx.user_name || tx.username || '';
+    const userName = rawName || (tx.isAnonymous === 1 ? 'anonymous' : 'unknown');
     const tokens = parseInt(tx.tokens ?? 0, 10);
     const txType = tx.type || 'unknown';
     const txDate = tx.date || now;
     const sourceDetail = tx.sourceDetail || tx.sourceType || '';
     const stripchatTxId = tx.id ?? null;
-
-    if (!userName) continue;
 
     txRows.push({
       account_id: accountId,
@@ -1109,7 +1108,7 @@ async function processCoinSyncData(transactions) {
     });
   }
 
-  console.log('[LS-BG] coin_transactions マッピング完了:', txRows.length, '/', transactions.length, '件（userName無しスキップ:', transactions.length - txRows.length, '件）');
+  console.log('[LS-BG] coin_transactions マッピング完了:', txRows.length, '/', transactions.length, '件');
 
   if (txRows.length === 0) {
     return { ok: true, synced: 0, message: '有効なトランザクションがありません' };
@@ -1156,69 +1155,11 @@ async function processCoinSyncData(transactions) {
 
   console.log('[LS-BG] coin_transactions upsert完了:', insertedTx, '件成功 / エラーバッチ:', batchErrors);
 
-  // 2. paid_users UPSERT（トランザクションからユーザー別集計）
-  const userAgg = {};
-  for (const row of txRows) {
-    const un = row.user_name;
-    if (!userAgg[un]) {
-      userAgg[un] = { total_coins: 0, last_payment_date: null, user_id: null };
-    }
-    userAgg[un].total_coins += row.tokens;
-    if (!userAgg[un].last_payment_date || row.date > userAgg[un].last_payment_date) {
-      userAgg[un].last_payment_date = row.date;
-    }
-    if (row.user_id) {
-      userAgg[un].user_id = row.user_id;
-    }
-  }
+  // paid_usersへの書き込みはprocessPayingUsersData()が担当（二重書き込み防止）
 
-  const userRows = Object.entries(userAgg).map(([un, agg]) => ({
-    account_id: accountId,
-    user_name: un,
-    total_coins: agg.total_coins,
-    last_payment_date: agg.last_payment_date,
-    user_id_stripchat: agg.user_id ? String(agg.user_id) : null,
-  }));
-
-  let insertedUsers = 0;
-  const userBatches = Math.ceil(userRows.length / BATCH_SIZE);
-
-  for (let i = 0; i < userRows.length; i += BATCH_SIZE) {
-    const batch = userRows.slice(i, i + BATCH_SIZE);
-    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
-
-    try {
-      const res = await fetch(
-        `${CONFIG.SUPABASE_URL}/rest/v1/paid_users?on_conflict=account_id,user_name`,
-        {
-          method: 'POST',
-          headers: {
-            'apikey': CONFIG.SUPABASE_ANON_KEY,
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'resolution=merge-duplicates,return=minimal',
-          },
-          body: JSON.stringify(batch),
-        }
-      );
-
-      if (res.ok || res.status === 201) {
-        insertedUsers += batch.length;
-        console.log('[LS-BG] paid_users upsert バッチ', batchNum, '/', userBatches, ':', batch.length, '件成功');
-      } else {
-        const errText = await res.text().catch(() => '');
-        console.warn('[LS-BG] paid_users upsert バッチ', batchNum, '失敗:', res.status, errText.substring(0, 200));
-      }
-    } catch (err) {
-      console.warn('[LS-BG] paid_users upsert バッチ', batchNum, '例外:', err.message);
-    }
-  }
-
-  console.log('[LS-BG] paid_users upsert完了:', insertedUsers, '/', userRows.length, '名');
-
-  // 3. refresh_paying_users RPC（マテビュー更新）
+  // 2. refresh_paying_users RPC（マテビュー更新）
   try {
-    await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/refresh_paying_users`, {
+    const rpcRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/refresh_paying_users`, {
       method: 'POST',
       headers: {
         'apikey': CONFIG.SUPABASE_ANON_KEY,
@@ -1227,9 +1168,13 @@ async function processCoinSyncData(transactions) {
       },
       body: '{}',
     });
-    console.log('[LS-BG] paying_usersマテビュー更新完了');
+    if (rpcRes.ok) {
+      console.log('[LS-BG] refresh_paying_users RPC成功');
+    } else {
+      console.warn('[LS-BG] refresh_paying_users RPC: HTTP', rpcRes.status, '(関数が未作成の可能性 — 非致命的)');
+    }
   } catch (err) {
-    console.warn('[LS-BG] マテビュー更新失敗（非致命的）:', err.message);
+    console.warn('[LS-BG] refresh_paying_users RPC失敗（非致命的）:', err.message);
   }
 
   // 同期ステータス保存
@@ -1239,13 +1184,12 @@ async function processCoinSyncData(transactions) {
   });
 
   console.log('[LS-BG] ========== Coin同期完了 ==========');
-  console.log('[LS-BG] トランザクション:', insertedTx, '件 / ユーザー:', insertedUsers, '名');
+  console.log('[LS-BG] トランザクション:', insertedTx, '件');
 
   return {
     ok: true,
     synced: insertedTx,
-    users: insertedUsers,
-    message: `${insertedTx}件のトランザクション、${insertedUsers}名のユーザーを同期しました`,
+    message: `${insertedTx}件のトランザクションを同期しました`,
   };
 }
 
