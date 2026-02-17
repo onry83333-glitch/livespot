@@ -1,7 +1,9 @@
 'use client';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
+import { useState, useEffect, Suspense } from 'react';
+import { createClient } from '@/lib/supabase/client';
 
 interface NavItem {
   href: string;
@@ -16,24 +18,15 @@ interface NavSection {
 
 const navSections: NavSection[] = [
   {
-    title: '自社キャスト',
+    title: 'メイン',
     items: [
       { href: '/casts',      icon: '📋', label: 'キャスト一覧' },
-      { href: '/sessions',   icon: '📺', label: '配信セッション' },
-      { href: '/analytics',  icon: '📊', label: '分析&スコアリング' },
     ],
   },
   {
     title: 'スパイ（他社分析）',
     items: [
-      { href: '/spy',        icon: '👁', label: 'リアルタイム運営' },
-    ],
-  },
-  {
-    title: 'ツール',
-    items: [
-      { href: '/dm',         icon: '💬', label: 'DM一斉送信' },
-      { href: '/alerts',     icon: '🔔', label: '入室アラート' },
+      { href: '/spy',        icon: '👁', label: 'リアルタイム監視' },
     ],
   },
   {
@@ -44,9 +37,41 @@ const navSections: NavSection[] = [
   },
 ];
 
-export function Sidebar() {
+const castTabs = [
+  { tab: 'overview',  icon: '📊', label: '概要' },
+  { tab: 'sessions',  icon: '📺', label: '配信' },
+  { tab: 'dm',        icon: '💬', label: 'DM' },
+  { tab: 'analytics', icon: '📈', label: '分析' },
+  { tab: 'sales',     icon: '💰', label: '売上' },
+  { tab: 'realtime',  icon: '👁', label: 'リアルタイム' },
+];
+
+function SidebarInner() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { user, signOut } = useAuth();
+
+  // キャスト個別ページかどうかを判定
+  const castMatch = pathname.match(/^\/casts\/([^/]+)$/);
+  const activeCastName = castMatch ? decodeURIComponent(castMatch[1]) : null;
+  const activeTab = searchParams.get('tab') || 'overview';
+
+  // キャストの表示名を取得
+  const [castDisplayName, setCastDisplayName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!activeCastName) { setCastDisplayName(null); return; }
+    const supabase = createClient();
+    supabase
+      .from('registered_casts')
+      .select('display_name')
+      .eq('cast_name', activeCastName)
+      .eq('is_active', true)
+      .limit(1)
+      .single()
+      .then(({ data }) => {
+        setCastDisplayName(data?.display_name || null);
+      });
+  }, [activeCastName]);
 
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-[220px] flex flex-col border-r z-50"
@@ -57,7 +82,7 @@ export function Sidebar() {
     >
       {/* Logo */}
       <div className="px-5 py-5">
-        <Link href="/" className="flex items-center gap-2.5 group">
+        <Link href="/casts" className="flex items-center gap-2.5 group">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg"
             style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple))' }}>
             🌐
@@ -105,6 +130,55 @@ export function Sidebar() {
                 );
               })}
             </div>
+
+            {/* Cast submenu: キャスト一覧セクションの直後に表示 */}
+            {section.title === 'メイン' && activeCastName && (
+              <div className="mt-2 ml-2 pl-3 border-l" style={{ borderColor: 'rgba(56,189,248,0.15)' }}>
+                {/* Back link */}
+                <Link href="/casts"
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px] text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-all mb-1"
+                >
+                  <span className="text-[10px]">←</span>
+                  <span>戻る</span>
+                </Link>
+
+                {/* Cast name header */}
+                <div className="px-2 py-1.5 mb-1">
+                  <p className="text-[12px] font-bold text-white truncate">
+                    🎭 {activeCastName}
+                  </p>
+                  {castDisplayName && (
+                    <p className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>
+                      {castDisplayName}
+                    </p>
+                  )}
+                </div>
+
+                {/* Tab links */}
+                <div className="space-y-0.5">
+                  {castTabs.map(t => {
+                    const isTabActive = activeTab === t.tab;
+                    const href = `/casts/${encodeURIComponent(activeCastName)}?tab=${t.tab}`;
+                    return (
+                      <Link key={t.tab} href={href}
+                        className={`flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all duration-200 ${
+                          isTabActive
+                            ? 'text-white'
+                            : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'
+                        }`}
+                        style={isTabActive ? {
+                          background: 'rgba(56,189,248,0.1)',
+                          color: 'var(--accent-primary)',
+                        } : {}}
+                      >
+                        <span className="text-[10px] w-4 text-center">{t.icon}</span>
+                        <span>{t.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </nav>
@@ -134,5 +208,13 @@ export function Sidebar() {
         </button>
       </div>
     </aside>
+  );
+}
+
+export function Sidebar() {
+  return (
+    <Suspense fallback={null}>
+      <SidebarInner />
+    </Suspense>
   );
 }

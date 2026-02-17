@@ -1,10 +1,20 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, timeAgo } from '@/lib/utils';
-import type { Account, RegisteredCast, SpyMessage } from '@/types';
+import type { Account, RegisteredCast } from '@/types';
+
+interface CastStats {
+  cast_name: string;
+  total_messages: number;
+  total_tips: number;
+  total_coins: number;
+  unique_users: number;
+  last_activity: string | null;
+}
 
 interface CastWithStats extends RegisteredCast {
   total_messages: number;
@@ -19,7 +29,7 @@ export default function CastsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState('');
   const [registeredCasts, setRegisteredCasts] = useState<RegisteredCast[]>([]);
-  const [spyMessages, setSpyMessages] = useState<SpyMessage[]>([]);
+  const [castStats, setCastStats] = useState<CastStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [coinRate] = useState(7.7);
 
@@ -48,14 +58,12 @@ export default function CastsPage() {
     });
   }, [user]);
 
-  // registered_casts → そのcast_nameでspy_messagesをフィルタ取得
+  // registered_casts → RPC get_cast_stats で集計取得
   useEffect(() => {
     if (!selectedAccount) return;
     setLoading(true);
 
     const supabase = createClient();
-
-    // Step 1: registered_casts を取得
     supabase
       .from('registered_casts')
       .select('*')
@@ -65,69 +73,51 @@ export default function CastsPage() {
       .then(async (castsRes) => {
         const casts = castsRes.data || [];
         setRegisteredCasts(casts);
-        console.log('[Casts] registered_casts:', casts.length, castsRes.error?.message || 'OK');
 
         if (casts.length === 0) {
-          setSpyMessages([]);
+          setCastStats([]);
           setLoading(false);
           return;
         }
 
-        // Step 2: registered cast_namesでspy_messagesをフィルタ取得
         const castNames = casts.map(c => c.cast_name);
-        console.log('[Casts] fetching spy_messages for:', castNames);
+        const { data: stats } = await supabase.rpc('get_cast_stats', {
+          p_account_id: selectedAccount,
+          p_cast_names: castNames,
+        });
 
-        const { data: msgs, error: msgErr } = await supabase
-          .from('spy_messages')
-          .select('cast_name, message_time, msg_type, user_name, tokens')
-          .eq('account_id', selectedAccount)
-          .in('cast_name', castNames)
-          .order('message_time', { ascending: false })
-          .limit(10000);
-
-        console.log('[Casts] spy_messages:', msgs?.length, msgErr?.message || 'OK');
-        for (const cn of castNames) {
-          const count = msgs?.filter(m => m.cast_name === cn).length || 0;
-          console.log(`[Casts]   ${cn}: ${count} msgs`);
-        }
-
-        setSpyMessages((msgs || []) as SpyMessage[]);
+        setCastStats((stats || []) as CastStats[]);
         setLoading(false);
       });
   }, [selectedAccount]);
 
-  // registered_casts + spy_messages を結合してstatsを計算
+  // registered_casts + RPC stats を結合
   const castsWithStats = useMemo((): CastWithStats[] => {
     return registeredCasts.map(cast => {
-      const msgs = spyMessages.filter(m => m.cast_name === cast.cast_name);
-      const tips = msgs.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift');
-      const users = new Set(msgs.filter(m => m.user_name).map(m => m.user_name));
+      const stats = castStats.find(s => s.cast_name === cast.cast_name);
       return {
         ...cast,
-        total_messages: msgs.length,
-        total_coins: tips.reduce((s, m) => s + (m.tokens || 0), 0),
-        unique_users: users.size,
-        last_activity: msgs.length > 0 ? msgs[0].message_time : null,
-        tip_count: tips.length,
+        total_messages: stats?.total_messages || 0,
+        total_coins: stats?.total_coins || 0,
+        unique_users: stats?.unique_users || 0,
+        last_activity: stats?.last_activity || null,
+        tip_count: stats?.total_tips || 0,
       };
     });
-  }, [registeredCasts, spyMessages]);
+  }, [registeredCasts, castStats]);
 
   // 全体統計
-  const totals = useMemo(() => {
-    return {
-      casts: castsWithStats.length,
-      messages: castsWithStats.reduce((s, c) => s + c.total_messages, 0),
-      coins: castsWithStats.reduce((s, c) => s + c.total_coins, 0),
-      users: castsWithStats.reduce((s, c) => s + c.unique_users, 0),
-    };
-  }, [castsWithStats]);
+  const totals = useMemo(() => ({
+    casts: castsWithStats.length,
+    messages: castsWithStats.reduce((s, c) => s + c.total_messages, 0),
+    coins: castsWithStats.reduce((s, c) => s + c.total_coins, 0),
+    users: castsWithStats.reduce((s, c) => s + c.unique_users, 0),
+  }), [castsWithStats]);
 
   // キャスト登録
   const handleRegister = useCallback(async () => {
     const name = formCastName.trim();
     if (!name || !selectedAccount) return;
-
     setFormSaving(true);
     setFormError(null);
 
@@ -145,11 +135,7 @@ export default function CastsPage() {
       .single();
 
     if (error) {
-      if (error.code === '23505') {
-        setFormError(`${name} は既に登録済みです`);
-      } else {
-        setFormError(error.message);
-      }
+      setFormError(error.code === '23505' ? `${name} は既に登録済みです` : error.message);
       setFormSaving(false);
       return;
     }
@@ -175,7 +161,6 @@ export default function CastsPage() {
       .eq('id', castId);
 
     if (error) return;
-
     setRegisteredCasts(prev =>
       prev.map(c => c.id === castId
         ? { ...c, display_name: editDisplayName.trim() || null, notes: editNotes.trim() || null }
@@ -185,19 +170,15 @@ export default function CastsPage() {
     setEditingId(null);
   }, [editDisplayName, editNotes]);
 
-  // キャスト非活性化（論理削除）
+  // キャスト非活性化
   const handleDeactivate = useCallback(async (castId: number, castName: string) => {
     if (!confirm(`${castName} を一覧から削除しますか？`)) return;
-
     const supabase = createClient();
     const { error } = await supabase
       .from('registered_casts')
       .update({ is_active: false, updated_at: new Date().toISOString() })
       .eq('id', castId);
-
-    if (!error) {
-      setRegisteredCasts(prev => prev.filter(c => c.id !== castId));
-    }
+    if (!error) setRegisteredCasts(prev => prev.filter(c => c.id !== castId));
   }, []);
 
   if (!user) return null;
@@ -212,32 +193,22 @@ export default function CastsPage() {
             登録済みキャストの配信データと売上サマリー
           </p>
         </div>
-
         <div className="flex items-center gap-3">
-          {/* Account selector */}
           {accounts.length > 1 && (
-            <select
-              value={selectedAccount}
-              onChange={e => setSelectedAccount(e.target.value)}
-              className="input-glass text-xs py-1.5 px-3 w-48"
-            >
+            <select value={selectedAccount} onChange={e => setSelectedAccount(e.target.value)}
+              className="input-glass text-xs py-1.5 px-3 w-48">
               {accounts.map(a => (
                 <option key={a.id} value={a.id}>{a.account_name}</option>
               ))}
             </select>
           )}
-
-          {/* Register button */}
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="btn-primary text-xs py-1.5 px-4"
-          >
+          <button onClick={() => setShowForm(!showForm)} className="btn-primary text-xs py-1.5 px-4">
             {showForm ? 'キャンセル' : '+ キャスト追加'}
           </button>
         </div>
       </div>
 
-      {/* Registration Form (inline) */}
+      {/* Registration Form */}
       {showForm && (
         <div className="glass-card p-5 anim-fade-up">
           <h3 className="text-sm font-bold mb-4">新規キャスト登録</h3>
@@ -247,53 +218,29 @@ export default function CastsPage() {
                 style={{ color: 'var(--text-muted)' }}>
                 キャスト名 <span style={{ color: 'var(--accent-pink)' }}>*</span>
               </label>
-              <input
-                type="text"
-                value={formCastName}
-                onChange={e => setFormCastName(e.target.value)}
-                className="input-glass text-xs w-full"
-                placeholder="Stripchatのユーザー名"
-                onKeyDown={e => e.key === 'Enter' && handleRegister()}
-              />
+              <input type="text" value={formCastName} onChange={e => setFormCastName(e.target.value)}
+                className="input-glass text-xs w-full" placeholder="Stripchatのユーザー名"
+                onKeyDown={e => e.key === 'Enter' && handleRegister()} />
             </div>
             <div>
               <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: 'var(--text-muted)' }}>
-                表示名
-              </label>
-              <input
-                type="text"
-                value={formDisplayName}
-                onChange={e => setFormDisplayName(e.target.value)}
-                className="input-glass text-xs w-full"
-                placeholder="本名やニックネーム"
-              />
+                style={{ color: 'var(--text-muted)' }}>表示名</label>
+              <input type="text" value={formDisplayName} onChange={e => setFormDisplayName(e.target.value)}
+                className="input-glass text-xs w-full" placeholder="本名やニックネーム" />
             </div>
             <div>
               <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5"
-                style={{ color: 'var(--text-muted)' }}>
-                メモ
-              </label>
-              <input
-                type="text"
-                value={formNotes}
-                onChange={e => setFormNotes(e.target.value)}
-                className="input-glass text-xs w-full"
-                placeholder="任意のメモ"
-              />
+                style={{ color: 'var(--text-muted)' }}>メモ</label>
+              <input type="text" value={formNotes} onChange={e => setFormNotes(e.target.value)}
+                className="input-glass text-xs w-full" placeholder="任意のメモ" />
             </div>
           </div>
           <div className="flex items-center gap-3 mt-4">
-            <button
-              onClick={handleRegister}
-              disabled={!formCastName.trim() || formSaving}
-              className="btn-primary text-xs py-1.5 px-6 disabled:opacity-50"
-            >
+            <button onClick={handleRegister} disabled={!formCastName.trim() || formSaving}
+              className="btn-primary text-xs py-1.5 px-6 disabled:opacity-50">
               {formSaving ? '登録中...' : '登録する'}
             </button>
-            {formError && (
-              <span className="text-xs" style={{ color: 'var(--accent-pink)' }}>{formError}</span>
-            )}
+            {formError && <span className="text-xs" style={{ color: 'var(--accent-pink)' }}>{formError}</span>}
           </div>
         </div>
       )}
@@ -301,27 +248,19 @@ export default function CastsPage() {
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <div className="glass-card p-4 text-center">
-          <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>
-            {totals.casts}
-          </p>
+          <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>{totals.casts}</p>
           <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>登録キャスト数</p>
         </div>
         <div className="glass-card p-4 text-center">
-          <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>
-            {formatTokens(totals.coins)}
-          </p>
+          <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(totals.coins)}</p>
           <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>総チップ</p>
         </div>
         <div className="glass-card p-4 text-center">
-          <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>
-            {tokensToJPY(totals.coins, coinRate)}
-          </p>
+          <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(totals.coins, coinRate)}</p>
           <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>推定売上</p>
         </div>
         <div className="glass-card p-4 text-center">
-          <p className="text-2xl font-bold" style={{ color: 'var(--accent-purple, #a855f7)' }}>
-            {totals.users}
-          </p>
+          <p className="text-2xl font-bold" style={{ color: 'var(--accent-purple, #a855f7)' }}>{totals.users}</p>
           <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>ユニークユーザー</p>
         </div>
       </div>
@@ -361,30 +300,19 @@ export default function CastsPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-bold w-6 text-center" style={{
                         color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
-                      }}>
-                        {i + 1}
-                      </span>
+                      }}>{i + 1}</span>
                       {editingId === cast.id ? (
                         <div className="flex-1 min-w-0">
                           <span className="font-semibold">{cast.cast_name}</span>
-                          <input
-                            type="text"
-                            value={editDisplayName}
-                            onChange={e => setEditDisplayName(e.target.value)}
-                            className="input-glass text-[11px] w-full mt-1 py-1 px-2"
-                            placeholder="表示名"
-                          />
-                          <input
-                            type="text"
-                            value={editNotes}
-                            onChange={e => setEditNotes(e.target.value)}
-                            className="input-glass text-[11px] w-full mt-1 py-1 px-2"
-                            placeholder="メモ"
-                          />
+                          <input type="text" value={editDisplayName} onChange={e => setEditDisplayName(e.target.value)}
+                            className="input-glass text-[11px] w-full mt-1 py-1 px-2" placeholder="表示名" />
+                          <input type="text" value={editNotes} onChange={e => setEditNotes(e.target.value)}
+                            className="input-glass text-[11px] w-full mt-1 py-1 px-2" placeholder="メモ" />
                         </div>
                       ) : (
-                        <div className="min-w-0">
-                          <span className="font-semibold">{cast.cast_name}</span>
+                        <Link href={`/casts/${encodeURIComponent(cast.cast_name)}`}
+                          className="min-w-0 hover:opacity-80 transition-opacity">
+                          <span className="font-semibold" style={{ color: 'var(--accent-primary)' }}>{cast.cast_name}</span>
                           {cast.display_name && (
                             <span className="ml-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
                               ({cast.display_name})
@@ -395,7 +323,7 @@ export default function CastsPage() {
                               {cast.notes}
                             </p>
                           )}
-                        </div>
+                        </Link>
                       )}
                     </div>
                   </td>
@@ -420,44 +348,21 @@ export default function CastsPage() {
                   <td className="text-center px-3 py-3">
                     {editingId === cast.id ? (
                       <div className="flex items-center justify-center gap-1">
-                        <button
-                          onClick={() => handleSaveEdit(cast.id)}
+                        <button onClick={() => handleSaveEdit(cast.id)}
                           className="text-[10px] px-2 py-1 rounded-lg hover:bg-emerald-500/10 transition-all"
-                          style={{ color: 'var(--accent-green)' }}
-                          title="保存"
-                        >
-                          保存
-                        </button>
-                        <button
-                          onClick={() => setEditingId(null)}
+                          style={{ color: 'var(--accent-green)' }}>保存</button>
+                        <button onClick={() => setEditingId(null)}
                           className="text-[10px] px-2 py-1 rounded-lg hover:bg-white/5 transition-all"
-                          style={{ color: 'var(--text-muted)' }}
-                        >
-                          取消
-                        </button>
+                          style={{ color: 'var(--text-muted)' }}>取消</button>
                       </div>
                     ) : (
                       <div className="flex items-center justify-center gap-1">
-                        <button
-                          onClick={() => {
-                            setEditingId(cast.id);
-                            setEditDisplayName(cast.display_name || '');
-                            setEditNotes(cast.notes || '');
-                          }}
+                        <button onClick={() => { setEditingId(cast.id); setEditDisplayName(cast.display_name || ''); setEditNotes(cast.notes || ''); }}
                           className="p-1.5 rounded-lg hover:bg-white/5 transition-all text-[11px]"
-                          title="編集"
-                          style={{ color: 'var(--accent-primary)' }}
-                        >
-                          編集
-                        </button>
-                        <button
-                          onClick={() => handleDeactivate(cast.id, cast.cast_name)}
+                          style={{ color: 'var(--accent-primary)' }}>編集</button>
+                        <button onClick={() => handleDeactivate(cast.id, cast.cast_name)}
                           className="p-1.5 rounded-lg hover:bg-rose-500/10 transition-all text-[11px]"
-                          title="削除"
-                          style={{ color: 'var(--accent-pink)' }}
-                        >
-                          削除
-                        </button>
+                          style={{ color: 'var(--accent-pink)' }}>削除</button>
                       </div>
                     )}
                   </td>
