@@ -452,6 +452,131 @@ async function flushViewerStats() {
 }
 
 // ============================================================
+// Session Lifecycle → Supabase REST API
+// ============================================================
+
+/**
+ * SPY開始時: sessionsテーブルにセッション開始を記録
+ * title カラムに cast_name を格納（sessions に cast_name カラムなし）
+ */
+async function insertSession(sessionId, acctId) {
+  if (!accessToken) return;
+
+  const storageData = await chrome.storage.local.get(['last_cast_name']);
+  const castName = storageData.last_cast_name || 'unknown';
+
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/sessions`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        account_id: acctId,
+        title: castName,
+        started_at: new Date().toISOString(),
+      }),
+    });
+
+    if (res.ok || res.status === 201) {
+      console.log('[LS-BG] sessions開始記録:', sessionId, 'cast=', castName);
+    } else {
+      const errText = await res.text();
+      console.error('[LS-BG] sessions INSERT失敗:', res.status, errText);
+    }
+  } catch (e) {
+    console.error('[LS-BG] sessions INSERT例外:', e.message);
+  }
+}
+
+/**
+ * SPY停止時: sessionsテーブルにセッション終了を記録（集計値付き）
+ * 1. RPC update_session_stats → total_messages, total_tokens
+ * 2. viewer_stats → peak_viewers
+ * 3. PATCH sessions → ended_at, peak_viewers
+ */
+async function closeSession(sessionId, sessionStartTime) {
+  if (!accessToken || !accountId) return;
+
+  // 1. RPC update_session_stats で total_messages, total_tokens を更新
+  try {
+    const rpcRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/update_session_stats`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_session_id: sessionId }),
+    });
+    if (rpcRes.ok) {
+      console.log('[LS-BG] update_session_stats RPC成功:', sessionId);
+    } else {
+      console.warn('[LS-BG] update_session_stats RPC失敗:', rpcRes.status);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] update_session_stats RPC例外:', e.message);
+  }
+
+  // 2. viewer_statsからピーク視聴者数を取得
+  let peakViewers = 0;
+  if (sessionStartTime) {
+    try {
+      const viewerRes = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/viewer_stats?account_id=eq.${accountId}&recorded_at=gte.${encodeURIComponent(sessionStartTime)}&order=total.desc&limit=1&select=total`,
+        {
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        }
+      );
+      if (viewerRes.ok) {
+        const viewerData = await viewerRes.json();
+        if (viewerData.length > 0 && viewerData[0].total != null) {
+          peakViewers = viewerData[0].total;
+        }
+      }
+    } catch (e) {
+      console.warn('[LS-BG] viewer_stats取得スキップ:', e.message);
+    }
+  }
+
+  // 3. ended_at + peak_viewers を更新
+  try {
+    const updateRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/sessions?session_id=eq.${encodeURIComponent(sessionId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          ended_at: new Date().toISOString(),
+          peak_viewers: peakViewers,
+        }),
+      }
+    );
+
+    if (updateRes.ok) {
+      console.log(`[LS-BG] sessions終了記録: ${sessionId} | peak_viewers=${peakViewers}`);
+    } else {
+      const errText = await updateRes.text();
+      console.error('[LS-BG] sessions UPDATE失敗:', updateRes.status, errText);
+    }
+  } catch (e) {
+    console.error('[LS-BG] sessions UPDATE例外:', e.message);
+  }
+}
+
+// ============================================================
 // Whisper Polling (10秒間隔で未読whisperを取得 → Stripchatタブへ転送)
 // ============================================================
 async function pollWhispers() {
@@ -796,11 +921,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       lastHeartbeat = Date.now();
       heartbeatAlerted = false;
       chrome.storage.local.set({ spy_started_at: new Date().toISOString(), current_session_id: currentSessionId });
+      // sessionsテーブルにセッション開始を記録（fire-and-forget）
+      if (accountId) {
+        insertSession(currentSessionId, accountId).catch(e => {
+          console.error('[LS-BG] sessions開始記録失敗:', e.message);
+        });
+      }
       // SPY開始時にaccountIdが未設定なら警告
       if (!accountId) {
         console.warn('[LS-BG] 注意: SPY有効化されたがaccountId未設定 メッセージはバッファされflush時に付与');
       }
     } else {
+      // SPY OFF — セッション終了処理（fire-and-forget）
+      if (currentSessionId && accountId && accessToken) {
+        const closingSessionId = currentSessionId;
+        chrome.storage.local.get(['spy_started_at']).then(data => {
+          return closeSession(closingSessionId, data.spy_started_at);
+        }).catch(e => {
+          console.error('[LS-BG] sessions終了処理失敗:', e.message);
+        });
+      }
       console.log('[LS-BG] SPYセッション終了: session_id=', currentSessionId);
       currentSessionId = null;
       chrome.storage.local.set({ spy_started_at: null, spy_cast: null, current_session_id: null });
@@ -1838,6 +1978,31 @@ restoreBuffers().then(() => {
       startWhisperPolling();
       loadRegisteredCasts();
       console.log('[LS-BG] 初期化完了 DM/Whisperポーリング開始');
+      // SW再起動時: currentSessionIdが復元されていたらsessionsレコード存在チェック
+      if (currentSessionId) {
+        try {
+          const checkRes = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/sessions?session_id=eq.${encodeURIComponent(currentSessionId)}&select=session_id`,
+            {
+              headers: {
+                'apikey': CONFIG.SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${accessToken}`,
+              },
+            }
+          );
+          if (checkRes.ok) {
+            const existing = await checkRes.json();
+            if (existing.length === 0) {
+              await insertSession(currentSessionId, accountId);
+              console.log('[LS-BG] sessions復元INSERT:', currentSessionId);
+            } else {
+              console.log('[LS-BG] sessions既存確認OK:', currentSessionId);
+            }
+          }
+        } catch (e) {
+          console.warn('[LS-BG] sessions復元チェック失敗:', e.message);
+        }
+      }
     } else if (accessToken && !accountId) {
       console.log('[LS-BG] 初期化完了 accountId未設定 → Supabase REST APIでアカウント自動取得');
       try {

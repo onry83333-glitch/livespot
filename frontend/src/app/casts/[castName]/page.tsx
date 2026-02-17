@@ -182,6 +182,10 @@ function CastDetailInner() {
   // Coin sync alert
   const [daysSinceSync, setDaysSinceSync] = useState<number | null>(null);
 
+  // Analytics: 直近チップ + チケットチャット
+  const [lastTips, setLastTips] = useState<{user_name: string; tokens: number; message_time: string; message: string}[]>([]);
+  const [lastTicketChats, setLastTicketChats] = useState<{user_name: string; tokens: number; date: string}[]>([]);
+
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
 
@@ -474,17 +478,58 @@ function CastDetailInner() {
     if (!accountId || activeTab !== 'analytics') return;
     setAnalyticsLoading(true);
     setSegmentsLoading(true);
-    Promise.all([
-      sb.rpc('get_user_retention_status', { p_account_id: accountId, p_cast_name: castName }),
-      sb.rpc('get_dm_campaign_effectiveness', { p_account_id: accountId, p_cast_name: castName, p_window_days: 7 }),
-      sb.rpc('get_user_segments', { p_account_id: accountId }),
-    ]).then(([retRes, campRes, segRes]) => {
-      setRetentionUsers((retRes.data || []) as RetentionUser[]);
-      setCampaignEffects((campRes.data || []) as CampaignEffect[]);
-      setSegments((segRes.data || []) as UserSegment[]);
-      setAnalyticsLoading(false);
-      setSegmentsLoading(false);
-    }).catch(() => { setAnalyticsLoading(false); setSegmentsLoading(false); });
+
+    // 各RPCを独立して呼び出し（1つ失敗しても他に影響しない）
+    sb.rpc('get_user_retention_status', { p_account_id: accountId, p_cast_name: castName })
+      .then(({ data, error }) => {
+        if (error) console.warn('[analytics] retention RPC error:', error.message);
+        else setRetentionUsers((data || []) as RetentionUser[]);
+      });
+
+    sb.rpc('get_dm_campaign_effectiveness', { p_account_id: accountId, p_cast_name: castName, p_window_days: 7 })
+      .then(({ data, error }) => {
+        if (error) console.warn('[analytics] campaign RPC error:', error.message);
+        else setCampaignEffects((data || []) as CampaignEffect[]);
+      });
+
+    sb.rpc('get_user_segments', { p_account_id: accountId, p_cast_name: castName })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('[analytics] segments RPC error:', error.message);
+        } else {
+          // RETURNS JSONB → data は JSONB値そのもの（配列）
+          const parsed = Array.isArray(data) ? data : [];
+          console.log('[analytics] segments loaded:', parsed.length, 'segments');
+          setSegments(parsed as UserSegment[]);
+        }
+        setSegmentsLoading(false);
+        setAnalyticsLoading(false);
+      });
+  }, [accountId, castName, activeTab, sb]);
+
+  // ============================================================
+  // Analytics: 直近チップ（このキャスト）+ チケットチャット（アカウント全体）
+  // ============================================================
+  useEffect(() => {
+    if (!accountId || activeTab !== 'analytics') return;
+    // 最後のチップ（このキャストのspy_messages）
+    sb.from('spy_messages')
+      .select('user_name, tokens, message_time, message')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .gt('tokens', 0)
+      .order('message_time', { ascending: false })
+      .limit(5)
+      .then(({ data }) => setLastTips((data || []) as typeof lastTips));
+
+    // 直近のチケットチャット（coin_transactionsにcast_nameなし → アカウント全体）
+    sb.from('coin_transactions')
+      .select('user_name, tokens, date')
+      .eq('account_id', accountId)
+      .eq('type', 'ticketShow')
+      .order('date', { ascending: false })
+      .limit(5)
+      .then(({ data }) => setLastTicketChats((data || []) as typeof lastTicketChats));
   }, [accountId, castName, activeTab, sb]);
 
   // ============================================================
@@ -1005,7 +1050,7 @@ function CastDetailInner() {
                   <div className="glass-card p-4">
                     <h3 className="text-sm font-bold mb-3">📊 ユーザーセグメント分析</h3>
                     <p className="text-[10px] mb-4" style={{ color: 'var(--text-muted)' }}>
-                      有料ユーザー全体をコイン累計額 × 最終課金日の2軸で10パターンに分類（アカウント全体）
+                      このキャストの有料ユーザーをコイン累計額 × 最終課金日の2軸で10パターンに分類（SPYデータ基準）
                     </p>
 
                     {segmentsLoading ? (
@@ -1037,6 +1082,62 @@ function CastDetailInner() {
                             <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>高優先ターゲット</p>
                           </div>
                         </div>
+
+                        {/* 直近チップ + チケットチャット */}
+                        {(lastTips.length > 0 || lastTicketChats.length > 0) && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                            {/* 最後のチップ（このキャスト） */}
+                            {lastTips.length > 0 && (
+                              <div className="glass-panel p-3 rounded-xl">
+                                <p className="text-[10px] font-bold mb-2" style={{ color: 'var(--text-muted)' }}>
+                                  💰 直近のチップ（このキャスト）
+                                </p>
+                                <div className="space-y-1">
+                                  {lastTips.map((t, i) => (
+                                    <div key={i} className="flex items-center justify-between text-[11px]">
+                                      <span className="truncate" style={{ color: 'var(--text-secondary)' }}>
+                                        {t.user_name || '?'}
+                                      </span>
+                                      <div className="flex items-center gap-2 flex-shrink-0">
+                                        <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                          {(t.tokens || 0).toLocaleString()} tk
+                                        </span>
+                                        <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                          {t.message_time ? new Date(t.message_time).toLocaleDateString('ja-JP') : '--'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {/* 直近のチケットチャット（アカウント全体） */}
+                            {lastTicketChats.length > 0 && (
+                              <div className="glass-panel p-3 rounded-xl">
+                                <p className="text-[10px] font-bold mb-2" style={{ color: 'var(--text-muted)' }}>
+                                  🎟 直近のチケットチャット（アカウント全体）
+                                </p>
+                                <div className="space-y-1">
+                                  {lastTicketChats.map((t, i) => (
+                                    <div key={i} className="flex items-center justify-between text-[11px]">
+                                      <span className="truncate" style={{ color: 'var(--text-secondary)' }}>
+                                        {t.user_name || '?'}
+                                      </span>
+                                      <div className="flex items-center gap-2 flex-shrink-0">
+                                        <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                          {(t.tokens || 0).toLocaleString()} tk
+                                        </span>
+                                        <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                          {t.date ? new Date(t.date).toLocaleDateString('ja-JP') : '--'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {/* セグメント一覧 */}
                         <div className="space-y-1.5">

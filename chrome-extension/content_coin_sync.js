@@ -34,22 +34,41 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'FETCH_PAYING_USERS') {
     console.log(LOG, '有料ユーザー一覧リクエスト受信');
     const baseUrl = window.location.origin;
-    const userId = getUserId();
-    if (!userId) {
-      sendResponse({ error: 'no_user_id', message: 'ユーザーIDを取得できません' });
-      return true;
-    }
-    fetchPayingUsers(baseUrl, userId, msg.options || {})
-      .then(users => sendResponse({ ok: true, users }))
-      .catch(err => sendResponse({ error: 'fetch_error', message: err.message }));
+    getUserId().then(userId => {
+      if (!userId) {
+        sendResponse({ error: 'no_user_id', message: 'ユーザーIDを取得できません' });
+        return;
+      }
+      return fetchPayingUsers(baseUrl, userId, msg.options || {})
+        .then(users => sendResponse({ ok: true, users }));
+    }).catch(err => sendResponse({ error: 'fetch_error', message: err.message }));
     return true;
   }
 });
 
 // ============================================================
-// ユーザーID取得（Morning Hook CRM 5段階フォールバック）
+// ユーザーID取得（6段階フォールバック）
 // ============================================================
-function getUserId() {
+async function getUserId() {
+  // 方法0: initial-dynamic APIから直接取得（最も信頼性が高い）
+  // Earningsページロード時に呼ばれるAPIで、現在ログイン中のモデルIDを返す
+  try {
+    const resp = await fetch('/api/front/v2/initial-dynamic?requestType=initial', {
+      credentials: 'include',
+      headers: { 'Accept': 'application/json' },
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const uid = data?.initialDynamic?.user?.id;
+      if (uid) {
+        console.log(LOG, 'ユーザーID取得(initial-dynamic API):', uid);
+        return String(uid);
+      }
+    }
+  } catch (e) {
+    console.warn(LOG, 'initial-dynamic API失敗:', e.message);
+  }
+
   // 方法1: Cookie stripchat_com_userId
   const cookieMatch = document.cookie.match(/stripchat_com_userId=(\d+)/);
   if (cookieMatch) {
@@ -82,7 +101,7 @@ function getUserId() {
     }
   }
 
-  // 方法4: Performance API URLパターン
+  // 方法4: Performance API URLパターン（フォールバック — 別キャストのIDを拾う場合あり）
   try {
     const entries = performance.getEntriesByType('resource');
     for (let i = entries.length - 1; i >= 0; i--) {
@@ -115,7 +134,7 @@ async function fetchCoinHistory(options = {}) {
   console.log(LOG, 'Origin:', baseUrl);
 
   // Step 1: ユーザーID取得 → Morning Hook APIを試行
-  const userId = getUserId();
+  const userId = await getUserId();
   if (userId) {
     console.log(LOG, 'Morning Hook API使用: userId=', userId);
     const result = await fetchViaUserTransactions(baseUrl, userId, options);
