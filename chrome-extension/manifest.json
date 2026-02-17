@@ -14,8 +14,7 @@
   "host_permissions": [
     "*://stripchat.com/*",
     "*://*.stripchat.com/*",
-    "https://ujgbhkllfeacbgpdbjto.supabase.co/*",
-    "http://localhost:8000/*"
+    "https://ujgbhkllfeacbgpdbjto.supabase.co/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -23,7 +22,7 @@
   "content_scripts": [
     {
       "matches": ["*://stripchat.com/*", "*://*.stripchat.com/*"],
-      "js": ["content_spy.js", "content_whisper.js", "dm_executor.js", "content_stt_relay.js", "content_coin_sync.js"],
+      "js": ["content_spy.js", "content_whisper.js", "dm_executor.js", "content_stt_relay.js"],
       "run_at": "document_idle"
     },
     {

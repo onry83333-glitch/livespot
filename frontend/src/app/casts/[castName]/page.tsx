@@ -1055,20 +1055,21 @@ function CastDetailInner() {
                         {tokensToJPY(thisWeekCoins, coinRate)}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-primary)' }}>SPY (tip/gift)</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-primary)' }}>このキャスト (SPY)</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--accent-amber)' }}>
                         {tokensToJPY(salesThisWeek, coinRate)}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週コイン API</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>coin_transactions</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>アカウント全体</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
                         {tokensToJPY(salesLastWeek, coinRate)}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週コイン API</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>アカウント全体</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{
@@ -1079,6 +1080,7 @@ function CastDetailInner() {
                           : '--'}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比 (API)</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>アカウント全体</p>
                     </div>
                   </div>
 
