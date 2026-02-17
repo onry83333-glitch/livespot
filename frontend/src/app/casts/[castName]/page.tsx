@@ -1,5 +1,8 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+declare const chrome: any;
+
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
@@ -85,6 +88,24 @@ interface PaidUserItem {
   last_payment_date: string | null;
 }
 
+interface DmScheduleItem {
+  id: string;
+  cast_name: string;
+  message: string;
+  target_segment: string | null;
+  target_usernames: string[] | null;
+  scheduled_at: string;
+  status: string;
+  sent_count: number;
+  total_count: number;
+  error_message: string | null;
+  campaign: string | null;
+  send_mode: string;
+  tab_count: number;
+  created_at: string;
+  completed_at: string | null;
+}
+
 const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'overview',  icon: '📊', label: '概要' },
   { key: 'sessions',  icon: '📺', label: '配信' },
@@ -155,6 +176,13 @@ function CastDetailInner() {
   const [dmResult, setDmResult] = useState<{ count: number; batch_id: string } | null>(null);
   const [dmStatusCounts, setDmStatusCounts] = useState({ total: 0, queued: 0, sending: 0, success: 0, error: 0 });
   const [dmBatchId, setDmBatchId] = useState<string | null>(null);
+
+  // DM Schedule state
+  const [dmScheduleMode, setDmScheduleMode] = useState(false);
+  const [dmScheduleDate, setDmScheduleDate] = useState('');
+  const [dmScheduleTime, setDmScheduleTime] = useState('');
+  const [dmSchedules, setDmSchedules] = useState<DmScheduleItem[]>([]);
+  const [dmScheduleSaving, setDmScheduleSaving] = useState(false);
 
   // DM Safety: 3-step confirmation
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -353,6 +381,15 @@ function CastDetailInner() {
       .order('created_at', { ascending: false })
       .limit(200)
       .then(({ data }) => setDmLogs((data || []) as DMLogItem[]));
+
+    // スケジュール一覧取得
+    sb.from('dm_schedules')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .order('scheduled_at', { ascending: false })
+      .limit(20)
+      .then(({ data }) => setDmSchedules((data || []) as DmScheduleItem[]));
   }, [accountId, castName, activeTab, sb]);
 
   // DM Realtime status polling
@@ -470,6 +507,81 @@ function CastDetailInner() {
   useEffect(() => {
     return () => { if (unlockTimerRef.current) clearTimeout(unlockTimerRef.current); };
   }, []);
+
+  // DM Schedule: 予約作成
+  const handleScheduleDm = useCallback(async () => {
+    if (dmTargets.size === 0 || !dmMessage.trim() || !accountId || !dmScheduleDate || !dmScheduleTime) return;
+    setDmScheduleSaving(true);
+    setDmError(null);
+
+    try {
+      const scheduledAt = new Date(`${dmScheduleDate}T${dmScheduleTime}:00`).toISOString();
+      const usernames = Array.from(dmTargets);
+      const campaignTag = dmCampaign.trim() || null;
+
+      const { data, error } = await sb.from('dm_schedules').insert({
+        account_id: accountId,
+        cast_name: castName,
+        message: dmMessage,
+        target_segment: null,
+        target_usernames: usernames,
+        scheduled_at: scheduledAt,
+        total_count: usernames.length,
+        campaign: campaignTag,
+        send_mode: dmSendMode,
+        tab_count: dmTabs,
+      }).select().single();
+
+      if (error) throw error;
+
+      // Chrome拡張にアラーム設定を依頼
+      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'SCHEDULE_DM',
+            scheduleId: data.id,
+            scheduledAt,
+          });
+        } catch {
+          console.warn('Chrome拡張へのスケジュール通知失敗（拡張が未インストールの可能性）');
+        }
+      }
+
+      // UIリセット
+      setDmSchedules(prev => [data as DmScheduleItem, ...prev]);
+      setDmTargets(new Set());
+      setDmMessage('');
+      setDmCampaign('');
+      setDmScheduleDate('');
+      setDmScheduleTime('');
+      setDmScheduleMode(false);
+    } catch (e: unknown) {
+      setDmError(e instanceof Error ? e.message : String(e));
+    }
+    setDmScheduleSaving(false);
+  }, [dmTargets, dmMessage, dmCampaign, dmSendMode, dmTabs, dmScheduleDate, dmScheduleTime, accountId, castName, sb]);
+
+  // DM Schedule: キャンセル
+  const handleCancelSchedule = useCallback(async (scheduleId: string) => {
+    const { error } = await sb
+      .from('dm_schedules')
+      .update({ status: 'cancelled' })
+      .eq('id', scheduleId)
+      .eq('status', 'pending');
+
+    if (error) return;
+
+    // Chrome拡張のアラーム解除
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      try {
+        await chrome.runtime.sendMessage({ type: 'CANCEL_DM_SCHEDULE', scheduleId });
+      } catch {
+        // 拡張未インストール
+      }
+    }
+
+    setDmSchedules(prev => prev.map(s => s.id === scheduleId ? { ...s, status: 'cancelled' } : s));
+  }, [sb]);
 
   // ============================================================
   // Analytics: retention + campaign effectiveness
@@ -902,15 +1014,52 @@ function CastDetailInner() {
                       placeholder="メッセージを入力... {username}でユーザー名置換" />
                   </div>
 
+                  {/* 送信モード: 即時 / スケジュール */}
+                  <div className="mb-3 flex items-center gap-3">
+                    <label className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>送信タイミング</label>
+                    <button onClick={() => setDmScheduleMode(false)}
+                      className={`text-[10px] px-3 py-1.5 rounded-lg ${!dmScheduleMode ? 'btn-primary' : 'btn-ghost'}`}>
+                      即時送信
+                    </button>
+                    <button onClick={() => setDmScheduleMode(true)}
+                      className={`text-[10px] px-3 py-1.5 rounded-lg ${dmScheduleMode ? 'btn-primary' : 'btn-ghost'}`}>
+                      🕐 スケジュール
+                    </button>
+                  </div>
+
+                  {dmScheduleMode && (
+                    <div className="mb-3 flex items-center gap-3">
+                      <input type="date" value={dmScheduleDate} onChange={e => setDmScheduleDate(e.target.value)}
+                        className="input-glass text-xs py-1.5 px-3"
+                        min={new Date().toISOString().split('T')[0]} />
+                      <input type="time" value={dmScheduleTime} onChange={e => setDmScheduleTime(e.target.value)}
+                        className="input-glass text-xs py-1.5 px-3" />
+                      {dmScheduleDate && dmScheduleTime && (
+                        <span className="text-[10px]" style={{ color: 'var(--accent-primary)' }}>
+                          {new Date(`${dmScheduleDate}T${dmScheduleTime}`).toLocaleString('ja-JP')} に送信予約
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between">
                     <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                       選択中: <span className="font-bold text-white">{dmTargets.size}</span> 名
                     </span>
-                    <button onClick={() => setShowConfirmModal(true)}
-                      disabled={dmSending || dmTargets.size === 0 || !dmMessage.trim()}
-                      className="btn-primary text-xs py-1.5 px-5 disabled:opacity-50">
-                      {dmSending ? '送信中...' : '送信確認'}
-                    </button>
+                    {dmScheduleMode ? (
+                      <button onClick={handleScheduleDm}
+                        disabled={dmScheduleSaving || dmTargets.size === 0 || !dmMessage.trim() || !dmScheduleDate || !dmScheduleTime}
+                        className="text-xs py-1.5 px-5 rounded-xl font-semibold disabled:opacity-50 transition-all"
+                        style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple, #a855f7))', color: 'white' }}>
+                        {dmScheduleSaving ? '予約中...' : '🕐 送信予約'}
+                      </button>
+                    ) : (
+                      <button onClick={() => setShowConfirmModal(true)}
+                        disabled={dmSending || dmTargets.size === 0 || !dmMessage.trim()}
+                        className="btn-primary text-xs py-1.5 px-5 disabled:opacity-50">
+                        {dmSending ? '送信中...' : '送信確認'}
+                      </button>
+                    )}
                   </div>
 
                   {dmError && <p className="mt-2 text-xs" style={{ color: 'var(--accent-pink)' }}>{dmError}</p>}
@@ -960,6 +1109,60 @@ function CastDetailInner() {
                     </div>
                   )}
                 </div>
+
+                {/* Scheduled DMs */}
+                {dmSchedules.length > 0 && (
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3">📋 予約済みDM</h3>
+                    <div className="space-y-2 max-h-60 overflow-auto">
+                      {dmSchedules.map(sched => {
+                        const statusIcon = sched.status === 'pending' ? '⏳' : sched.status === 'sending' ? '📤' :
+                          sched.status === 'completed' ? '✅' : sched.status === 'cancelled' ? '🚫' : '❌';
+                        const statusColor = sched.status === 'pending' ? 'var(--accent-amber)' : sched.status === 'sending' ? 'var(--accent-primary)' :
+                          sched.status === 'completed' ? 'var(--accent-green)' : 'var(--text-muted)';
+                        return (
+                          <div key={sched.id} className="glass-panel px-3 py-2.5 rounded-xl">
+                            <div className="flex items-start justify-between">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 text-[11px]">
+                                  <span>{statusIcon}</span>
+                                  <span className="font-semibold">{new Date(sched.scheduled_at).toLocaleString('ja-JP')}</span>
+                                  <span style={{ color: 'var(--text-muted)' }}>
+                                    対象: {sched.target_usernames ? `${sched.target_usernames.length}名` : sched.target_segment || '--'}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] mt-1 truncate" style={{ color: 'var(--text-secondary)' }}>
+                                  {sched.message}
+                                </p>
+                                {sched.campaign && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded mt-1 inline-block"
+                                    style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
+                                    {sched.campaign}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex-shrink-0 ml-2 text-right">
+                                <span className="text-[10px] font-bold" style={{ color: statusColor }}>
+                                  {sched.status === 'completed' ? `${sched.sent_count}/${sched.total_count}` : sched.status}
+                                </span>
+                                {sched.status === 'pending' && (
+                                  <button onClick={() => handleCancelSchedule(sched.id)}
+                                    className="block text-[9px] mt-1 px-2 py-0.5 rounded-lg hover:bg-rose-500/10 transition-all"
+                                    style={{ color: 'var(--accent-pink)' }}>
+                                    キャンセル
+                                  </button>
+                                )}
+                                {sched.error_message && (
+                                  <p className="text-[9px] mt-1" style={{ color: 'var(--accent-pink)' }}>{sched.error_message}</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Target selection */}

@@ -64,6 +64,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     checkHeartbeatTimeout();
     cleanupStaleSTTTabs();
   }
+  // DMスケジュール発火
+  if (alarm.name.startsWith('dm_schedule_')) {
+    const scheduleId = alarm.name.replace('dm_schedule_', '');
+    console.log('[LS-BG] DMスケジュールアラーム発火:', scheduleId);
+    executeDmSchedule(scheduleId).catch(e => {
+      console.error('[LS-BG] DMスケジュール実行失敗:', e.message);
+    });
+  }
 });
 
 // STTタブの古いエントリをクリーンアップ（60秒以上チャンクなし）
@@ -904,6 +912,36 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     });
     return true;
+  }
+
+  // --- Frontend: DM Schedule 予約 ---
+  if (msg.type === 'SCHEDULE_DM') {
+    const { scheduleId, scheduledAt } = msg;
+    const delayMs = new Date(scheduledAt).getTime() - Date.now();
+    console.log('[LS-BG] SCHEDULE_DM受信: id=', scheduleId, 'at=', scheduledAt, 'delay=', delayMs, 'ms');
+
+    if (delayMs <= 60000) {
+      // 1分以内 → 即時実行
+      executeDmSchedule(scheduleId).catch(e => {
+        console.error('[LS-BG] DMスケジュール即時実行失敗:', e.message);
+      });
+    } else {
+      // chrome.alarmsで予約（分単位、最低1分）
+      const delayMinutes = Math.max(1, Math.ceil(delayMs / 60000));
+      chrome.alarms.create(`dm_schedule_${scheduleId}`, { delayInMinutes: delayMinutes });
+      console.log('[LS-BG] DMスケジュールアラーム設定:', delayMinutes, '分後');
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- Frontend: DM Schedule キャンセル ---
+  if (msg.type === 'CANCEL_DM_SCHEDULE') {
+    const { scheduleId } = msg;
+    chrome.alarms.clear(`dm_schedule_${scheduleId}`);
+    console.log('[LS-BG] DMスケジュールアラーム解除:', scheduleId);
+    sendResponse({ ok: true });
+    return false;
   }
 
   // --- Popup: Toggle SPY ---
@@ -1899,6 +1937,220 @@ async function processDMPipeline(tabCount) {
   }
 
   console.log('[LS-BG] ========== パイプラインDM完了 ==========');
+}
+
+/**
+ * DMスケジュール実行
+ * dm_schedulesからスケジュール情報を取得し、dm_send_logにキュー登録して既存パイプラインに委譲
+ */
+async function executeDmSchedule(scheduleId) {
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    console.error('[LS-BG] DMスケジュール実行失敗: 認証情報なし');
+    return;
+  }
+
+  console.log('[LS-BG] DMスケジュール実行開始:', scheduleId);
+
+  try {
+    // 1. スケジュール情報を取得
+    const schedRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}&select=*`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!schedRes.ok) throw new Error(`スケジュール取得失敗: HTTP ${schedRes.status}`);
+    const schedArr = await schedRes.json();
+    if (!Array.isArray(schedArr) || schedArr.length === 0) {
+      console.warn('[LS-BG] DMスケジュール未検出:', scheduleId);
+      return;
+    }
+    const schedule = schedArr[0];
+
+    // pending以外は処理しない
+    if (schedule.status !== 'pending') {
+      console.log('[LS-BG] DMスケジュールスキップ: status=', schedule.status);
+      return;
+    }
+
+    // 2. ステータスを 'sending' に更新
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ status: 'sending' }),
+      }
+    );
+
+    // 3. 送信先ユーザーリストを組み立て
+    let usernames = schedule.target_usernames || [];
+
+    if (usernames.length === 0 && schedule.target_segment) {
+      // セグメント指定の場合: get_user_segments RPCからユーザー名を抽出
+      const segRes = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/rpc/get_user_segments`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            p_account_id: schedule.account_id,
+            p_cast_name: schedule.cast_name,
+          }),
+        }
+      );
+      if (segRes.ok) {
+        const segData = await segRes.json();
+        const targetSegs = schedule.target_segment === 'all'
+          ? null
+          : schedule.target_segment.split(',').map(s => s.trim());
+
+        const segments = Array.isArray(segData) ? segData : [];
+        for (const seg of segments) {
+          if (targetSegs && !targetSegs.includes(seg.segment_id)) continue;
+          if (Array.isArray(seg.users)) {
+            for (const u of seg.users) {
+              if (u.user_name && !usernames.includes(u.user_name)) {
+                usernames.push(u.user_name);
+              }
+            }
+          }
+        }
+      } else {
+        console.error('[LS-BG] セグメントRPC失敗:', segRes.status);
+      }
+    }
+
+    if (usernames.length === 0) {
+      console.warn('[LS-BG] DMスケジュール: 送信先なし');
+      await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({ status: 'failed', error_message: '送信先ユーザーが見つかりません' }),
+        }
+      );
+      return;
+    }
+
+    // 4. total_count更新
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ total_count: usernames.length }),
+      }
+    );
+
+    // 5. dm_send_logにキュー登録（既存パイプラインが処理する）
+    const sendMode = schedule.send_mode || 'pipeline';
+    const tabCount = schedule.tab_count || 3;
+    const modePrefix = sendMode === 'pipeline' ? `pipe${tabCount}` : 'seq';
+    const campaignTag = schedule.campaign ? `${schedule.campaign}_` : '';
+    const batchCampaign = `${modePrefix}_${campaignTag}sched_${scheduleId.substring(0, 8)}`;
+
+    const rows = usernames.map(un => ({
+      account_id: schedule.account_id,
+      user_name: un,
+      profile_url: `https://stripchat.com/${un}`,
+      message: schedule.message,
+      status: 'queued',
+      campaign: batchCampaign,
+      cast_name: schedule.cast_name,
+    }));
+
+    // バッチINSERT（50件ずつ）
+    for (let i = 0; i < rows.length; i += 50) {
+      const batch = rows.slice(i, i + 50);
+      const insertRes = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify(batch),
+        }
+      );
+      if (!insertRes.ok) {
+        console.error('[LS-BG] DMスケジュール: dm_send_log INSERT失敗:', insertRes.status);
+      }
+    }
+
+    console.log('[LS-BG] DMスケジュール: dm_send_logに', usernames.length, '件キュー登録完了 campaign=', batchCampaign);
+
+    // 6. DMポーリングが動いていなければ開始（既存パイプラインが自動的に処理）
+    startDMPolling();
+
+    // 7. dm_schedulesのステータスを完了に（送信自体は既存パイプラインに委譲）
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          status: 'completed',
+          sent_count: usernames.length,
+          completed_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    console.log('[LS-BG] DMスケジュール完了:', scheduleId, usernames.length, '件');
+  } catch (e) {
+    console.error('[LS-BG] DMスケジュール実行例外:', e.message);
+    // エラーステータス更新
+    try {
+      await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({ status: 'failed', error_message: e.message }),
+        }
+      );
+    } catch (patchErr) {
+      console.error('[LS-BG] DMスケジュールエラー更新失敗:', patchErr.message);
+    }
+  }
 }
 
 /**
