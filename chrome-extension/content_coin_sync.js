@@ -120,10 +120,10 @@ async function fetchCoinHistory(options = {}) {
     console.log(LOG, 'Morning Hook API使用: userId=', userId);
     const result = await fetchViaUserTransactions(baseUrl, userId, options);
 
-    // 有料ユーザー一覧も同時取得
+    // 有料ユーザー一覧も同時取得（全ページ: 7568名 ÷ 100 = 76ページ）
     if (result.ok) {
       try {
-        const payingUsers = await fetchPayingUsers(baseUrl, userId, { maxPages: 5 });
+        const payingUsers = await fetchPayingUsers(baseUrl, userId, { maxPages: 100 });
         result.payingUsers = payingUsers;
         console.log(LOG, '有料ユーザー一覧:', payingUsers.length, '名同時取得');
       } catch (e) {
@@ -154,6 +154,7 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
   let offset = 0;
   let page = 0;
   let retryCount = 0;
+  let numberOfTransactions = null; // APIレスポンスの全件数
 
   // 365日分のデータを取得（coin_api.py: COIN_API_DAYS_BACK = 365）
   const now = new Date();
@@ -218,6 +219,12 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
         }
       }
 
+      // 初回でnumberOfTransactionsを取得（全件数の把握）
+      if (numberOfTransactions === null && !Array.isArray(data) && data.numberOfTransactions !== undefined) {
+        numberOfTransactions = data.numberOfTransactions;
+        console.log(LOG, `トランザクション総数: ${numberOfTransactions.toLocaleString()}件`);
+      }
+
       // coin_api.py: data.get("transactions", [])
       // フォールバック: レスポンスが配列の場合、items/data キーも試行
       const transactions = Array.isArray(data) ? data
@@ -255,7 +262,14 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
       }
 
       offset += limit;
-      await sleep(500); // coin_api.py: COIN_API_RATE_LIMIT = 0.5
+
+      // 10ページごとに追加待機（429レート制限予防）
+      if (page % 10 === 0) {
+        console.log(LOG, `${page}ページ完了 — 2秒追加待機（429予防）`);
+        await sleep(2000);
+      } else {
+        await sleep(500); // coin_api.py: COIN_API_RATE_LIMIT = 0.5
+      }
     } catch (err) {
       console.error(LOG, `ネットワークエラー: ${err.message}`);
       console.log(LOG, '取得済み分を返します。');
@@ -266,8 +280,9 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
     }
   }
 
-  console.log(LOG, `合計 ${allTransactions.length}件 のトランザクションを取得`);
-  return { ok: true, transactions: allTransactions, pages: page };
+  const totalStr = numberOfTransactions !== null ? ` / 全 ${numberOfTransactions.toLocaleString()}件` : '';
+  console.log(LOG, `合計 ${allTransactions.length}件${totalStr} のトランザクションを取得`);
+  return { ok: true, transactions: allTransactions, pages: page, numberOfTransactions };
 }
 
 /**
@@ -297,15 +312,15 @@ function parseTransaction(tx) {
   return {
     id: txId,
     userName: userName,
-    userId: userInfo.id || tx.userId || tx.user_id || 0,
-    tokens: tx.tokens || tx.amount || tx.coins || tx.token || 0,
-    amount: tx.amount || 0,
+    userId: userInfo.id ?? tx.userId ?? tx.user_id ?? 0,
+    tokens: tx.tokens ?? 0,
+    amount: tx.amount ?? 0,
     type: tx.type || tx.transaction_type || tx.transactionType || tx.category || '',
     date: tx.date || tx.created_at || tx.createdAt || tx.timestamp || '',
     sourceType: source.type || tx.sourceType || tx.source_type || '',
     triggerType: tipData.triggerType || tx.triggerType || tx.trigger_type || '',
     sourceDetail: source.type || tipData.triggerType || '',
-    isAnonymous: tipData.isAnonymous ? 1 : 0,
+    isAnonymous: tx.isAnonymous || tipData.isAnonymous ? 1 : 0,
   };
 }
 
@@ -407,7 +422,14 @@ async function fetchPayingUsers(baseUrl, userId, options = {}) {
         break;
       }
       offset += limit;
-      await sleep(500);
+
+      // 10ページごとに追加待機（429予防）
+      if (page % 10 === 0) {
+        console.log(LOG, `[users] ${page}ページ完了 — 2秒追加待機（429予防）`);
+        await sleep(2000);
+      } else {
+        await sleep(500);
+      }
     } catch (err) {
       console.error(LOG, `[users] ネットワークエラー: ${err.message}`);
       break;

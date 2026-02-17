@@ -1069,8 +1069,8 @@ async function handleCoinSync() {
 
 /**
  * コイントランザクションデータをSupabase REST APIで直接保存
- * 1. coin_transactions INSERT
- * 2. paid_users UPSERT（ユーザー別集計）
+ * 1. coin_transactions UPSERT（500件バッチ、stripchat_tx_idで重複排除）
+ * 2. paid_users UPSERT（ユーザー別集計、500件バッチ）
  * 3. refresh_paying_users RPC（マテビュー更新）
  */
 async function processCoinSyncData(transactions) {
@@ -1079,72 +1079,96 @@ async function processCoinSyncData(transactions) {
     return { ok: false, error: '認証エラー' };
   }
 
-  // フィールドマッピング（Stripchat API → coin_transactions）
+  const BATCH_SIZE = 500;
+  const now = new Date().toISOString();
+
+  // フィールドマッピング（content_coin_sync.js parseTransaction → coin_transactions）
   const txRows = [];
   for (const tx of transactions) {
     const userName = tx.userName || tx.user_name || tx.username || '';
-    const tokens = parseInt(tx.tokens || tx.amount || 0, 10);
-    const txType = tx.type || tx.source || 'unknown';
-    const txDate = tx.date || tx.createdAt || tx.created_at || new Date().toISOString();
-    const sourceDetail = tx.description || tx.sourceDetail || '';
+    const tokens = parseInt(tx.tokens ?? 0, 10);
+    const txType = tx.type || 'unknown';
+    const txDate = tx.date || now;
+    const sourceDetail = tx.sourceDetail || tx.sourceType || '';
+    const stripchatTxId = tx.id ?? null;
 
     if (!userName) continue;
 
     txRows.push({
       account_id: accountId,
+      stripchat_tx_id: stripchatTxId,
       user_name: userName,
+      user_id: tx.userId || null,
       tokens: tokens,
+      amount: tx.amount ?? null,
       type: txType,
       date: txDate,
       source_detail: sourceDetail,
+      is_anonymous: tx.isAnonymous === 1,
+      synced_at: now,
     });
   }
+
+  console.log('[LS-BG] coin_transactions マッピング完了:', txRows.length, '/', transactions.length, '件（userName無しスキップ:', transactions.length - txRows.length, '件）');
 
   if (txRows.length === 0) {
     return { ok: true, synced: 0, message: '有効なトランザクションがありません' };
   }
 
-  // 1. coin_transactions INSERT
+  // 1. coin_transactions UPSERT（500件バッチ、stripchat_tx_idで重複排除）
   let insertedTx = 0;
-  try {
-    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions`, {
-      method: 'POST',
-      headers: {
-        'apikey': CONFIG.SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal',
-      },
-      body: JSON.stringify(txRows),
-    });
+  let batchErrors = 0;
+  const totalBatches = Math.ceil(txRows.length / BATCH_SIZE);
+  console.log('[LS-BG] coin_transactions upsert開始:', txRows.length, '件 /', totalBatches, 'バッチ');
 
-    if (res.ok || res.status === 201) {
-      insertedTx = txRows.length;
-      console.log('[LS-BG] coin_transactions INSERT成功:', insertedTx, '件');
-    } else {
-      const errText = await res.text().catch(() => '');
-      console.warn('[LS-BG] coin_transactions INSERT失敗:', res.status, errText);
-      // 重複エラー(409)の場合は続行
-      if (res.status !== 409) {
-        return { ok: false, error: `DB挿入エラー: HTTP ${res.status}` };
+  for (let i = 0; i < txRows.length; i += BATCH_SIZE) {
+    const batch = txRows.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+
+    try {
+      const res = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions?on_conflict=account_id,stripchat_tx_id`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=minimal',
+          },
+          body: JSON.stringify(batch),
+        }
+      );
+
+      if (res.ok || res.status === 201) {
+        insertedTx += batch.length;
+        console.log('[LS-BG] coin_transactions upsert バッチ', batchNum, '/', totalBatches, ':', batch.length, '件成功（累計', insertedTx, '件）');
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn('[LS-BG] coin_transactions upsert バッチ', batchNum, '失敗:', res.status, errText.substring(0, 200));
+        batchErrors++;
       }
-      console.log('[LS-BG] 一部重複あり — paid_users更新を続行');
+    } catch (err) {
+      console.error('[LS-BG] coin_transactions upsert バッチ', batchNum, '例外:', err.message);
+      batchErrors++;
     }
-  } catch (err) {
-    console.error('[LS-BG] coin_transactions INSERT例外:', err.message);
-    return { ok: false, error: 'DB接続エラー: ' + err.message };
   }
 
-  // 2. paid_users UPSERT（ユーザー別集計）
+  console.log('[LS-BG] coin_transactions upsert完了:', insertedTx, '件成功 / エラーバッチ:', batchErrors);
+
+  // 2. paid_users UPSERT（トランザクションからユーザー別集計）
   const userAgg = {};
   for (const row of txRows) {
     const un = row.user_name;
     if (!userAgg[un]) {
-      userAgg[un] = { total_coins: 0, last_payment_date: null };
+      userAgg[un] = { total_coins: 0, last_payment_date: null, user_id: null };
     }
     userAgg[un].total_coins += row.tokens;
     if (!userAgg[un].last_payment_date || row.date > userAgg[un].last_payment_date) {
       userAgg[un].last_payment_date = row.date;
+    }
+    if (row.user_id) {
+      userAgg[un].user_id = row.user_id;
     }
   }
 
@@ -1153,28 +1177,44 @@ async function processCoinSyncData(transactions) {
     user_name: un,
     total_coins: agg.total_coins,
     last_payment_date: agg.last_payment_date,
+    user_id_stripchat: agg.user_id ? String(agg.user_id) : null,
   }));
 
-  try {
-    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/paid_users`, {
-      method: 'POST',
-      headers: {
-        'apikey': CONFIG.SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify(userRows),
-    });
+  let insertedUsers = 0;
+  const userBatches = Math.ceil(userRows.length / BATCH_SIZE);
 
-    if (res.ok || res.status === 201) {
-      console.log('[LS-BG] paid_users UPSERT成功:', userRows.length, '件');
-    } else {
-      console.warn('[LS-BG] paid_users UPSERT失敗:', res.status);
+  for (let i = 0; i < userRows.length; i += BATCH_SIZE) {
+    const batch = userRows.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+
+    try {
+      const res = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/paid_users?on_conflict=account_id,user_name`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=minimal',
+          },
+          body: JSON.stringify(batch),
+        }
+      );
+
+      if (res.ok || res.status === 201) {
+        insertedUsers += batch.length;
+        console.log('[LS-BG] paid_users upsert バッチ', batchNum, '/', userBatches, ':', batch.length, '件成功');
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn('[LS-BG] paid_users upsert バッチ', batchNum, '失敗:', res.status, errText.substring(0, 200));
+      }
+    } catch (err) {
+      console.warn('[LS-BG] paid_users upsert バッチ', batchNum, '例外:', err.message);
     }
-  } catch (err) {
-    console.warn('[LS-BG] paid_users UPSERT例外:', err.message);
   }
+
+  console.log('[LS-BG] paid_users upsert完了:', insertedUsers, '/', userRows.length, '名');
 
   // 3. refresh_paying_users RPC（マテビュー更新）
   try {
@@ -1194,28 +1234,30 @@ async function processCoinSyncData(transactions) {
 
   // 同期ステータス保存
   await chrome.storage.local.set({
-    last_coin_sync: new Date().toISOString(),
+    last_coin_sync: now,
     coin_sync_count: insertedTx,
   });
 
   console.log('[LS-BG] ========== Coin同期完了 ==========');
-  console.log('[LS-BG] トランザクション:', insertedTx, '件 / ユーザー:', userRows.length, '名');
+  console.log('[LS-BG] トランザクション:', insertedTx, '件 / ユーザー:', insertedUsers, '名');
 
   return {
     ok: true,
     synced: insertedTx,
-    users: userRows.length,
-    message: `${insertedTx}件のトランザクション、${userRows.length}名のユーザーを同期しました`,
+    users: insertedUsers,
+    message: `${insertedTx}件のトランザクション、${insertedUsers}名のユーザーを同期しました`,
   };
 }
 
 /**
  * 有料ユーザー一覧データ（/transactions/users API）をpaid_usersにUPSERT
+ * 500件バッチ、on_conflict=account_id,user_name で重複排除
  */
 async function processPayingUsersData(payingUsers) {
   await loadAuth();
   if (!accountId || !accessToken) return;
 
+  const BATCH_SIZE = 500;
   const rows = payingUsers
     .filter(u => u.userName)
     .map(u => ({
@@ -1223,30 +1265,47 @@ async function processPayingUsersData(payingUsers) {
       user_name: u.userName,
       total_coins: u.totalTokens || 0,
       last_payment_date: u.lastPaid || null,
+      user_id_stripchat: u.userId ? String(u.userId) : null,
     }));
 
   if (rows.length === 0) return;
 
-  try {
-    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/paid_users`, {
-      method: 'POST',
-      headers: {
-        'apikey': CONFIG.SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=minimal',
-      },
-      body: JSON.stringify(rows),
-    });
+  let insertedCount = 0;
+  const totalBatches = Math.ceil(rows.length / BATCH_SIZE);
+  console.log('[LS-BG] paid_users upsert開始（有料ユーザーAPI）:', rows.length, '名 /', totalBatches, 'バッチ');
 
-    if (res.ok || res.status === 201) {
-      console.log('[LS-BG] paid_users UPSERT成功（有料ユーザー一覧API）:', rows.length, '名');
-    } else {
-      console.warn('[LS-BG] paid_users UPSERT失敗:', res.status);
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+
+    try {
+      const res = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/paid_users?on_conflict=account_id,user_name`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=minimal',
+          },
+          body: JSON.stringify(batch),
+        }
+      );
+
+      if (res.ok || res.status === 201) {
+        insertedCount += batch.length;
+        console.log('[LS-BG] paid_users upsert バッチ', batchNum, '/', totalBatches, ':', batch.length, '名成功（累計', insertedCount, '名）');
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn('[LS-BG] paid_users upsert バッチ', batchNum, '失敗:', res.status, errText.substring(0, 200));
+      }
+    } catch (err) {
+      console.warn('[LS-BG] paid_users upsert バッチ', batchNum, '例外:', err.message);
     }
-  } catch (err) {
-    console.warn('[LS-BG] paid_users UPSERT例外:', err.message);
   }
+
+  console.log('[LS-BG] paid_users upsert完了（有料ユーザーAPI）:', insertedCount, '/', rows.length, '名');
 }
 
 // ============================================================
