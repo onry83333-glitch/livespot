@@ -8,6 +8,7 @@ import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
 import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
+import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 
 /* ============================================================
    Types
@@ -178,6 +179,12 @@ function CastDetailInner() {
   const [segmentsLoading, setSegmentsLoading] = useState(false);
   const [expandedSegment, setExpandedSegment] = useState<string | null>(null);
 
+  // Coin sync alert
+  const [daysSinceSync, setDaysSinceSync] = useState<number | null>(null);
+
+  // Realtime: paid_users color cache
+  const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
+
   // Realtime
   const { messages: realtimeMessages, isConnected } = useRealtimeSpy({
     castName,
@@ -230,6 +237,44 @@ function CastDetailInner() {
       setLoading(false);
     });
   }, [accountId, castName, sb]);
+
+  // ============================================================
+  // Coin sync alert: 最終同期からの経過日数
+  // ============================================================
+  useEffect(() => {
+    if (!accountId) return;
+    sb.from('coin_transactions')
+      .select('date')
+      .eq('account_id', accountId)
+      .order('date', { ascending: false })
+      .limit(1)
+      .single()
+      .then(({ data }) => {
+        if (data?.date) {
+          const diff = Math.floor((Date.now() - new Date(data.date).getTime()) / (1000 * 60 * 60 * 24));
+          setDaysSinceSync(diff);
+        }
+      });
+  }, [accountId, sb]);
+
+  // ============================================================
+  // Realtime: paid_users color cache
+  // ============================================================
+  useEffect(() => {
+    if (activeTab !== 'realtime' || !accountId) return;
+    sb.from('paid_users')
+      .select('user_name, total_coins')
+      .eq('account_id', accountId)
+      .order('total_coins', { ascending: false })
+      .limit(500)
+      .then(({ data }) => {
+        const map = new Map<string, number>();
+        (data || []).forEach((u: { user_name: string; total_coins: number }) => {
+          map.set(u.user_name, u.total_coins);
+        });
+        setPaidUserCoins(map);
+      });
+  }, [activeTab, accountId, sb]);
 
   // ============================================================
   // Overview: weekly revenue
@@ -590,6 +635,24 @@ function CastDetailInner() {
         </div>
       </div>
 
+      {/* Coin sync alert */}
+      {daysSinceSync !== null && daysSinceSync >= 3 && (
+        <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs mb-2 ${
+          daysSinceSync >= 7 ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+          daysSinceSync >= 5 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
+          'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+        }`}>
+          <span>{daysSinceSync >= 7 ? '🔴' : daysSinceSync >= 5 ? '🟡' : '🔵'}</span>
+          <span>
+            コイン履歴が <strong>{daysSinceSync}日間</strong> 更新されていません。
+            <a href="https://ja.stripchat.com/earnings/tokens-history"
+               target="_blank" rel="noopener" className="underline ml-1">
+              Earningsページを開いて同期 →
+            </a>
+          </span>
+        </div>
+      )}
+
       {loading && activeTab !== 'realtime' ? (
         <div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>
       ) : (
@@ -677,7 +740,7 @@ function CastDetailInner() {
                           <span className="font-bold w-4 text-center" style={{
                             color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
                           }}>{i + 1}</span>
-                          <span className="truncate font-medium">{f.user_name}</span>
+                          <span className="truncate font-medium" style={{ color: getUserColorFromCoins(f.total_tokens || 0) }}>{f.user_name}</span>
                         </div>
                         <div className="flex-shrink-0 text-right">
                           <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{f.total_tokens.toLocaleString()} tk</span>
@@ -1038,7 +1101,7 @@ function CastDetailInner() {
                                             <span className="font-bold w-5 text-center text-[10px]" style={{
                                               color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
                                             }}>{i + 1}</span>
-                                            <span className="truncate font-medium">{u.user_name}</span>
+                                            <span className="truncate font-medium" style={{ color: getUserColorFromCoins(u.total_coins) }}>{u.user_name}</span>
                                           </div>
                                           <div className="flex items-center gap-3 flex-shrink-0">
                                             <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
@@ -1286,7 +1349,7 @@ function CastDetailInner() {
                                 <span className="font-bold w-4 text-center" style={{
                                   color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
                                 }}>{i + 1}</span>
-                                <span className="truncate font-medium">{u.user_name}</span>
+                                <span className="truncate font-medium" style={{ color: getUserColorFromCoins(u.total_coins) }}>{u.user_name}</span>
                               </div>
                               <div className="flex-shrink-0 text-right">
                                 <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
@@ -1358,7 +1421,13 @@ function CastDetailInner() {
                   <div className="flex items-center justify-center h-full">
                     <p className="text-sm" style={{ color: 'var(--text-muted)' }}>リアルタイムメッセージを待機中...</p>
                   </div>
-                ) : realtimeMessages.map(msg => <ChatMessage key={msg.id} message={msg} />)}
+                ) : realtimeMessages.map(msg => {
+                  const coins = msg.user_name ? paidUserCoins.get(msg.user_name) : undefined;
+                  const enriched = coins && !msg.user_color
+                    ? { ...msg, user_color: getUserColorFromCoins(coins) }
+                    : msg;
+                  return <ChatMessage key={msg.id} message={enriched} />;
+                })}
               </div>
             </div>
           )}

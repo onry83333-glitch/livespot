@@ -156,6 +156,15 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
   let retryCount = 0;
   let numberOfTransactions = null; // APIレスポンスの全件数
 
+  // 差分同期: sinceISOが指定されている場合、1日バッファ付きのカットオフ日を設定
+  const sinceISO = options.sinceISO || null;
+  const cutoffDate = sinceISO
+    ? new Date(new Date(sinceISO).getTime() - 24 * 60 * 60 * 1000)
+    : null;
+  if (cutoffDate) {
+    console.log(LOG, `差分同期モード: ${sinceISO} 以降（バッファ: ${cutoffDate.toISOString()}）`);
+  }
+
   // 365日分のデータを取得（coin_api.py: COIN_API_DAYS_BACK = 365）
   const now = new Date();
   const from = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
@@ -256,6 +265,16 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
       }
 
       console.log(LOG, `ページ ${page}: ${transactions.length}件取得（累計 ${allTransactions.length}件）`);
+
+      // 差分モード: カットオフ日より前のデータが出たら打ち切り
+      if (cutoffDate && transactions.length > 0) {
+        const lastTx = transactions[transactions.length - 1];
+        const lastDate = new Date(lastTx.date || lastTx.created_at || '');
+        if (lastDate < cutoffDate) {
+          console.log(LOG, `差分取得完了: 最終トランザクション ${lastDate.toISOString()} がカットオフ ${cutoffDate.toISOString()} より前`);
+          break;
+        }
+      }
 
       if (transactions.length < limit) {
         console.log(LOG, '最終ページ到達 → 取得完了');

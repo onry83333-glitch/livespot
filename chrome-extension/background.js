@@ -977,6 +977,23 @@ async function handleCoinSync() {
     return { ok: false, error: 'ログインしてアカウントを選択してください' };
   }
 
+  // ===== 差分同期ロジック =====
+  const syncStorageKey = `coin_sync_last_${accountId}`;
+  const stored = await chrome.storage.local.get(syncStorageKey);
+  const lastSyncISO = stored[syncStorageKey] || null;
+  const now = new Date();
+
+  const FULL_SYNC_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30日
+  const isFullSync = !lastSyncISO ||
+    (now.getTime() - new Date(lastSyncISO).getTime()) > FULL_SYNC_INTERVAL_MS;
+
+  if (isFullSync) {
+    console.log('[LS-BG] CoinSync: フル同期モード（全件取得）');
+  } else {
+    console.log(`[LS-BG] CoinSync: 差分同期モード（${lastSyncISO} 以降）`);
+  }
+  // ===========================
+
   // Step 1: earningsページのタブを探す、なければStripchatタブを遷移
   let targetTab;
 
@@ -1027,12 +1044,17 @@ async function handleCoinSync() {
     return { ok: false, error: 'Content script注入失敗: ' + injectErr.message };
   }
 
-  // Step 3: FETCH_COINS送信（coin_api.py準拠: 365日分、ページ制限なし）
+  // Step 3: FETCH_COINS送信
+  const fetchOptions = isFullSync
+    ? { maxPages: 600, limit: 100 }
+    : { maxPages: 600, limit: 100, sinceISO: lastSyncISO };
+  console.log('[LS-BG] FETCH_COINS options:', JSON.stringify(fetchOptions));
+
   let fetchResult;
   try {
     fetchResult = await chrome.tabs.sendMessage(targetTab.id, {
       type: 'FETCH_COINS',
-      options: { maxPages: 600, limit: 100 },
+      options: fetchOptions,
     });
   } catch (err) {
     console.error('[LS-BG] FETCH_COINS送信失敗:', err.message);
@@ -1063,6 +1085,10 @@ async function handleCoinSync() {
     result.payingUsers = payingUsers.length;
     result.message = `${result.synced || 0}件のトランザクション、${payingUsers.length}名の有料ユーザーを同期しました`;
   }
+
+  // 同期完了日時を保存（差分同期の基準点）
+  await chrome.storage.local.set({ [syncStorageKey]: now.toISOString() });
+  console.log(`[LS-BG] CoinSync: 同期日時保存 ${now.toISOString()}`);
 
   return result;
 }
