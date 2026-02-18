@@ -838,28 +838,46 @@ function CastDetailInner() {
     });
   }, [accountId, castName, activeTab, acqDays, acqMinCoins, acqMaxCoins, sb]);
 
-  // Target search handler
-  const handleSearchUser = useCallback(() => {
+  // Target search handler — 複数ユーザー改行区切り対応
+  const handleSearchUser = useCallback(async () => {
     if (!accountId || !searchQuery.trim()) return;
+    const names = Array.from(new Set(
+      searchQuery.split('\n').map(s => s.trim()).filter(Boolean)
+    ));
+    if (names.length === 0) return;
     setSearchLoading(true);
-    sb.rpc('search_user_detail', {
-      p_account_id: accountId,
-      p_cast_name: castName,
-      p_user_name: searchQuery.trim(),
-    }).then(({ data, error }) => {
-      if (error) {
-        console.warn('[search] RPC error:', error.message);
-        setSearchResults([]);
-      } else {
-        const results = (data || []).map((r: Record<string, unknown>) => ({
-          ...r,
-          dm_history: Array.isArray(r.dm_history) ? r.dm_history : [],
-          recent_transactions: Array.isArray(r.recent_transactions) ? r.recent_transactions : [],
-        }));
-        setSearchResults(results as typeof searchResults);
-      }
-      setSearchLoading(false);
-    });
+    setSearchResults([]);
+    try {
+      const results = await Promise.all(
+        names.map(name =>
+          sb.rpc('search_user_detail', {
+            p_account_id: accountId,
+            p_cast_name: castName,
+            p_user_name: name,
+          }).then(({ data, error }) => {
+            if (error) { console.warn('[search] RPC error:', name, error.message); return []; }
+            return (data || []).map((r: Record<string, unknown>) => ({
+              ...r,
+              dm_history: Array.isArray(r.dm_history) ? r.dm_history : [],
+              recent_transactions: Array.isArray(r.recent_transactions) ? r.recent_transactions : [],
+            }));
+          })
+        )
+      );
+      // 結合 + user_name重複除去
+      const seen = new Set<string>();
+      const merged = results.flat().filter((r: Record<string, unknown>) => {
+        const un = r.user_name as string;
+        if (seen.has(un)) return false;
+        seen.add(un);
+        return true;
+      });
+      setSearchResults(merged as typeof searchResults);
+    } catch (e) {
+      console.error('[search] error:', e);
+      setSearchResults([]);
+    }
+    setSearchLoading(false);
   }, [accountId, castName, searchQuery, sb]);
 
   useEffect(() => {
@@ -1850,22 +1868,33 @@ function CastDetailInner() {
                     {/* Target search */}
                     <div className="glass-panel rounded-xl p-3 mb-4">
                       <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>🔍 ターゲット検索</p>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          placeholder="ユーザー名を入力..."
+                      <div className="flex gap-2 items-end">
+                        <textarea
+                          placeholder="ユーザー名を1行ずつ入力（改行区切り）"
                           value={searchQuery}
                           onChange={e => setSearchQuery(e.target.value)}
-                          onKeyDown={e => e.key === 'Enter' && handleSearchUser()}
-                          className="input-glass text-[11px] flex-1 py-1.5 px-3"
+                          rows={3}
+                          className="input-glass text-[11px] flex-1 py-1.5 px-3 resize-y min-h-[60px]"
                         />
-                        <button onClick={handleSearchUser} disabled={searchLoading || !searchQuery.trim()}
-                          className="btn-primary text-[10px] py-1.5 px-4 disabled:opacity-40">
-                          {searchLoading ? '検索中...' : '検索'}
-                        </button>
+                        <div className="flex flex-col gap-1">
+                          <button onClick={handleSearchUser} disabled={searchLoading || !searchQuery.trim()}
+                            className="btn-primary text-[10px] py-1.5 px-4 disabled:opacity-40">
+                            {searchLoading
+                              ? `${Array.from(new Set(searchQuery.split('\n').map(s => s.trim()).filter(Boolean))).length}名検索中...`
+                              : '検索'}
+                          </button>
+                          {searchQuery.trim() && (
+                            <span className="text-[9px] text-center tabular-nums" style={{ color: 'var(--text-muted)' }}>
+                              {Array.from(new Set(searchQuery.split('\n').map(s => s.trim()).filter(Boolean))).length}名
+                            </span>
+                          )}
+                        </div>
                       </div>
                       {searchResults.length > 0 && (
                         <div className="mt-3 space-y-2">
+                          <p className="text-[10px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
+                            {searchResults.length}名の結果
+                          </p>
                           {searchResults.map(r => (
                             <div key={r.user_name} className="glass-panel rounded-xl p-3" style={{ borderLeft: '3px solid var(--accent-primary)' }}>
                               <div className="flex items-start justify-between mb-2">
