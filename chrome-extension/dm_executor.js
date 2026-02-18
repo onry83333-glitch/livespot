@@ -414,7 +414,10 @@
     if (msg.type === 'SEND_DM') {
       console.log(LOG, `SEND_DM受信: user=${msg.username}, taskId=${msg.taskId}`);
 
-      executeDM(msg.username, msg.message).then((result) => {
+      // {username}プレースホルダーをターゲットユーザー名に置換
+      const finalMessage = (msg.message || '').replace(/\{username\}/g, msg.username || '');
+
+      executeDM(msg.username, finalMessage).then((result) => {
         chrome.runtime.sendMessage({
           type: 'DM_SEND_RESULT',
           taskId: msg.taskId,

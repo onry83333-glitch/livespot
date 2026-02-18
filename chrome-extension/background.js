@@ -23,6 +23,7 @@ let viewerStatsTimer = null;
 let whisperPollingTimer = null;
 let dmProcessing = false;
 const pendingDMResults = new Map(); // taskId → { resolve, timeoutId }
+const successfulTaskIds = new Set(); // タイムアウト後の成功上書き防止用
 
 // A.2: Heartbeat tracking
 let lastHeartbeat = 0;
@@ -63,8 +64,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     flushViewerStats();
     checkHeartbeatTimeout();
     cleanupStaleSTTTabs();
+    // DMスケジュールポーリング（30秒ごとにpending+期限到来をチェック）
+    checkDmSchedules().catch(e => {
+      console.warn('[LS-BG] DMスケジュールチェック失敗:', e.message);
+    });
   }
-  // DMスケジュール発火
+  // chrome.alarmsベースのDMスケジュール発火（フォールバック）
   if (alarm.name.startsWith('dm_schedule_')) {
     const scheduleId = alarm.name.replace('dm_schedule_', '');
     console.log('[LS-BG] DMスケジュールアラーム発火:', scheduleId);
@@ -820,6 +825,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // --- DM: Result from dm_executor.js (v2: SEND_DM → DM_SEND_RESULT) ---
   if (msg.type === 'DM_SEND_RESULT') {
     console.log('[LS-BG] DM_SEND_RESULT受信: taskId=', msg.taskId, 'success=', msg.success, 'error=', msg.error);
+    // 成功したtaskIdを記録（タイムアウト発火時のerror上書き防止）
+    if (msg.success) successfulTaskIds.add(msg.taskId);
     const entry = pendingDMResults.get(msg.taskId);
     if (entry) {
       clearTimeout(entry.timeoutId);
@@ -951,10 +958,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     updateBadge();
     console.log('[LS-BG] SPY切替: enabled=', spyEnabled, 'accountId=', accountId);
     if (spyEnabled) {
-      // セッションID生成: spy_YYYYMMDD_HHmmss_random
-      const ts = new Date().toISOString().replace(/[-:T]/g, '').replace(/\..+/, '');
-      const rand = Math.random().toString(36).substring(2, 8);
-      currentSessionId = `spy_${ts}_${rand}`;
+      // セッションID生成: UUID v4（spy_messagesテーブルのsession_id列がUUID型）
+      currentSessionId = crypto.randomUUID();
       console.log('[LS-BG] SPYセッション開始: session_id=', currentSessionId);
       lastHeartbeat = Date.now();
       heartbeatAlerted = false;
@@ -1551,6 +1556,10 @@ function parseBatchConfig(campaign) {
   if (campaign.startsWith('seq_')) {
     return { mode: 'sequential', tabCount: 1 };
   }
+  // bulk_ → デフォルトpipeline 3tab
+  if (campaign.startsWith('bulk_')) {
+    return { mode: 'pipeline', tabCount: 3 };
+  }
   return { mode: 'sequential', tabCount: 1 };
 }
 
@@ -1679,6 +1688,14 @@ function waitForDMResult(taskId, timeout = 15000) {
 
     const timeoutId = setTimeout(() => {
       if (pendingDMResults.has(taskId)) {
+        // 既に成功済みのtaskIdはerror上書きしない
+        if (successfulTaskIds.has(taskId)) {
+          console.log('[LS-BG] DM結果タイムアウト発火したが既に成功済み → スキップ: taskId=', taskId);
+          pendingDMResults.delete(taskId);
+          successfulTaskIds.delete(taskId);
+          resolve({ success: true, error: null });
+          return;
+        }
         console.warn('[LS-BG] DM結果タイムアウト: taskId=', taskId, timeout + 'ms経過');
         pendingDMResults.delete(taskId);
         resolve({ success: false, error: `タイムアウト (${timeout / 1000}秒)` });
@@ -1940,6 +1957,33 @@ async function processDMPipeline(tabCount) {
 }
 
 /**
+ * DMスケジュールポーリング — pending + scheduled_at <= now のレコードを検出して実行
+ * keepaliveアラーム（30秒ごと）から呼ばれる
+ */
+async function checkDmSchedules() {
+  if (!accountId || !accessToken) return;
+
+  const now = new Date().toISOString();
+  const res = await fetch(
+    `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?account_id=eq.${accountId}&status=eq.pending&scheduled_at=lte.${encodeURIComponent(now)}&order=scheduled_at.asc&limit=3`,
+    {
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    }
+  );
+  if (!res.ok) return;
+  const schedules = await res.json();
+  if (!Array.isArray(schedules) || schedules.length === 0) return;
+
+  for (const sched of schedules) {
+    console.log('[LS-BG] DMスケジュール検出（ポーリング）: id=', sched.id, 'at=', sched.scheduled_at);
+    await executeDmSchedule(sched.id);
+  }
+}
+
+/**
  * DMスケジュール実行
  * dm_schedulesからスケジュール情報を取得し、dm_send_logにキュー登録して既存パイプラインに委譲
  */
@@ -2167,8 +2211,9 @@ async function processDMQueue() {
     if (!peekTask) return;
 
     // Safety: userInitiatedチェック — campaign接頭辞が正規UIフロー経由であることを確認
-    // フロントエンドの3段階確認を経たDMのみ処理（pipe{N}_ または seq_ 接頭辞が必須）
-    if (!peekTask.campaign || (!peekTask.campaign.startsWith('pipe') && !peekTask.campaign.startsWith('seq'))) {
+    // 許可パターン: pipe{N}_, seq_, bulk_, sched_
+    const c = peekTask.campaign || '';
+    if (!c || !(c.startsWith('pipe') || c.startsWith('seq') || c.startsWith('bulk') || c.includes('_sched_'))) {
       console.warn('[LS-BG] DM安全ブロック: 不正なcampaign形式 — UI経由でない可能性 campaign=', peekTask.campaign, 'id=', peekTask.id);
       await updateDMTaskStatus(peekTask.id, 'error', 'DM安全ブロック: 正規UIフロー以外からのDM送信は拒否されました');
       return;

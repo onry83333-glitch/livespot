@@ -1,8 +1,5 @@
 'use client';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-declare const chrome: any;
-
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
@@ -105,6 +102,30 @@ interface DmScheduleItem {
   created_at: string;
   completed_at: string | null;
 }
+
+interface AlertRule {
+  id: string;
+  rule_type: string;
+  threshold_value: number;
+  enabled: boolean;
+}
+
+interface PopAlert {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  detail: string;
+  timestamp: number;
+}
+
+const ALERT_RULE_LABELS: Record<string, { icon: string; label: string; defaultThreshold: number }> = {
+  high_tip: { icon: '💎', label: '高額チップ', defaultThreshold: 100 },
+  vip_enter: { icon: '👑', label: 'VIP入室', defaultThreshold: 0 },
+  whale_enter: { icon: '🐋', label: 'Whale入室', defaultThreshold: 0 },
+  new_user_tip: { icon: '🆕', label: '新規ユーザーチップ', defaultThreshold: 0 },
+  viewer_milestone: { icon: '👀', label: '視聴者数マイルストーン', defaultThreshold: 50 },
+};
 
 const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'overview',  icon: '📊', label: '概要' },
@@ -210,6 +231,14 @@ function CastDetailInner() {
   // Coin sync alert
   const [daysSinceSync, setDaysSinceSync] = useState<number | null>(null);
 
+  // New paying users detection
+  const [newPayingUsers, setNewPayingUsers] = useState<{ user_name: string; total_coins: number; tx_count: number; is_completely_new: boolean }[]>([]);
+
+  // Alert system
+  const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
+  const [popAlerts, setPopAlerts] = useState<PopAlert[]>([]);
+  const [showAlertSettings, setShowAlertSettings] = useState(false);
+
   // Analytics: 直近チップ + チケットチャット
   const [lastTips, setLastTips] = useState<{user_name: string; tokens: number; message_time: string; message: string}[]>([]);
   const [lastTicketChats, setLastTicketChats] = useState<{user_name: string; tokens: number; date: string}[]>([]);
@@ -222,6 +251,64 @@ function CastDetailInner() {
     castName,
     enabled: !!user && activeTab === 'realtime',
   });
+
+  // Alert matching: check new realtime messages against rules
+  const prevMsgCountRef = useRef(0);
+  useEffect(() => {
+    if (alertRules.length === 0 || realtimeMessages.length <= prevMsgCountRef.current) {
+      prevMsgCountRef.current = realtimeMessages.length;
+      return;
+    }
+    const newMsgs = realtimeMessages.slice(prevMsgCountRef.current);
+    prevMsgCountRef.current = realtimeMessages.length;
+
+    for (const msg of newMsgs) {
+      for (const rule of alertRules) {
+        if (!rule.enabled) continue;
+        let matched = false;
+        let title = '';
+        let body = '';
+        let detail = '';
+
+        if (rule.rule_type === 'high_tip' && msg.tokens >= rule.threshold_value && msg.tokens > 0) {
+          matched = true;
+          title = '💎 高額チップ！';
+          body = `${msg.user_name} → ${msg.tokens} tk`;
+          detail = msg.message || '';
+        } else if (rule.rule_type === 'vip_enter' && msg.msg_type === 'enter' && paidUserCoins.has(msg.user_name || '')) {
+          const coins = paidUserCoins.get(msg.user_name || '') || 0;
+          if (coins >= 1000) {
+            matched = true;
+            title = '👑 VIP入室！';
+            body = `${msg.user_name} (累計 ${formatTokens(coins)})`;
+          }
+        } else if (rule.rule_type === 'whale_enter' && msg.msg_type === 'enter' && paidUserCoins.has(msg.user_name || '')) {
+          const coins = paidUserCoins.get(msg.user_name || '') || 0;
+          if (coins >= 5000) {
+            matched = true;
+            title = '🐋 Whale入室！';
+            body = `${msg.user_name} (累計 ${formatTokens(coins)})`;
+          }
+        } else if (rule.rule_type === 'new_user_tip' && msg.tokens > 0 && msg.user_name && !paidUserCoins.has(msg.user_name)) {
+          matched = true;
+          title = '🆕 新規ユーザーチップ！';
+          body = `${msg.user_name} → ${msg.tokens} tk`;
+        }
+
+        if (matched) {
+          const alert: PopAlert = {
+            id: `${msg.id}_${rule.rule_type}`,
+            type: rule.rule_type,
+            title,
+            body,
+            detail,
+            timestamp: Date.now(),
+          };
+          setPopAlerts(prev => [alert, ...prev].slice(0, 50));
+        }
+      }
+    }
+  }, [realtimeMessages, alertRules, paidUserCoins]);
 
   // Tab switch
   const setTab = useCallback((tab: TabKey) => {
@@ -252,6 +339,16 @@ function CastDetailInner() {
 
   // データ分離: キャスト登録日以降のデータのみ表示
   const registeredAt = useMemo(() => castInfo?.created_at || null, [castInfo]);
+
+  // Alert rules loading
+  useEffect(() => {
+    if (!accountId) return;
+    sb.from('alert_rules')
+      .select('id, rule_type, threshold_value, enabled')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .then(({ data }) => setAlertRules((data || []) as AlertRule[]));
+  }, [accountId, castName, sb]);
 
   // ============================================================
   // Load stats + fans via RPC
@@ -338,6 +435,16 @@ function CastDetailInner() {
       setThisWeekCoins((thisRes.data || []).reduce((s, r) => s + (r.tokens || 0), 0));
       setLastWeekCoins((lastRes.data || []).reduce((s, r) => s + (r.tokens || 0), 0));
     });
+
+    // 新規課金ユーザー検出（直近24時間）
+    sb.rpc('detect_new_paying_users', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+    }).then(({ data, error }) => {
+      if (!error && Array.isArray(data)) {
+        setNewPayingUsers(data as typeof newPayingUsers);
+      }
+    });
   }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // ============================================================
@@ -422,7 +529,8 @@ function CastDetailInner() {
         p_template_name: null,
       });
       if (rpcErr) throw rpcErr;
-      if (data?.error) { setDmError(`${data.error} (使用済み: ${data.used}/${data.limit})`); setDmSending(false); return; }
+      // プラン上限チェック — 警告表示のみ（送信は継続）
+      if (data?.error && !data?.batch_id) { setDmError(`${data.error} (使用済み: ${data.used}/${data.limit})`); setDmSending(false); return; }
 
       const originalBid = data?.batch_id;
       const count = data?.count || usernames.length;
@@ -534,18 +642,8 @@ function CastDetailInner() {
 
       if (error) throw error;
 
-      // Chrome拡張にアラーム設定を依頼
-      if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-        try {
-          await chrome.runtime.sendMessage({
-            type: 'SCHEDULE_DM',
-            scheduleId: data.id,
-            scheduledAt,
-          });
-        } catch {
-          console.warn('Chrome拡張へのスケジュール通知失敗（拡張が未インストールの可能性）');
-        }
-      }
+      // Chrome拡張がdm_schedulesテーブルを30秒ごとにポーリングして自動実行する
+      // （webページからchrome.runtime.sendMessageは不可のため、DB経由で連携）
 
       // UIリセット
       setDmSchedules(prev => [data as DmScheduleItem, ...prev]);
@@ -571,17 +669,52 @@ function CastDetailInner() {
 
     if (error) return;
 
-    // Chrome拡張のアラーム解除
-    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
-      try {
-        await chrome.runtime.sendMessage({ type: 'CANCEL_DM_SCHEDULE', scheduleId });
-      } catch {
-        // 拡張未インストール
-      }
-    }
-
+    // キャンセルはDBステータス更新のみ（拡張が30秒ポーリングで検知してスキップ）
     setDmSchedules(prev => prev.map(s => s.id === scheduleId ? { ...s, status: 'cancelled' } : s));
   }, [sb]);
+
+  // Alert rule toggle
+  const handleToggleAlertRule = useCallback(async (ruleType: string) => {
+    if (!accountId) return;
+    const existing = alertRules.find(r => r.rule_type === ruleType);
+    if (existing) {
+      // toggle enabled
+      const newEnabled = !existing.enabled;
+      await sb.from('alert_rules').update({ enabled: newEnabled }).eq('id', existing.id);
+      setAlertRules(prev => prev.map(r => r.id === existing.id ? { ...r, enabled: newEnabled } : r));
+    } else {
+      // create new rule
+      const meta = ALERT_RULE_LABELS[ruleType];
+      const { data } = await sb.from('alert_rules').insert({
+        account_id: accountId,
+        cast_name: castName,
+        rule_type: ruleType,
+        threshold_value: meta?.defaultThreshold || 0,
+        enabled: true,
+      }).select().single();
+      if (data) setAlertRules(prev => [...prev, data as AlertRule]);
+    }
+  }, [accountId, castName, alertRules, sb]);
+
+  const handleUpdateThreshold = useCallback(async (ruleId: string, value: number) => {
+    await sb.from('alert_rules').update({ threshold_value: value }).eq('id', ruleId);
+    setAlertRules(prev => prev.map(r => r.id === ruleId ? { ...r, threshold_value: value } : r));
+  }, [sb]);
+
+  // Dismiss pop alert
+  const dismissAlert = useCallback((alertId: string) => {
+    setPopAlerts(prev => prev.filter(a => a.id !== alertId));
+  }, []);
+
+  // Auto-dismiss alerts after 8 seconds
+  useEffect(() => {
+    if (popAlerts.length === 0) return;
+    const timer = setTimeout(() => {
+      const now = Date.now();
+      setPopAlerts(prev => prev.filter(a => now - a.timestamp < 8000));
+    }, 8000);
+    return () => clearTimeout(timer);
+  }, [popAlerts]);
 
   // ============================================================
   // Analytics: retention + campaign effectiveness
@@ -858,6 +991,38 @@ function CastDetailInner() {
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>ユニークユーザー</p>
                   </div>
                 </div>
+
+                {/* New paying users */}
+                {newPayingUsers.length > 0 && (
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3">🆕 新規課金ユーザー（直近24時間）</h3>
+                    <div className="space-y-1.5">
+                      {newPayingUsers.map(u => (
+                        <div key={u.user_name} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {u.is_completely_new && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
+                                style={{ background: 'rgba(34,197,94,0.15)', color: 'var(--accent-green)' }}>完全新規</span>
+                            )}
+                            <span className="font-semibold truncate">{u.user_name}</span>
+                            {u.tx_count > 1 && (
+                              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>×{u.tx_count}回</span>
+                            )}
+                          </div>
+                          <span className="font-bold flex-shrink-0 ml-2" style={{ color: 'var(--accent-amber)' }}>
+                            {formatTokens(u.total_coins)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      <span>合計: {newPayingUsers.length}名</span>
+                      <span style={{ color: 'var(--accent-amber)' }}>
+                        {formatTokens(newPayingUsers.reduce((s, u) => s + u.total_coins, 0))}
+                      </span>
+                    </div>
+                  </div>
+                )}
 
                 {/* Recent sessions */}
                 <div className="glass-card p-4">
@@ -1710,30 +1875,115 @@ function CastDetailInner() {
 
           {/* ============ REALTIME ============ */}
           {activeTab === 'realtime' && (
-            <div className="glass-card p-4" style={{ height: 'calc(100vh - 220px)' }}>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-bold flex items-center gap-2">
-                  👁 リアルタイムログ
-                  {isConnected && <span className="text-emerald-400 text-[10px]">● LIVE</span>}
-                </h3>
-                <span className="text-[10px] px-2 py-1 rounded-lg"
-                  style={{ background: 'rgba(56,189,248,0.08)', color: 'var(--accent-primary)' }}>
-                  {realtimeMessages.length} 件
-                </span>
-              </div>
-              <div className="overflow-auto space-y-0.5 pr-1" style={{ height: 'calc(100% - 40px)' }}>
-                {realtimeMessages.length === 0 ? (
-                  <div className="flex items-center justify-center h-full">
-                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>リアルタイムメッセージを待機中...</p>
+            <div className="space-y-4">
+              {/* Pop alerts (slide-in) */}
+              {popAlerts.length > 0 && (
+                <div className="fixed top-4 right-4 z-50 space-y-2 w-80">
+                  {popAlerts.slice(0, 3).map(alert => (
+                    <div key={alert.id} className="glass-card p-3 anim-fade-up"
+                      style={{ border: '1px solid var(--border-glow)', boxShadow: 'var(--glow-blue)' }}>
+                      <div className="flex items-start justify-between">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-bold">{alert.title}</p>
+                          <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>{alert.body}</p>
+                          {alert.detail && <p className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{alert.detail}</p>}
+                        </div>
+                        <button onClick={() => dismissAlert(alert.id)}
+                          className="text-slate-500 hover:text-white text-xs ml-2 flex-shrink-0">×</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="glass-card p-4" style={{ height: 'calc(100vh - 260px)' }}>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    👁 リアルタイムログ
+                    {isConnected && <span className="text-emerald-400 text-[10px]">● LIVE</span>}
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] px-2 py-1 rounded-lg"
+                      style={{ background: 'rgba(56,189,248,0.08)', color: 'var(--accent-primary)' }}>
+                      {realtimeMessages.length} 件
+                    </span>
+                    <button onClick={() => setShowAlertSettings(!showAlertSettings)}
+                      className={`text-[10px] px-2 py-1 rounded-lg transition-all ${showAlertSettings ? 'btn-primary' : 'btn-ghost'}`}>
+                      🔔 アラート
+                    </button>
                   </div>
-                ) : realtimeMessages.map(msg => {
-                  const coins = msg.user_name ? paidUserCoins.get(msg.user_name) : undefined;
-                  const enriched = coins && !msg.user_color
-                    ? { ...msg, user_color: getUserColorFromCoins(coins) }
-                    : msg;
-                  return <ChatMessage key={msg.id} message={enriched} />;
-                })}
+                </div>
+                <div className="overflow-auto space-y-0.5 pr-1" style={{ height: 'calc(100% - 40px)' }}>
+                  {realtimeMessages.length === 0 ? (
+                    <div className="flex items-center justify-center h-full">
+                      <p className="text-sm" style={{ color: 'var(--text-muted)' }}>リアルタイムメッセージを待機中...</p>
+                    </div>
+                  ) : realtimeMessages.map(msg => {
+                    const coins = msg.user_name ? paidUserCoins.get(msg.user_name) : undefined;
+                    const enriched = coins && !msg.user_color
+                      ? { ...msg, user_color: getUserColorFromCoins(coins) }
+                      : msg;
+                    return <ChatMessage key={msg.id} message={enriched} />;
+                  })}
+                </div>
               </div>
+
+              {/* Alert settings panel */}
+              {showAlertSettings && (
+                <div className="glass-card p-4">
+                  <h3 className="text-sm font-bold mb-3">🔔 アラート設定</h3>
+                  <div className="space-y-2">
+                    {Object.entries(ALERT_RULE_LABELS).map(([ruleType, meta]) => {
+                      const rule = alertRules.find(r => r.rule_type === ruleType);
+                      const enabled = rule?.enabled ?? false;
+                      const hasThreshold = ruleType === 'high_tip' || ruleType === 'viewer_milestone';
+                      return (
+                        <div key={ruleType} className="flex items-center justify-between glass-panel px-3 py-2 rounded-xl">
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => handleToggleAlertRule(ruleType)}
+                              className="w-8 h-4 rounded-full relative transition-all duration-300"
+                              style={{ background: enabled ? 'var(--accent-primary)' : 'rgba(100,116,139,0.3)' }}>
+                              <span className="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all duration-300"
+                                style={{ left: enabled ? '18px' : '2px' }} />
+                            </button>
+                            <span className="text-[11px]">{meta.icon} {meta.label}</span>
+                          </div>
+                          {hasThreshold && rule && (
+                            <div className="flex items-center gap-1">
+                              <input type="number" value={rule.threshold_value}
+                                onChange={e => handleUpdateThreshold(rule.id, Number(e.target.value))}
+                                className="input-glass text-[10px] w-16 py-0.5 px-2 text-center" />
+                              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                {ruleType === 'high_tip' ? 'tk以上' : '人以上'}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Alert history */}
+              {popAlerts.length > 0 && (
+                <div className="glass-card p-4">
+                  <h3 className="text-sm font-bold mb-3">🔔 アラート履歴</h3>
+                  <div className="space-y-1.5 max-h-40 overflow-auto">
+                    {popAlerts.map(alert => (
+                      <div key={alert.id} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
+                        <div className="min-w-0 flex-1">
+                          <span className="font-semibold">{alert.title}</span>
+                          <span className="ml-2" style={{ color: 'var(--text-secondary)' }}>{alert.body}</span>
+                        </div>
+                        <span className="text-[9px] flex-shrink-0 ml-2" style={{ color: 'var(--text-muted)' }}>
+                          {timeAgo(new Date(alert.timestamp).toISOString())}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>

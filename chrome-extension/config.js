@@ -7,7 +7,7 @@ const CONFIG = {
   SUPABASE_URL: 'https://ujgbhkllfeacbgpdbjto.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_kt56F7VPKZyFIoja-UGHeQ_YVMEQdAZ',
   POLL_INTERVAL: 3000,
-  DM_SEND_TIMEOUT: 20000,
+  DM_SEND_TIMEOUT: 45000,
   SPY_BATCH_INTERVAL: 1000,
   // STT Configuration
   STT_CHUNK_INTERVAL: 5000,         // 5秒チャンク
