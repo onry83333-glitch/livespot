@@ -1,9 +1,9 @@
--- Migration 015: ユーザー獲得ダッシュボード RPC群
--- get_user_acquisition_dashboard: 一覧取得（範囲フィルタ対応）
--- search_user_detail: ターゲット検索（前方一致・詳細情報）
+-- Migration 016: ユーザー獲得ダッシュボード改善
+-- 1. get_user_acquisition_dashboard に p_max_coins 追加（範囲フィルタ）
+-- 2. search_user_detail 新規（ターゲット検索・前方一致・DM履歴+トランザクション）
 
 -- ============================================================
--- 1. get_user_acquisition_dashboard（p_max_coins追加版）
+-- 1. get_user_acquisition_dashboard v2（p_max_coins追加）
 -- ============================================================
 CREATE OR REPLACE FUNCTION get_user_acquisition_dashboard(
   p_account_id UUID,

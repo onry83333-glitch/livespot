@@ -261,12 +261,24 @@ function CastDetailInner() {
   const [acqUsers, setAcqUsers] = useState<AcquisitionUser[]>([]);
   const [acqLoading, setAcqLoading] = useState(false);
   const [acqDays, setAcqDays] = useState(30);
-  const [acqMinCoins, setAcqMinCoins] = useState(150);
-  const [acqCustomCoins, setAcqCustomCoins] = useState('');
+  const [acqMinCoins, setAcqMinCoins] = useState(0);
+  const [acqMaxCoins, setAcqMaxCoins] = useState(999999);
+  const [acqPreset, setAcqPreset] = useState<string>('all');
   const [acqFilter, setAcqFilter] = useState<'all' | 'new' | 'dm_sent' | 'dm_converted'>('all');
   const [acqSortKey, setAcqSortKey] = useState<'total_coins' | 'tx_count' | 'last_payment_date' | 'user_name'>('total_coins');
   const [acqSortAsc, setAcqSortAsc] = useState(false);
   const acqDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Target search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<{
+    user_name: string; total_coins: number; last_payment_date: string | null;
+    first_seen: string | null; tx_count: number; segment: string;
+    dm_history: { campaign: string; sent_date: string; status: string }[];
+    recent_transactions: { date: string; amount: number; type: string }[];
+  }[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState<string | null>(null);
 
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
@@ -814,6 +826,7 @@ function CastDetailInner() {
       p_cast_name: castName,
       p_days: acqDays,
       p_min_coins: acqMinCoins,
+      p_max_coins: acqMaxCoins,
     }).then(({ data, error }) => {
       if (error) {
         console.warn('[acquisition] RPC error:', error.message);
@@ -823,7 +836,31 @@ function CastDetailInner() {
       }
       setAcqLoading(false);
     });
-  }, [accountId, castName, activeTab, acqDays, acqMinCoins, sb]);
+  }, [accountId, castName, activeTab, acqDays, acqMinCoins, acqMaxCoins, sb]);
+
+  // Target search handler
+  const handleSearchUser = useCallback(() => {
+    if (!accountId || !searchQuery.trim()) return;
+    setSearchLoading(true);
+    sb.rpc('search_user_detail', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_user_name: searchQuery.trim(),
+    }).then(({ data, error }) => {
+      if (error) {
+        console.warn('[search] RPC error:', error.message);
+        setSearchResults([]);
+      } else {
+        const results = (data || []).map((r: Record<string, unknown>) => ({
+          ...r,
+          dm_history: Array.isArray(r.dm_history) ? r.dm_history : [],
+          recent_transactions: Array.isArray(r.recent_transactions) ? r.recent_transactions : [],
+        }));
+        setSearchResults(results as typeof searchResults);
+      }
+      setSearchLoading(false);
+    });
+  }, [accountId, castName, searchQuery, sb]);
 
   useEffect(() => {
     if (acqDebounceRef.current) clearTimeout(acqDebounceRef.current);
@@ -1810,6 +1847,104 @@ function CastDetailInner() {
                       新規課金ユーザーの特定・DM施策の効果測定・チケットチャット初回ユーザー抽出
                     </p>
 
+                    {/* Target search */}
+                    <div className="glass-panel rounded-xl p-3 mb-4">
+                      <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>🔍 ターゲット検索</p>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="ユーザー名を入力..."
+                          value={searchQuery}
+                          onChange={e => setSearchQuery(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && handleSearchUser()}
+                          className="input-glass text-[11px] flex-1 py-1.5 px-3"
+                        />
+                        <button onClick={handleSearchUser} disabled={searchLoading || !searchQuery.trim()}
+                          className="btn-primary text-[10px] py-1.5 px-4 disabled:opacity-40">
+                          {searchLoading ? '検索中...' : '検索'}
+                        </button>
+                      </div>
+                      {searchResults.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          {searchResults.map(r => (
+                            <div key={r.user_name} className="glass-panel rounded-xl p-3" style={{ borderLeft: '3px solid var(--accent-primary)' }}>
+                              <div className="flex items-start justify-between mb-2">
+                                <div>
+                                  <span className="text-xs font-bold" style={{ color: getUserColorFromCoins(r.total_coins) }}>
+                                    👤 {r.user_name}
+                                  </span>
+                                  <span className="text-[9px] ml-2 px-1.5 py-0.5 rounded" style={{
+                                    background: r.segment.includes('Whale') ? 'rgba(239,68,68,0.15)' :
+                                      r.segment.includes('VIP') ? 'rgba(245,158,11,0.15)' : 'rgba(255,255,255,0.05)',
+                                    color: r.segment.includes('Whale') ? '#ef4444' :
+                                      r.segment.includes('VIP') ? '#f59e0b' : 'var(--text-muted)',
+                                  }}>{r.segment}</span>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px] mb-2">
+                                <div>
+                                  <span style={{ color: 'var(--text-muted)' }}>累計: </span>
+                                  <span className="font-bold" style={{ color: 'var(--accent-amber)' }}>{r.total_coins.toLocaleString()} tk</span>
+                                  <span style={{ color: 'var(--text-muted)' }}> ({r.tx_count}回)</span>
+                                </div>
+                                <div>
+                                  <span style={{ color: 'var(--text-muted)' }}>最終課金: </span>
+                                  <span style={{ color: 'var(--text-secondary)' }}>
+                                    {r.last_payment_date ? new Date(r.last_payment_date).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--'}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span style={{ color: 'var(--text-muted)' }}>初回登録: </span>
+                                  <span style={{ color: 'var(--text-secondary)' }}>
+                                    {r.first_seen ? new Date(r.first_seen).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--'}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span style={{ color: 'var(--text-muted)' }}>DM履歴: </span>
+                                  {r.dm_history.length > 0 ? (
+                                    <span style={{ color: '#a855f7' }}>
+                                      {r.dm_history[0].campaign} ({new Date(r.dm_history[0].sent_date).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })})
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-muted)' }}>なし</span>
+                                  )}
+                                </div>
+                              </div>
+                              {/* Recent transactions - collapsible */}
+                              {r.recent_transactions.length > 0 && (
+                                <div>
+                                  <button onClick={() => setSearchExpanded(searchExpanded === r.user_name ? null : r.user_name)}
+                                    className="text-[10px] hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                                    {searchExpanded === r.user_name ? '▼' : '▶'} 直近トランザクション ({r.recent_transactions.length}件)
+                                  </button>
+                                  {searchExpanded === r.user_name && (
+                                    <div className="mt-1 space-y-0.5 max-h-40 overflow-auto">
+                                      {r.recent_transactions.map((tx, i) => (
+                                        <div key={i} className="flex items-center justify-between text-[10px] px-2 py-0.5 rounded hover:bg-white/[0.03]">
+                                          <span style={{ color: 'var(--text-muted)' }}>
+                                            {new Date(tx.date).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                          </span>
+                                          <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                            {tx.amount.toLocaleString()} tk
+                                          </span>
+                                          <span className="text-[9px]" style={{ color: 'var(--text-secondary)' }}>
+                                            {tx.type === 'ticketShow' ? 'チケットチャット' :
+                                             tx.type === 'publicPresent' ? '公開プレゼント' :
+                                             tx.type === 'privatePresent' ? '非公開プレゼント' :
+                                             tx.type === 'spy' ? 'スパイ' : tx.type}
+                                          </span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
                     {/* Filter bar - sticky */}
                     <div className="sticky top-0 z-10 glass-panel rounded-xl p-3 mb-4 space-y-2" style={{ backdropFilter: 'blur(16px)' }}>
                       {/* Period */}
@@ -1827,31 +1962,37 @@ function CastDetailInner() {
                           </button>
                         ))}
                       </div>
-                      {/* Min coins */}
+                      {/* Coin range: presets + custom inputs */}
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[10px] font-semibold w-12" style={{ color: 'var(--text-muted)' }}>閾値:</span>
-                        {[150, 300, 500, 1000].map(c => (
-                          <button key={c} onClick={() => { setAcqMinCoins(c); setAcqCustomCoins(''); }}
+                        {([
+                          { key: 'ticket', label: '初回チケット', min: 150, max: 300 },
+                          { key: 'mid', label: '中堅', min: 200, max: 550 },
+                          { key: 'regular', label: '常連', min: 550, max: 1400 },
+                          { key: 'vip', label: 'VIP', min: 1400, max: 3500 },
+                          { key: 'whale', label: 'Whale', min: 3500, max: 999999 },
+                          { key: 'all', label: '全範囲', min: 0, max: 999999 },
+                        ] as const).map(p => (
+                          <button key={p.key} onClick={() => { setAcqMinCoins(p.min); setAcqMaxCoins(p.max); setAcqPreset(p.key); }}
                             className="text-[10px] px-2.5 py-1 rounded-lg transition-all"
                             style={{
-                              background: acqMinCoins === c && !acqCustomCoins ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.03)',
-                              color: acqMinCoins === c && !acqCustomCoins ? 'var(--accent-amber)' : 'var(--text-secondary)',
-                              border: `1px solid ${acqMinCoins === c && !acqCustomCoins ? 'rgba(245,158,11,0.3)' : 'var(--border-glass)'}`,
+                              background: acqPreset === p.key ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.03)',
+                              color: acqPreset === p.key ? 'var(--accent-amber)' : 'var(--text-secondary)',
+                              border: `1px solid ${acqPreset === p.key ? 'rgba(245,158,11,0.3)' : 'var(--border-glass)'}`,
                             }}>
-                            {c}tk+
+                            {p.label}
                           </button>
                         ))}
-                        <input
-                          type="number"
-                          placeholder="カスタム"
-                          value={acqCustomCoins}
-                          onChange={e => {
-                            setAcqCustomCoins(e.target.value);
-                            const v = parseInt(e.target.value);
-                            if (v > 0) setAcqMinCoins(v);
-                          }}
-                          className="input-glass text-[10px] w-20 py-1 px-2"
-                        />
+                      </div>
+                      <div className="flex items-center gap-1.5 pl-14">
+                        <input type="number" placeholder="min" value={acqMinCoins || ''} min={0}
+                          onChange={e => { setAcqMinCoins(parseInt(e.target.value) || 0); setAcqPreset('custom'); }}
+                          className="input-glass text-[10px] w-16 py-1 px-2 text-center tabular-nums" />
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>tk ～</span>
+                        <input type="number" placeholder="max" value={acqMaxCoins >= 999999 ? '' : acqMaxCoins} min={0}
+                          onChange={e => { setAcqMaxCoins(parseInt(e.target.value) || 999999); setAcqPreset('custom'); }}
+                          className="input-glass text-[10px] w-16 py-1 px-2 text-center tabular-nums" />
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>tk</span>
                       </div>
                       {/* View filter */}
                       <div className="flex items-center gap-2 flex-wrap">
@@ -1978,7 +2119,7 @@ function CastDetailInner() {
                                     </td>
                                     <td className="text-right px-3 py-2 tabular-nums">{u.tx_count.toLocaleString()}回</td>
                                     <td className="text-right px-3 py-2" style={{ color: 'var(--text-secondary)' }}>
-                                      {u.last_payment_date ? new Date(u.last_payment_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : '--'}
+                                      {u.last_payment_date ? new Date(u.last_payment_date).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--'}
                                     </td>
                                     <td className="text-center px-3 py-2">
                                       <span className="text-[9px] px-1.5 py-0.5 rounded" style={{
@@ -1999,9 +2140,9 @@ function CastDetailInner() {
                                       {u.converted_after_dm ? (
                                         <span style={{ color: 'var(--accent-amber)' }}>✅ DM→課金</span>
                                       ) : u.dm_sent ? (
-                                        <span style={{ color: '#a855f7' }}>💌 DM送信済</span>
+                                        <span style={{ color: 'var(--text-muted)' }}>💌 DM済・未課金</span>
                                       ) : (
-                                        <span style={{ color: 'var(--text-muted)' }}>自然流入</span>
+                                        <span style={{ color: 'var(--accent-green)' }}>🆕 自然流入</span>
                                       )}
                                     </td>
                                   </tr>
