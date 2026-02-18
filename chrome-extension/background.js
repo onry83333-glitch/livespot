@@ -15,6 +15,9 @@ let accountId = null;
 let dmPollingTimer = null;
 let spyEnabled = false;
 let currentSessionId = null; // SPYセッションID（spy_messages.session_id）
+
+// UUID v4 フォーマット検証（session_id の stale値検出用）
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 let messageBuffer = [];
 let bufferTimer = null;
 let spyMsgCount = 0;
@@ -130,6 +133,12 @@ async function loadAuth() {
   spyEnabled = data.spy_enabled === true;
   sttEnabled = data.stt_enabled === true;
   currentSessionId = data.current_session_id || null;
+  // Bug fix: storageに残った旧形式session_id（spy_YYYYMMDD_...）をUUID v4に置換
+  if (currentSessionId && !UUID_RE.test(currentSessionId)) {
+    console.warn('[LS-BG] 旧形式session_id検出 → UUID再生成:', currentSessionId);
+    currentSessionId = crypto.randomUUID();
+    chrome.storage.local.set({ current_session_id: currentSessionId });
+  }
   if (data.api_base_url) {
     CONFIG.API_BASE_URL = data.api_base_url;
   }
@@ -347,20 +356,34 @@ async function flushMessageBuffer() {
     return;
   }
 
+  // Bug fix: バッファ内の旧形式session_idも検証・置換
+  if (currentSessionId && !UUID_RE.test(currentSessionId)) {
+    console.warn('[LS-BG] flushMessageBuffer: 旧形式session_id検出 → UUID再生成:', currentSessionId);
+    currentSessionId = crypto.randomUUID();
+    chrome.storage.local.set({ current_session_id: currentSessionId });
+  }
+
   // Supabase REST API用の行データを作成（一括INSERT）
-  const rows = deduplicated.map(msg => ({
-    account_id: accountId,
-    cast_name: msg.cast_name || '',
-    message_time: msg.message_time || new Date().toISOString(),
-    msg_type: msg.msg_type || 'chat',
-    user_name: msg.user_name || '',
-    message: msg.message || '',
-    tokens: msg.tokens || 0,
-    is_vip: false,
-    user_color: msg.user_color || null,
-    metadata: msg.metadata || {},
-    session_id: msg.session_id || null,
-  }));
+  const rows = deduplicated.map(msg => {
+    // バッファ内の各メッセージのsession_idも検証（push時に旧形式が付与された可能性）
+    let sid = msg.session_id || null;
+    if (sid && !UUID_RE.test(sid)) {
+      sid = currentSessionId || null; // 現在の正しいsession_idで上書き
+    }
+    return {
+      account_id: accountId,
+      cast_name: msg.cast_name || '',
+      message_time: msg.message_time || new Date().toISOString(),
+      msg_type: msg.msg_type || 'chat',
+      user_name: msg.user_name || '',
+      message: msg.message || '',
+      tokens: msg.tokens || 0,
+      is_vip: false,
+      user_color: msg.user_color || null,
+      metadata: msg.metadata || {},
+      session_id: sid,
+    };
+  });
 
   const hasSessionId = rows.some(r => r.session_id);
   console.log('[LS-BG] SPYメッセージ一括送信:', rows.length, '件 → Supabase REST API', `session_id: ${hasSessionId ? rows[0].session_id : 'NULL'}`);
@@ -2131,6 +2154,7 @@ async function executeDmSchedule(scheduleId) {
     // バッチINSERT（50件ずつ）
     for (let i = 0; i < rows.length; i += 50) {
       const batch = rows.slice(i, i + 50);
+      console.log('[LS-BG] DMスケジュール: dm_send_log INSERTリクエスト:', JSON.stringify(batch[0], null, 2), `(${batch.length}件)`);
       const insertRes = await fetch(
         `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`,
         {
@@ -2145,7 +2169,8 @@ async function executeDmSchedule(scheduleId) {
         }
       );
       if (!insertRes.ok) {
-        console.error('[LS-BG] DMスケジュール: dm_send_log INSERT失敗:', insertRes.status);
+        const errBody = await insertRes.text().catch(() => '(レスポンス読取失敗)');
+        console.error('[LS-BG] DMスケジュール: dm_send_log INSERT失敗:', insertRes.status, errBody);
       }
     }
 

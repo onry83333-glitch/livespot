@@ -85,6 +85,20 @@ interface PaidUserItem {
   last_payment_date: string | null;
 }
 
+interface AcquisitionUser {
+  user_name: string;
+  total_coins: number;
+  last_payment_date: string | null;
+  first_seen: string | null;
+  tx_count: number;
+  dm_sent: boolean;
+  dm_sent_date: string | null;
+  dm_campaign: string | null;
+  segment: string;
+  is_new_user: boolean;
+  converted_after_dm: boolean;
+}
+
 interface DmScheduleItem {
   id: string;
   cast_name: string;
@@ -242,6 +256,17 @@ function CastDetailInner() {
   // Analytics: 直近チップ + チケットチャット
   const [lastTips, setLastTips] = useState<{user_name: string; tokens: number; message_time: string; message: string}[]>([]);
   const [lastTicketChats, setLastTicketChats] = useState<{user_name: string; tokens: number; date: string}[]>([]);
+
+  // Acquisition dashboard
+  const [acqUsers, setAcqUsers] = useState<AcquisitionUser[]>([]);
+  const [acqLoading, setAcqLoading] = useState(false);
+  const [acqDays, setAcqDays] = useState(30);
+  const [acqMinCoins, setAcqMinCoins] = useState(150);
+  const [acqCustomCoins, setAcqCustomCoins] = useState('');
+  const [acqFilter, setAcqFilter] = useState<'all' | 'new' | 'dm_sent' | 'dm_converted'>('all');
+  const [acqSortKey, setAcqSortKey] = useState<'total_coins' | 'tx_count' | 'last_payment_date' | 'user_name'>('total_coins');
+  const [acqSortAsc, setAcqSortAsc] = useState(false);
+  const acqDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
@@ -777,6 +802,66 @@ function CastDetailInner() {
       .limit(5)
       .then(({ data }) => setLastTicketChats((data || []) as typeof lastTicketChats));
   }, [accountId, castName, activeTab, sb]);
+
+  // ============================================================
+  // Acquisition Dashboard: RPC呼び出し（debounce 300ms）
+  // ============================================================
+  const loadAcquisitionData = useCallback(() => {
+    if (!accountId || activeTab !== 'analytics') return;
+    setAcqLoading(true);
+    sb.rpc('get_user_acquisition_dashboard', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_days: acqDays,
+      p_min_coins: acqMinCoins,
+    }).then(({ data, error }) => {
+      if (error) {
+        console.warn('[acquisition] RPC error:', error.message);
+        setAcqUsers([]);
+      } else {
+        setAcqUsers((data || []) as AcquisitionUser[]);
+      }
+      setAcqLoading(false);
+    });
+  }, [accountId, castName, activeTab, acqDays, acqMinCoins, sb]);
+
+  useEffect(() => {
+    if (acqDebounceRef.current) clearTimeout(acqDebounceRef.current);
+    acqDebounceRef.current = setTimeout(loadAcquisitionData, 300);
+    return () => { if (acqDebounceRef.current) clearTimeout(acqDebounceRef.current); };
+  }, [loadAcquisitionData]);
+
+  // Acquisition: filtered + sorted results
+  const acqFiltered = useMemo(() => {
+    let list = [...acqUsers];
+    if (acqFilter === 'new') list = list.filter(u => u.is_new_user);
+    else if (acqFilter === 'dm_sent') list = list.filter(u => u.dm_sent);
+    else if (acqFilter === 'dm_converted') list = list.filter(u => u.converted_after_dm);
+    list.sort((a, b) => {
+      let cmp = 0;
+      if (acqSortKey === 'total_coins') cmp = a.total_coins - b.total_coins;
+      else if (acqSortKey === 'tx_count') cmp = a.tx_count - b.tx_count;
+      else if (acqSortKey === 'last_payment_date') cmp = (a.last_payment_date || '').localeCompare(b.last_payment_date || '');
+      else if (acqSortKey === 'user_name') cmp = a.user_name.localeCompare(b.user_name);
+      return acqSortAsc ? cmp : -cmp;
+    });
+    return list;
+  }, [acqUsers, acqFilter, acqSortKey, acqSortAsc]);
+
+  const acqSummary = useMemo(() => {
+    const total = acqUsers.length;
+    const newUsers = acqUsers.filter(u => u.is_new_user).length;
+    const dmSent = acqUsers.filter(u => u.dm_sent).length;
+    const dmConverted = acqUsers.filter(u => u.converted_after_dm).length;
+    const cvr = dmSent > 0 ? Math.round(dmConverted / dmSent * 100) : 0;
+    const ticketCandidates = acqUsers.filter(u => u.total_coins >= 150 && u.total_coins <= 300 && u.tx_count <= 3);
+    return { total, newUsers, dmSent, dmConverted, cvr, ticketCandidates };
+  }, [acqUsers]);
+
+  const toggleAcqSort = (key: typeof acqSortKey) => {
+    if (acqSortKey === key) setAcqSortAsc(!acqSortAsc);
+    else { setAcqSortKey(key); setAcqSortAsc(false); }
+  };
 
   // ============================================================
   // Sales: coin_transactions + paid_users
@@ -1715,6 +1800,222 @@ function CastDetailInner() {
                           </tbody>
                         </table>
                       </div>
+                    )}
+                  </div>
+
+                  {/* ============ ACQUISITION DASHBOARD ============ */}
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-1">📊 ユーザー獲得ダッシュボード</h3>
+                    <p className="text-[10px] mb-4" style={{ color: 'var(--text-muted)' }}>
+                      新規課金ユーザーの特定・DM施策の効果測定・チケットチャット初回ユーザー抽出
+                    </p>
+
+                    {/* Filter bar - sticky */}
+                    <div className="sticky top-0 z-10 glass-panel rounded-xl p-3 mb-4 space-y-2" style={{ backdropFilter: 'blur(16px)' }}>
+                      {/* Period */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-semibold w-12" style={{ color: 'var(--text-muted)' }}>期間:</span>
+                        {[7, 14, 30, 60, 90].map(d => (
+                          <button key={d} onClick={() => setAcqDays(d)}
+                            className="text-[10px] px-2.5 py-1 rounded-lg transition-all"
+                            style={{
+                              background: acqDays === d ? 'rgba(56,189,248,0.2)' : 'rgba(255,255,255,0.03)',
+                              color: acqDays === d ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                              border: `1px solid ${acqDays === d ? 'rgba(56,189,248,0.3)' : 'var(--border-glass)'}`,
+                            }}>
+                            {d}日
+                          </button>
+                        ))}
+                      </div>
+                      {/* Min coins */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-semibold w-12" style={{ color: 'var(--text-muted)' }}>閾値:</span>
+                        {[150, 300, 500, 1000].map(c => (
+                          <button key={c} onClick={() => { setAcqMinCoins(c); setAcqCustomCoins(''); }}
+                            className="text-[10px] px-2.5 py-1 rounded-lg transition-all"
+                            style={{
+                              background: acqMinCoins === c && !acqCustomCoins ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.03)',
+                              color: acqMinCoins === c && !acqCustomCoins ? 'var(--accent-amber)' : 'var(--text-secondary)',
+                              border: `1px solid ${acqMinCoins === c && !acqCustomCoins ? 'rgba(245,158,11,0.3)' : 'var(--border-glass)'}`,
+                            }}>
+                            {c}tk+
+                          </button>
+                        ))}
+                        <input
+                          type="number"
+                          placeholder="カスタム"
+                          value={acqCustomCoins}
+                          onChange={e => {
+                            setAcqCustomCoins(e.target.value);
+                            const v = parseInt(e.target.value);
+                            if (v > 0) setAcqMinCoins(v);
+                          }}
+                          className="input-glass text-[10px] w-20 py-1 px-2"
+                        />
+                      </div>
+                      {/* View filter */}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-semibold w-12" style={{ color: 'var(--text-muted)' }}>表示:</span>
+                        {([
+                          { key: 'all', label: '全員' },
+                          { key: 'new', label: '新規のみ' },
+                          { key: 'dm_sent', label: 'DM送信済のみ' },
+                          { key: 'dm_converted', label: 'DM→課金のみ' },
+                        ] as const).map(f => (
+                          <button key={f.key} onClick={() => setAcqFilter(f.key)}
+                            className="text-[10px] px-2.5 py-1 rounded-lg transition-all"
+                            style={{
+                              background: acqFilter === f.key ? 'rgba(34,197,94,0.2)' : 'rgba(255,255,255,0.03)',
+                              color: acqFilter === f.key ? 'var(--accent-green)' : 'var(--text-secondary)',
+                              border: `1px solid ${acqFilter === f.key ? 'rgba(34,197,94,0.3)' : 'var(--border-glass)'}`,
+                            }}>
+                            {f.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Summary cards */}
+                    {acqLoading ? (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                        {[0,1,2,3].map(i => (
+                          <div key={i} className="glass-panel p-4 rounded-xl animate-pulse">
+                            <div className="h-6 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} />
+                            <div className="h-3 rounded mt-2 w-2/3" style={{ background: 'rgba(255,255,255,0.03)' }} />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                          <div className="glass-panel p-4 rounded-xl text-center" style={{ borderImage: 'linear-gradient(135deg, rgba(56,189,248,0.3), rgba(56,189,248,0.05)) 1' }}>
+                            <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>{acqSummary.total}</p>
+                            <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>対象ユーザー</p>
+                          </div>
+                          <div className="glass-panel p-4 rounded-xl text-center" style={{ borderImage: 'linear-gradient(135deg, rgba(34,197,94,0.3), rgba(34,197,94,0.05)) 1' }}>
+                            <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>{acqSummary.newUsers}</p>
+                            <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>完全新規</p>
+                          </div>
+                          <div className="glass-panel p-4 rounded-xl text-center" style={{ borderImage: 'linear-gradient(135deg, rgba(168,85,247,0.3), rgba(168,85,247,0.05)) 1' }}>
+                            <p className="text-2xl font-bold" style={{ color: '#a855f7' }}>{acqSummary.dmSent}</p>
+                            <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>DM送信済</p>
+                          </div>
+                          <div className="glass-panel p-4 rounded-xl text-center" style={{ borderImage: 'linear-gradient(135deg, rgba(245,158,11,0.3), rgba(245,158,11,0.05)) 1' }}>
+                            <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{acqSummary.dmConverted}</p>
+                            <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                              DM→課金 {acqSummary.dmSent > 0 && <span className="font-bold">CVR {acqSummary.cvr}%</span>}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Ticket chat candidates */}
+                        {acqSummary.ticketCandidates.length > 0 && (
+                          <div className="glass-panel rounded-xl p-3 mb-4" style={{ borderLeft: '3px solid var(--accent-amber)' }}>
+                            <p className="text-[11px] font-bold mb-1" style={{ color: 'var(--accent-amber)' }}>
+                              🎫 チケットチャット初回の可能性が高いユーザー: {acqSummary.ticketCandidates.length}名
+                            </p>
+                            <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                              {acqSummary.ticketCandidates.map(u =>
+                                `${u.user_name} (${u.total_coins.toLocaleString()}tk/${u.tx_count}回)`
+                              ).join(', ')}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* User table */}
+                        <div className="overflow-auto">
+                          <table className="w-full text-[11px]">
+                            <thead>
+                              <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border-glass)' }}>
+                                <th className="text-left px-3 py-2 font-semibold cursor-pointer hover:text-white transition-colors"
+                                  onClick={() => toggleAcqSort('user_name')}>
+                                  ユーザー名 {acqSortKey === 'user_name' && (acqSortAsc ? '↑' : '↓')}
+                                </th>
+                                <th className="text-right px-3 py-2 font-semibold cursor-pointer hover:text-white transition-colors"
+                                  onClick={() => toggleAcqSort('total_coins')}>
+                                  累計tk {acqSortKey === 'total_coins' && (acqSortAsc ? '↑' : '↓')}
+                                </th>
+                                <th className="text-right px-3 py-2 font-semibold cursor-pointer hover:text-white transition-colors"
+                                  onClick={() => toggleAcqSort('tx_count')}>
+                                  回数 {acqSortKey === 'tx_count' && (acqSortAsc ? '↑' : '↓')}
+                                </th>
+                                <th className="text-right px-3 py-2 font-semibold cursor-pointer hover:text-white transition-colors"
+                                  onClick={() => toggleAcqSort('last_payment_date')}>
+                                  最終課金 {acqSortKey === 'last_payment_date' && (acqSortAsc ? '↑' : '↓')}
+                                </th>
+                                <th className="text-center px-3 py-2 font-semibold">セグメント</th>
+                                <th className="text-left px-3 py-2 font-semibold">DM施策</th>
+                                <th className="text-center px-3 py-2 font-semibold">ステータス</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {acqFiltered.length === 0 ? (
+                                <tr>
+                                  <td colSpan={7} className="text-center py-6" style={{ color: 'var(--text-muted)' }}>
+                                    条件に合致するユーザーなし
+                                  </td>
+                                </tr>
+                              ) : acqFiltered.map(u => {
+                                const isTicketCandidate = u.total_coins >= 150 && u.total_coins <= 300 && u.tx_count <= 3;
+                                const rowBg = u.converted_after_dm
+                                  ? 'rgba(245,158,11,0.06)'
+                                  : u.is_new_user
+                                  ? 'rgba(34,197,94,0.06)'
+                                  : 'transparent';
+                                return (
+                                  <tr key={u.user_name}
+                                    className="hover:bg-white/[0.03] transition-colors"
+                                    style={{ borderBottom: '1px solid var(--border-glass)', background: rowBg }}>
+                                    <td className="px-3 py-2 font-semibold">
+                                      <span style={{ color: getUserColorFromCoins(u.total_coins) }}>
+                                        {u.is_new_user && <span title="新規ユーザー" className="mr-1">🆕</span>}
+                                        {isTicketCandidate && <span title="チケットチャット初回候補" className="mr-1">🎫</span>}
+                                        {u.user_name}
+                                      </span>
+                                    </td>
+                                    <td className="text-right px-3 py-2 tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
+                                      {u.total_coins.toLocaleString()}
+                                    </td>
+                                    <td className="text-right px-3 py-2 tabular-nums">{u.tx_count.toLocaleString()}回</td>
+                                    <td className="text-right px-3 py-2" style={{ color: 'var(--text-secondary)' }}>
+                                      {u.last_payment_date ? new Date(u.last_payment_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }) : '--'}
+                                    </td>
+                                    <td className="text-center px-3 py-2">
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded" style={{
+                                        background: u.segment.includes('Whale') ? 'rgba(239,68,68,0.15)' :
+                                          u.segment.includes('VIP') ? 'rgba(245,158,11,0.15)' :
+                                          u.segment.includes('常連') ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.05)',
+                                        color: u.segment.includes('Whale') ? '#ef4444' :
+                                          u.segment.includes('VIP') ? '#f59e0b' :
+                                          u.segment.includes('常連') ? '#22c55e' : 'var(--text-muted)',
+                                      }}>
+                                        {u.segment}
+                                      </span>
+                                    </td>
+                                    <td className="px-3 py-2 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                                      {u.dm_campaign || '-'}
+                                    </td>
+                                    <td className="text-center px-3 py-2 text-[10px]">
+                                      {u.converted_after_dm ? (
+                                        <span style={{ color: 'var(--accent-amber)' }}>✅ DM→課金</span>
+                                      ) : u.dm_sent ? (
+                                        <span style={{ color: '#a855f7' }}>💌 DM送信済</span>
+                                      ) : (
+                                        <span style={{ color: 'var(--text-muted)' }}>自然流入</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                        {acqFiltered.length > 0 && (
+                          <p className="text-[10px] text-right mt-1" style={{ color: 'var(--text-muted)' }}>
+                            {acqFiltered.length}件表示（全{acqUsers.length}件中）
+                          </p>
+                        )}
+                      </>
                     )}
                   </div>
                 </>
