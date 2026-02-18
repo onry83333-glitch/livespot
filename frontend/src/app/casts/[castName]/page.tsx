@@ -273,12 +273,14 @@ function CastDetailInner() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<{
     user_name: string; total_coins: number; last_payment_date: string | null;
-    first_seen: string | null; tx_count: number; segment: string;
+    last_actual_payment: string | null; first_seen: string | null;
+    tx_count: number; segment: string; found: boolean;
     dm_history: { campaign: string; sent_date: string; status: string }[];
     recent_transactions: { date: string; amount: number; type: string }[];
   }[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState<string | null>(null);
+  const [searchMissesOpen, setSearchMissesOpen] = useState(false);
 
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
@@ -838,41 +840,39 @@ function CastDetailInner() {
     });
   }, [accountId, castName, activeTab, acqDays, acqMinCoins, acqMaxCoins, sb]);
 
-  // Target search handler — 複数ユーザー改行区切り対応
+  // Target search handler — bulk RPC（完全一致 + 該当なし含む）
+  const extractUsername = (input: string): string => {
+    const urlMatch = input.match(/stripchat\.com\/user\/([^\s\/\?]+)/i);
+    if (urlMatch) return urlMatch[1];
+    return input;
+  };
+
   const handleSearchUser = useCallback(async () => {
     if (!accountId || !searchQuery.trim()) return;
     const names = Array.from(new Set(
-      searchQuery.split('\n').map(s => s.trim()).filter(Boolean)
+      searchQuery.split('\n').map(s => extractUsername(s.trim())).filter(Boolean)
     ));
     if (names.length === 0) return;
     setSearchLoading(true);
     setSearchResults([]);
+    setSearchMissesOpen(false);
     try {
-      const results = await Promise.all(
-        names.map(name =>
-          sb.rpc('search_user_detail', {
-            p_account_id: accountId,
-            p_cast_name: castName,
-            p_user_name: name,
-          }).then(({ data, error }) => {
-            if (error) { console.warn('[search] RPC error:', name, error.message); return []; }
-            return (data || []).map((r: Record<string, unknown>) => ({
-              ...r,
-              dm_history: Array.isArray(r.dm_history) ? r.dm_history : [],
-              recent_transactions: Array.isArray(r.recent_transactions) ? r.recent_transactions : [],
-            }));
-          })
-        )
-      );
-      // 結合 + user_name重複除去
-      const seen = new Set<string>();
-      const merged = results.flat().filter((r: Record<string, unknown>) => {
-        const un = r.user_name as string;
-        if (seen.has(un)) return false;
-        seen.add(un);
-        return true;
+      const { data, error } = await sb.rpc('search_users_bulk', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_user_names: names,
       });
-      setSearchResults(merged as typeof searchResults);
+      if (error) {
+        console.warn('[search] RPC error:', error.message);
+        setSearchResults([]);
+      } else {
+        const results = (data || []).map((r: Record<string, unknown>) => ({
+          ...r,
+          dm_history: Array.isArray(r.dm_history) ? r.dm_history : [],
+          recent_transactions: Array.isArray(r.recent_transactions) ? r.recent_transactions : [],
+        }));
+        setSearchResults(results as typeof searchResults);
+      }
     } catch (e) {
       console.error('[search] error:', e);
       setSearchResults([]);
@@ -1870,7 +1870,7 @@ function CastDetailInner() {
                       <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>🔍 ターゲット検索</p>
                       <div className="flex gap-2 items-end">
                         <textarea
-                          placeholder="ユーザー名を1行ずつ入力（改行区切り）"
+                          placeholder="ユーザー名またはURLを1行ずつ入力（改行区切り）"
                           value={searchQuery}
                           onChange={e => setSearchQuery(e.target.value)}
                           rows={3}
@@ -1890,12 +1890,20 @@ function CastDetailInner() {
                           )}
                         </div>
                       </div>
-                      {searchResults.length > 0 && (
+                      {searchResults.length > 0 && (() => {
+                        const hits = searchResults.filter(r => r.found);
+                        const misses = searchResults.filter(r => !r.found);
+                        return (
                         <div className="mt-3 space-y-2">
                           <p className="text-[10px] font-semibold" style={{ color: 'var(--text-secondary)' }}>
-                            {searchResults.length}名の結果
+                            {searchResults.length}名中{' '}
+                            <span style={{ color: 'var(--accent-green)' }}>{hits.length}名ヒット</span>
+                            {misses.length > 0 && (
+                              <> / <span style={{ color: 'var(--accent-pink)' }}>{misses.length}名該当なし</span></>
+                            )}
                           </p>
-                          {searchResults.map(r => (
+                          {/* Hit cards */}
+                          {hits.map(r => (
                             <div key={r.user_name} className="glass-panel rounded-xl p-3" style={{ borderLeft: '3px solid var(--accent-primary)' }}>
                               <div className="flex items-start justify-between mb-2">
                                 <div>
@@ -1919,7 +1927,9 @@ function CastDetailInner() {
                                 <div>
                                   <span style={{ color: 'var(--text-muted)' }}>最終課金: </span>
                                   <span style={{ color: 'var(--text-secondary)' }}>
-                                    {r.last_payment_date ? new Date(r.last_payment_date).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--'}
+                                    {(r.last_actual_payment || r.last_payment_date)
+                                      ? new Date(r.last_actual_payment || r.last_payment_date!).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                      : '--'}
                                   </span>
                                 </div>
                                 <div>
@@ -1970,8 +1980,31 @@ function CastDetailInner() {
                               )}
                             </div>
                           ))}
+                          {/* Misses - collapsible */}
+                          {misses.length > 0 && (
+                            <div className="glass-panel rounded-xl overflow-hidden" style={{ background: 'rgba(244,63,94,0.04)' }}>
+                              <button onClick={() => setSearchMissesOpen(!searchMissesOpen)}
+                                className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-white/[0.02] transition-colors">
+                                <span className="text-[10px]">{searchMissesOpen ? '▼' : '▶'}</span>
+                                <span className="text-[11px] font-semibold" style={{ color: 'var(--accent-pink)' }}>
+                                  ❌ 該当なし（{misses.length}名）
+                                </span>
+                              </button>
+                              {searchMissesOpen && (
+                                <div className="px-3 pb-2 space-y-0.5">
+                                  {misses.map(m => (
+                                    <div key={m.user_name} className="text-[11px] px-2 py-1 rounded" style={{ color: 'var(--accent-pink)' }}>
+                                      {m.user_name}
+                                      <span className="ml-2" style={{ color: 'var(--text-muted)' }}>— このキャストの課金履歴なし</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      )}
+                        );
+                      })()}
                     </div>
 
                     {/* Filter bar - sticky */}
