@@ -975,10 +975,11 @@ function CastDetailInner() {
       .limit(1);
     if (regFilter) syncQuery = syncQuery.gte('date', regFilter);
 
-    // paid_users: coin_transactionsからcast_name別に集計
+    // paid_users: cast_name絞り込み
     const paidUsersQuery = sb.from('paid_users')
       .select('user_name, total_coins, last_payment_date')
       .eq('account_id', accountId)
+      .eq('cast_name', castName)
       .gt('total_coins', 0)
       .order('total_coins', { ascending: false })
       .limit(100);
