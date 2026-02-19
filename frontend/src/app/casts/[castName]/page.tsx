@@ -85,6 +85,17 @@ interface PaidUserItem {
   last_payment_date: string | null;
 }
 
+interface DmCvrItem {
+  campaign: string;
+  dm_sent: number;
+  paid_after: number;
+  cvr_pct: number;
+  total_tokens: number;
+  avg_tokens_per_payer: number;
+  first_sent: string;
+  last_sent: string;
+}
+
 interface AcquisitionUser {
   user_name: string;
   total_coins: number;
@@ -231,6 +242,8 @@ function CastDetailInner() {
   const [salesThisWeek, setSalesThisWeek] = useState(0);
   const [salesLastWeek, setSalesLastWeek] = useState(0);
   const [syncStatus, setSyncStatus] = useState<{ last: string | null; count: number }>({ last: null, count: 0 });
+  const [dmCvr, setDmCvr] = useState<DmCvrItem[]>([]);
+  const [dmCvrExpanded, setDmCvrExpanded] = useState<string | null>(null);
 
   // Analytics: retention
   const [retentionUsers, setRetentionUsers] = useState<RetentionUser[]>([]);
@@ -919,7 +932,7 @@ function CastDetailInner() {
   };
 
   // ============================================================
-  // Sales: coin_transactions + paid_users
+  // Sales: coin_transactions (cast_name絞り込み) + paid_users
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'sales') return;
@@ -932,10 +945,11 @@ function CastDetailInner() {
     const thisWeekStart = regFilter && regFilter > thisMonday.toISOString() ? regFilter : thisMonday.toISOString();
     const lastWeekStart = regFilter && regFilter > lastMonday.toISOString() ? regFilter : lastMonday.toISOString();
 
-    // coin_transactions: registeredAt以降のみ取得
+    // coin_transactions: cast_name絞り込み + registeredAt以降のみ取得
     let recentTxQuery = sb.from('coin_transactions')
       .select('id, user_name, tokens, type, date, source_detail')
       .eq('account_id', accountId)
+      .eq('cast_name', castName)
       .order('date', { ascending: false })
       .limit(100);
     if (regFilter) recentTxQuery = recentTxQuery.gte('date', regFilter);
@@ -943,37 +957,41 @@ function CastDetailInner() {
     let thisWeekTxQuery = sb.from('coin_transactions')
       .select('tokens')
       .eq('account_id', accountId)
+      .eq('cast_name', castName)
       .gte('date', thisWeekStart);
 
     let lastWeekTxQuery = sb.from('coin_transactions')
       .select('tokens')
       .eq('account_id', accountId)
+      .eq('cast_name', castName)
       .gte('date', lastWeekStart)
       .lt('date', thisMonday.toISOString());
 
     let syncQuery = sb.from('coin_transactions')
       .select('date')
       .eq('account_id', accountId)
+      .eq('cast_name', castName)
       .order('date', { ascending: false })
       .limit(1);
     if (regFilter) syncQuery = syncQuery.gte('date', regFilter);
 
+    // paid_users: coin_transactionsからcast_name別に集計
+    const paidUsersQuery = sb.from('paid_users')
+      .select('user_name, total_coins, last_payment_date')
+      .eq('account_id', accountId)
+      .gt('total_coins', 0)
+      .order('total_coins', { ascending: false })
+      .limit(100);
+
     Promise.all([
       recentTxQuery,
-      // Paid users who appear in this cast's spy_messages
-      sb.rpc('get_cast_fans', { p_account_id: accountId, p_cast_name: castName, p_limit: 50 }),
+      paidUsersQuery,
       thisWeekTxQuery,
       lastWeekTxQuery,
       syncQuery,
-    ]).then(([txRes, fansRes, thisWeekRes, lastWeekRes, lastTxRes]) => {
+    ]).then(([txRes, paidRes, thisWeekRes, lastWeekRes, lastTxRes]) => {
       setCoinTxs((txRes.data || []) as CoinTxItem[]);
-      // Convert fans to paid user format
-      const fanData = (fansRes.data || []) as FanItem[];
-      setPaidUsers(fanData.map(f => ({
-        user_name: f.user_name,
-        total_coins: f.total_tokens,
-        last_payment_date: f.last_seen,
-      })));
+      setPaidUsers((paidRes.data || []) as PaidUserItem[]);
       setSalesThisWeek((thisWeekRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
       setSalesLastWeek((lastWeekRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
       const lastTx = lastTxRes.data?.[0];
@@ -981,6 +999,20 @@ function CastDetailInner() {
       setSalesLoading(false);
     }).catch(() => setSalesLoading(false));
   }, [accountId, castName, activeTab, registeredAt, sb]);
+
+  // ============================================================
+  // Sales: DM Campaign CVR
+  // ============================================================
+  useEffect(() => {
+    if (!accountId || activeTab !== 'sales') return;
+    sb.rpc('get_dm_campaign_cvr', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_since: new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0],
+    }).then(({ data }) => {
+      setDmCvr((data || []) as DmCvrItem[]);
+    });
+  }, [accountId, castName, activeTab, sb]);
 
   // Retention stats
   const retentionCounts = useMemo(() => {
@@ -2247,14 +2279,14 @@ function CastDetailInner() {
                         {tokensToJPY(salesThisWeek, coinRate)}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週コイン API</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>アカウント全体</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>このキャスト</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
                         {tokensToJPY(salesLastWeek, coinRate)}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週コイン API</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>アカウント全体</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>このキャスト</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{
@@ -2265,7 +2297,7 @@ function CastDetailInner() {
                           : '--'}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比 (API)</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>アカウント全体</p>
+                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>このキャスト</p>
                     </div>
                   </div>
 
@@ -2300,7 +2332,7 @@ function CastDetailInner() {
                           <span className="text-[11px] font-semibold">Coin API (coin_transactions)</span>
                         </div>
                         <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                          Stripchat Earnings APIからの課金履歴。アカウント全体。
+                          Stripchat Earnings APIからの課金履歴。cast_name絞り込み済み。
                         </p>
                         <p className="text-xs mt-1 font-bold" style={{ color: 'var(--accent-amber)' }}>
                           {coinTxs.length > 0 ? `${coinTxs.length}件取得済み` : '未同期'}
@@ -2341,7 +2373,7 @@ function CastDetailInner() {
 
                     {/* Recent coin transactions */}
                     <div className="glass-card p-4">
-                      <h3 className="text-sm font-bold mb-3">直近のコイン履歴 (アカウント全体)</h3>
+                      <h3 className="text-sm font-bold mb-3">直近のコイン履歴 (このキャスト)</h3>
                       {coinTxs.length === 0 ? (
                         <div className="text-center py-6">
                           <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>コイン履歴なし</p>
@@ -2372,6 +2404,95 @@ function CastDetailInner() {
                       )}
                     </div>
                   </div>
+
+                  {/* DM Campaign CVR */}
+                  {dmCvr.length > 0 && (
+                    <div className="glass-card p-4">
+                      <h3 className="text-sm font-bold mb-3">DM Campaign CVR</h3>
+                      <div className="space-y-2">
+                        {/* Header */}
+                        <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold px-2" style={{ color: 'var(--text-muted)' }}>
+                          <div className="col-span-4">Campaign</div>
+                          <div className="col-span-1 text-right">Sent</div>
+                          <div className="col-span-1 text-right">Paid</div>
+                          <div className="col-span-2 text-right">CVR</div>
+                          <div className="col-span-2 text-right">Tokens</div>
+                          <div className="col-span-2 text-right">Avg/人</div>
+                        </div>
+                        {/* Rows */}
+                        {dmCvr.map(row => {
+                          const cvrColor = row.cvr_pct >= 50 ? 'var(--accent-green)'
+                            : row.cvr_pct >= 20 ? 'var(--accent-amber)'
+                            : 'var(--accent-pink)';
+                          const barWidth = Math.min(row.cvr_pct, 100);
+                          return (
+                            <div key={row.campaign}>
+                              <div
+                                className="glass-panel px-2 py-2 rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
+                                onClick={() => setDmCvrExpanded(dmCvrExpanded === row.campaign ? null : row.campaign)}
+                              >
+                                <div className="grid grid-cols-12 gap-2 items-center text-[11px]">
+                                  <div className="col-span-4 truncate font-medium">{row.campaign}</div>
+                                  <div className="col-span-1 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
+                                    {row.dm_sent.toLocaleString()}
+                                  </div>
+                                  <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
+                                    {row.paid_after.toLocaleString()}
+                                  </div>
+                                  <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
+                                    {row.cvr_pct}%
+                                  </div>
+                                  <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                    {row.total_tokens.toLocaleString()}
+                                  </div>
+                                  <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
+                                    {(row.avg_tokens_per_payer || 0).toLocaleString()}
+                                  </div>
+                                </div>
+                                {/* CVR Bar */}
+                                <div className="mt-1.5 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                  <div
+                                    className="h-full rounded-full transition-all"
+                                    style={{ width: `${barWidth}%`, background: cvrColor }}
+                                  />
+                                </div>
+                              </div>
+                              {/* Expanded detail */}
+                              {dmCvrExpanded === row.campaign && (
+                                <div className="mt-1 px-3 py-2 rounded-lg text-[10px] space-y-1" style={{ background: 'rgba(15,23,42,0.4)' }}>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>初回送信</span>
+                                    <span>{row.first_sent ? formatJST(row.first_sent) : '-'}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>最終送信</span>
+                                    <span>{row.last_sent ? formatJST(row.last_sent) : '-'}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>合計収益</span>
+                                    <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(row.total_tokens, coinRate)}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>課金者平均</span>
+                                    <span style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)}</span>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Summary */}
+                      <div className="mt-3 pt-3 flex items-center justify-between text-[10px]" style={{ borderTop: '1px solid var(--border-glass)' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          {dmCvr.length}キャンペーン / 送信合計 {dmCvr.reduce((s, r) => s + r.dm_sent, 0).toLocaleString()}通
+                        </span>
+                        <span style={{ color: 'var(--accent-green)' }}>
+                          総収益 {tokensToJPY(dmCvr.reduce((s, r) => s + r.total_tokens, 0), coinRate)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>

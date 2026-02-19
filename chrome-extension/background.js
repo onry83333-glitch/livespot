@@ -56,10 +56,17 @@ const BUFFER_MAX = 1000;
 // 自社キャスト名キャッシュ（STTフィルタ用）
 let registeredCastNames = new Set();
 
+// AutoCoinSync 状態管理
+let isCoinSyncing = false;
+let coinSyncRetryCount = 0;
+const COIN_SYNC_MAX_RETRIES = 3;
+const COIN_SYNC_RETRY_DELAY_MS = 30 * 60 * 1000; // 30分
+
 // ============================================================
 // A.1: Service Worker Keepalive via chrome.alarms
 // ============================================================
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
+chrome.alarms.create('coinSyncPeriodic', { periodInMinutes: 360 }); // 6時間ごと
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepalive') {
@@ -72,6 +79,31 @@ chrome.alarms.onAlarm.addListener((alarm) => {
       console.warn('[LS-BG] DMスケジュールチェック失敗:', e.message);
     });
   }
+
+  // 定期コイン同期（6時間ごと）
+  if (alarm.name === 'coinSyncPeriodic') {
+    console.log('[LS-BG] AutoCoinSync: 定期同期アラーム発火');
+    triggerAutoCoinSync('periodic').catch(e => {
+      console.warn('[LS-BG] AutoCoinSync: 定期同期失敗:', e.message);
+    });
+  }
+
+  // コイン同期リトライ
+  if (alarm.name === 'coinSyncRetry') {
+    console.log('[LS-BG] AutoCoinSync: リトライ発火 (', coinSyncRetryCount, '/', COIN_SYNC_MAX_RETRIES, ')');
+    triggerAutoCoinSync('retry').catch(e => {
+      console.warn('[LS-BG] AutoCoinSync: リトライ失敗:', e.message);
+    });
+  }
+
+  // 配信終了後5分ディレイのコイン同期
+  if (alarm.name === 'coinSyncAfterStream') {
+    console.log('[LS-BG] AutoCoinSync: 配信終了後同期発火');
+    triggerAutoCoinSync('after_stream').catch(e => {
+      console.warn('[LS-BG] AutoCoinSync: 配信終了後同期失敗:', e.message);
+    });
+  }
+
   // chrome.alarmsベースのDMスケジュール発火（フォールバック）
   if (alarm.name.startsWith('dm_schedule_')) {
     const scheduleId = alarm.name.replace('dm_schedule_', '');
@@ -1010,6 +1042,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       console.log('[LS-BG] SPYセッション終了: session_id=', currentSessionId);
       currentSessionId = null;
       chrome.storage.local.set({ spy_started_at: null, spy_cast: null, current_session_id: null });
+
+      // 配信終了 → 5分後にコイン同期を自動実行
+      console.log('[LS-BG] AutoCoinSync: 配信終了検出 → 5分後に同期予約');
+      chrome.alarms.create('coinSyncAfterStream', { delayInMinutes: 5 });
     }
     chrome.tabs.query(
       { url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] },
@@ -1195,6 +1231,20 @@ async function handleCoinSync() {
     return { ok: false, error: 'ログインしてアカウントを選択してください' };
   }
 
+  // ===== cast_name解決 =====
+  // 1. registered_casts（Supabase）から取得
+  // 2. last_cast_name（SPY監視時に保存される）
+  // 3. フォールバック: 'unknown'
+  await loadRegisteredCasts();
+  let syncCastName = registeredCastNames.size > 0
+    ? [...registeredCastNames][0]
+    : null;
+  if (!syncCastName) {
+    const castData = await chrome.storage.local.get('last_cast_name');
+    syncCastName = castData.last_cast_name || 'unknown';
+  }
+  console.log('[LS-BG] CoinSync: cast_name =', syncCastName);
+
   // ===== 差分同期ロジック =====
   const syncStorageKey = `coin_sync_last_${accountId}`;
   const stored = await chrome.storage.local.get(syncStorageKey);
@@ -1346,7 +1396,7 @@ async function handleCoinSync() {
   console.log('[LS-BG] COIN_SYNC_DATA:', transactions.length, '件受信, 有料ユーザー:', payingUsers.length, '名');
 
   // Supabaseに保存
-  const result = await processCoinSyncData(transactions);
+  const result = await processCoinSyncData(transactions, syncCastName);
 
   // 有料ユーザー一覧をpaid_usersにUPSERT（transactions APIとは別に）
   if (payingUsers.length > 0) {
@@ -1368,7 +1418,7 @@ async function handleCoinSync() {
  * 2. refresh_paying_users RPC（マテビュー更新）
  * ※ paid_usersはprocessPayingUsersData()が担当（二重書き込み防止）
  */
-async function processCoinSyncData(transactions) {
+async function processCoinSyncData(transactions, castName = 'unknown') {
   await loadAuth();
   if (!accountId || !accessToken) {
     return { ok: false, error: '認証エラー' };
@@ -1390,6 +1440,7 @@ async function processCoinSyncData(transactions) {
 
     txRows.push({
       account_id: accountId,
+      cast_name: castName,
       stripchat_tx_id: stripchatTxId,
       user_name: userName,
       user_id: tx.userId || null,
@@ -2436,5 +2487,94 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.stt_enabled) {
     sttEnabled = changes.stt_enabled.newValue === true;
     console.log('[LS-BG] stt_enabled変更:', sttEnabled);
+  }
+});
+
+// ============================================================
+// AutoCoinSync — 自動コイン同期トリガー
+// ============================================================
+
+/**
+ * 自動コイン同期の統合エントリポイント
+ * - 二重実行防止（isSyncing フラグ）
+ * - 最終同期からの経過時間チェック
+ * - 失敗時リトライ（30分後、最大3回）
+ * @param {string} trigger - 発火元 ('periodic'|'after_stream'|'earnings_visit'|'retry')
+ */
+async function triggerAutoCoinSync(trigger = 'unknown') {
+  // 二重実行防止
+  if (isCoinSyncing) {
+    console.log('[LS-BG] AutoCoinSync: 同期中 — スキップ (trigger:', trigger, ')');
+    return;
+  }
+
+  // 認証チェック
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    console.log('[LS-BG] AutoCoinSync: 未認証 — スキップ (trigger:', trigger, ')');
+    return;
+  }
+
+  // 最終同期からの経過時間チェック（1時間未満ならスキップ）
+  const MIN_INTERVAL_MS = 60 * 60 * 1000; // 1時間
+  const syncStorageKey = `coin_sync_last_${accountId}`;
+  const stored = await chrome.storage.local.get([syncStorageKey, 'last_coin_sync']);
+  const lastSync = stored[syncStorageKey] || stored.last_coin_sync || null;
+  if (lastSync) {
+    const elapsed = Date.now() - new Date(lastSync).getTime();
+    if (elapsed < MIN_INTERVAL_MS) {
+      const minutesAgo = Math.round(elapsed / 60000);
+      console.log(`[LS-BG] AutoCoinSync: 最終同期 ${minutesAgo}分前 — スキップ (trigger: ${trigger})`);
+      return;
+    }
+  }
+
+  console.log(`[LS-BG] AutoCoinSync: 実行開始 (trigger: ${trigger})`);
+  isCoinSyncing = true;
+
+  try {
+    const result = await handleCoinSync();
+    isCoinSyncing = false;
+    coinSyncRetryCount = 0; // 成功 → リトライカウンタリセット
+
+    if (result.ok) {
+      console.log(`[LS-BG] AutoCoinSync: 成功 (trigger: ${trigger})`, result.message || `${result.synced}件`);
+    } else {
+      console.warn(`[LS-BG] AutoCoinSync: 失敗 (trigger: ${trigger})`, result.error);
+      scheduleRetry();
+    }
+  } catch (err) {
+    isCoinSyncing = false;
+    console.error(`[LS-BG] AutoCoinSync: 例外 (trigger: ${trigger})`, err.message);
+    scheduleRetry();
+  }
+}
+
+function scheduleRetry() {
+  coinSyncRetryCount++;
+  if (coinSyncRetryCount <= COIN_SYNC_MAX_RETRIES) {
+    const delayMin = COIN_SYNC_RETRY_DELAY_MS / 60000;
+    console.log(`[LS-BG] AutoCoinSync: ${delayMin}分後にリトライ予約 (${coinSyncRetryCount}/${COIN_SYNC_MAX_RETRIES})`);
+    chrome.alarms.create('coinSyncRetry', { delayInMinutes: delayMin });
+  } else {
+    console.warn(`[LS-BG] AutoCoinSync: リトライ上限到達 (${COIN_SYNC_MAX_RETRIES}回) — 次の定期同期まで待機`);
+    coinSyncRetryCount = 0;
+  }
+}
+
+// earningsページ訪問検出 → 最終同期から1時間以上なら自動実行
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') return;
+  if (!tab.url) return;
+  try {
+    const url = new URL(tab.url);
+    if (url.hostname.endsWith('stripchat.com') && url.pathname.startsWith('/earnings')) {
+      console.log('[LS-BG] AutoCoinSync: earningsページ検出 tab=', tabId);
+      triggerAutoCoinSync('earnings_visit').catch(e => {
+        console.warn('[LS-BG] AutoCoinSync: earnings訪問トリガー失敗:', e.message);
+      });
+    }
+  } catch (_) {
+    // invalid URL — ignore
   }
 });
