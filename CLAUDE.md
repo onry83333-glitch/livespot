@@ -27,15 +27,25 @@ app/
   page.tsx            # / — コントロールセンター（ダッシュボード）
   login/page.tsx      # /login — メール+パスワードログイン
   signup/page.tsx     # /signup — 新規登録 + 確認メール画面
+  casts/page.tsx      # /casts — キャスト一覧（RPC集計、登録管理）
+  casts/[castName]/page.tsx  # /casts/[castName] — キャスト個別（タブ: 概要/配信/DM/分析/売上/リアルタイム）
   spy/page.tsx        # /spy — リアルタイムSPYログ（Realtime購読）
-  alerts/page.tsx     # /alerts — VIP入室アラート
+  spy/[castName]/page.tsx    # /spy/[castName] — キャスト別SPYログ
+  spy/users/[username]/page.tsx  # /spy/users/[username] — ユーザー別SPYログ
   dm/page.tsx         # /dm — DM一斉送信（API連携 + Realtime購読）
+  alerts/page.tsx     # /alerts — VIP入室アラート
   analytics/page.tsx  # /analytics — 売上分析・給与計算
+  analytics/compare/page.tsx  # /analytics/compare — キャスト横並び比較
+  sessions/page.tsx   # /sessions — 配信セッション一覧
+  users/page.tsx      # /users — ユーザー一覧（paid_users）
+  users/[username]/page.tsx  # /users/[username] — ユーザー詳細
+  reports/page.tsx    # /reports — AIレポート
+  feed/page.tsx       # /feed — フィード
   settings/page.tsx   # /settings — セキュリティ・レート制限設定
 components/
   auth-provider.tsx   # AuthContext (user, session, loading, signOut) + リダイレクト制御
   app-shell.tsx       # publicページ判定、サイドバー表示/非表示、ローディングスピナー
-  sidebar.tsx         # 左220px固定ナビ、user.email表示、ログアウトボタン
+  sidebar.tsx         # 左220px固定ナビ、キャストサブメニュー、user.email表示
   chat-message.tsx    # SPYメッセージ1行表示（msg_type別色分け、VIPハイライト）
   vip-alert-card.tsx  # VIPアラートカード
 hooks/
@@ -93,6 +103,21 @@ background.js         # Service Worker — API中継、DMキューポーリン�
 migrations/
   001_initial_schema.sql      # 全テーブル、RLS、Realtime、ヘルパー関数
   002_analytics_functions.sql  # 8 RPC関数（売上分析・ARPU・リテンション等）
+  003_add_sessions_viewerstats.sql  # sessions + viewer_stats テーブル
+  003_refresh_mv_and_user_summary_rpc.sql  # MVリフレッシュ + ユーザーサマリーRPC
+  004_registered_casts.sql    # registered_casts テーブル
+  005_cast_stats_rpc.sql      # get_cast_stats RPC
+  006_analytics_rpc.sql       # 追加分析RPC（retention, campaign effectiveness, segments）
+  007_dm_send_log_cast_name.sql  # dm_send_log に cast_name カラム追加
+  008_spy_casts.sql           # spy_casts テーブル
+  009_coin_schema_update.sql  # コインスキーマ更新
+  010_user_segments_rpc.sql   # get_user_segments RPC
+  012_dm_schedules.sql        # dm_schedules テーブル + RLS + Realtime
+  013_detect_new_paying_users.sql  # detect_new_paying_users RPC
+  014_alert_rules.sql         # alert_rules テーブル + RLS
+  015_user_acquisition_dashboard.sql  # get_user_acquisition_dashboard RPC
+  016_dashboard_improvements.sql  # dashboard v2 (p_max_coins) + search_user_detail
+  017_search_users_bulk.sql   # search_users_bulk RPC（完全一致 + 該当なし対応）
 ```
 
 ---
@@ -115,9 +140,14 @@ migrations/
 | paid_users | id (UUID) | ユーザー別累計課金情報 |
 | coin_transactions | id (BIGSERIAL) | 個別課金トランザクション |
 | paying_users | — (MATERIALIZED VIEW) | coin_transactions の集計ビュー |
-| dm_send_log | id (BIGSERIAL) | DM送信キュー・履歴 |
+| dm_send_log | id (BIGSERIAL) | DM送信キュー・履歴（cast_name付き） |
 | dm_templates | id (UUID) | DMテンプレート |
+| dm_schedules | id (UUID) | DM予約送信スケジュール |
 | spy_messages | id (BIGSERIAL) | チャットログ（リアルタイム監視） |
+| sessions | session_id (UUID) | 配信セッション記録 |
+| viewer_stats | id (BIGSERIAL) | 視聴者統計 |
+| registered_casts | id (UUID) | 登録キャスト管理 |
+| alert_rules | id (UUID) | ポップアラートルール（5種類） |
 | broadcast_scripts | id (UUID) | 配信台本 |
 | ai_reports | id (UUID) | AI生成レポート |
 | audio_recordings | id (UUID) | 音声録音 |
@@ -163,6 +193,17 @@ created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
 | revenue_trend | (account_id) | 月別×タイプ別収入源推移 |
 | top_users_detail | (account_id, limit) | 太客詳細（累計tk, 初回/最終支払, 活動月数, 主要収入源） |
 | dm_effectiveness | (account_id, window_days) | DM効果測定（送信後N日以内の再課金率） |
+
+### RPC関数（追加分 006〜017）
+| 関数 | 引数 | 説明 |
+|---|---|---|
+| get_cast_stats | (account_id, cast_names[]) | キャスト別集計（メッセージ/チップ/コイン/ユニークユーザー） |
+| get_user_retention_status | (account_id, cast_name) | ユーザーリテンションステータス |
+| get_dm_campaign_effectiveness | (account_id, cast_name, window_days) | DMキャンペーン効果（来訪率/課金率/売上貢献） |
+| get_user_segments | (account_id, cast_name) | 10セグメント分類（コイン×最終課金日2軸） |
+| detect_new_paying_users | (account_id, cast_name, since) | 新規課金ユーザー検出 |
+| get_user_acquisition_dashboard | (account_id, cast_name, days, min_coins, max_coins) | ユーザー獲得ダッシュボード（DM効果+セグメント） |
+| search_users_bulk | (account_id, cast_name, user_names[]) | 複数ユーザー一括検索（完全一致+該当なし対応） |
 
 ### ヘルパー関数（001_initial_schema.sql）
 | 関数 | 説明 |
@@ -278,12 +319,22 @@ AuthProvider (onAuthStateChange監視)
 |---|---|---|
 | /login | app/login/page.tsx | 実装済み（Supabase Auth signInWithPassword） |
 | /signup | app/signup/page.tsx | 実装済み（Supabase Auth signUp + 確認メール） |
-| / | app/page.tsx | モックデータ（API未接続） |
-| /spy | app/spy/page.tsx | 実装済み（Realtime購読、デモデータ挿入） |
+| / | app/page.tsx | 実装済み（ダッシュボード） |
+| /casts | app/casts/page.tsx | 実装済み（キャスト一覧、RPC集計、登録管理） |
+| /casts/[castName] | app/casts/[castName]/page.tsx | 実装済み（6タブ: 概要/配信/DM/分析/売上/リアルタイム） |
+| /spy | app/spy/page.tsx | 実装済み（Realtime購読） |
+| /spy/[castName] | app/spy/[castName]/page.tsx | 実装済み（キャスト別SPY） |
+| /spy/users/[username] | app/spy/users/[username]/page.tsx | 実装済み（ユーザー別SPY） |
 | /dm | app/dm/page.tsx | 実装済み（API連携、Realtime購読、ステータス表示） |
-| /alerts | app/alerts/page.tsx | モックデータ |
-| /analytics | app/analytics/page.tsx | モックデータ |
-| /settings | app/settings/page.tsx | モックデータ |
+| /alerts | app/alerts/page.tsx | 実装済み（アラートルール管理） |
+| /analytics | app/analytics/page.tsx | 実装済み（売上分析・給与計算） |
+| /analytics/compare | app/analytics/compare/page.tsx | 実装済み（キャスト横並び比較） |
+| /sessions | app/sessions/page.tsx | 実装済み（配信セッション一覧） |
+| /users | app/users/page.tsx | 実装済み（ユーザー一覧） |
+| /users/[username] | app/users/[username]/page.tsx | 実装済み（ユーザー詳細） |
+| /reports | app/reports/page.tsx | 実装済み（AIレポート） |
+| /feed | app/feed/page.tsx | 実装済み（フィード） |
+| /settings | app/settings/page.tsx | 実装済み（セキュリティ・設定） |
 
 ---
 
@@ -452,61 +503,51 @@ claude
 
 ## ロードマップ
 
-### Phase 1: MVP完成（Week 1-2、残5.5日）
-| タスク | 工数 | 状態 |
-|---|---|---|
-| 認証（ログイン/新規登録/AuthProvider） | 1日 | 完了 |
-| SPYログ Realtime表示 | 0.5日 | 完了 |
-| DM送信 API連携 | 1日 | 完了 |
-| ダッシュボードに Supabase 実データ表示 | 1日 | **次** |
-| Chrome拡張の SaaS 対応（JWT認証、API連携） | 1.5日 | 未着手 |
-| 名簿同期（Coin API → Supabase） | 1日 | 未着手 |
-| 入室アラート Realtime 連携 | 0.5日 | 未着手 |
-| VIPアラート（paid_users ルックアップ） | 0.5日 | 未着手 |
-
-### Phase 2: 運用品質（Week 3-4、11日）
-| タスク | 工数 |
+### Phase 1: MVP完成 — 完了
+| タスク | 状態 |
 |---|---|
-| DM効果測定ダッシュボード（dm_effectiveness RPC接続） | 1日 |
-| お礼DM自動送信（ギフト検出→DM自動キュー登録） | 2日 |
-| Lead層識別（ライフサイクル分類UI） | 1.5日 |
-| ファネル分析 DB連携（ARPU/LTV/リテンション画面） | 2日 |
-| AIレポート画面（Claude連携、レポート履歴） | 1.5日 |
-| 離脱ユーザー→DM自動トリガー | 1日 |
-| 二重送信防止ロジック | 0.5日 |
-| ブラックリスト機能 | 0.5日 |
-| 設定画面の実データ連携 | 1日 |
+| 認証（ログイン/新規登録/AuthProvider） | 完了 |
+| SPYログ Realtime表示 | 完了 |
+| DM送信 API連携 | 完了 |
+| ダッシュボード Supabase実データ表示 | 完了 |
+| Chrome拡張 SaaS対応（JWT認証、API連携、WS傍受、DM実行） | 完了 |
+| 名簿同期（Coin API → Supabase） | 完了 |
+| キャスト一覧 + 個別ページ（6タブ統合UI） | 完了 |
+| ユーザー獲得ダッシュボード + ターゲット検索 | 完了 |
+| DM一括送信（Chrome拡張連携、スケジュール送信） | 完了 |
+| セッション管理 + 視聴者統計 | 完了 |
+| アラートルール管理 | 完了 |
 
-### Phase 3: スケーリング（Week 5-8、21.5日）
-| タスク | 工数 |
+### Phase 2: 運用品質
+| タスク | 状態 |
 |---|---|
-| 本番デプロイ（Vercel + Cloud Run + Supabase） | 2日 |
-| Stripe決済連携（プラン管理、課金） | 3日 |
-| Chrome Web Store 公開 | 2日 |
-| user_timeline 統合ビュー | 3日 |
-| キャスト横並び比較ダッシュボード | 2日 |
-| 音声クラウド化（録音→文字起こし→分析） | 3日 |
-| GPU外出し（AI処理分離） | 2日 |
-| パフォーマンス最適化・負荷テスト | 2日 |
-| ドキュメント・オンボーディング | 1.5日 |
-| セキュリティ監査・ペネトレーションテスト | 1日 |
+| DM効果測定ダッシュボード（campaign別集計） | 完了 |
+| ユーザーセグメント分析（10セグメント RPC） | 完了 |
+| キャスト横並び比較（/analytics/compare） | 完了 |
+| お礼DM自動送信（ギフト検出→DM自動キュー登録） | 未着手 |
+| 離脱ユーザー→DM自動トリガー | 未着手 |
+| 二重送信防止ロジック | 未着手 |
+| ブラックリスト機能 | 未着手 |
+
+### Phase 3: スケーリング
+| タスク | 状態 |
+|---|---|
+| 本番デプロイ（Vercel + Cloud Run + Supabase） | 未着手 |
+| Stripe決済連携（プラン管理、課金） | 未着手 |
+| Chrome Web Store 公開 | 未着手 |
+| user_timeline 統合ビュー | 未着手 |
+| 音声クラウド化（録音→文字起こし→分析） | 未着手 |
+| パフォーマンス最適化・負荷テスト | 未着手 |
 
 ---
 
-## 次のタスク（Phase 1 残り）
+## 次のタスク
 
-1. **ダッシュボードに Supabase 実データ表示** ← 今ここ
-   - `/` の page.tsx を API 連携（accounts一覧、売上サマリー、太客ランキング）
-   - analytics ルーターの既存エンドポイントを使用
-2. **Chrome拡張の SaaS 対応**
-   - popup.html にログインUI追加
-   - background.js で Supabase JWT を保存・送信
-   - content_scripts（ws_interceptor, dm_executor）を実装
-3. **名簿同期（Coin API → Supabase）**
-   - Chrome拡張が Stripchat API をスクレイプ → POST /api/sync/coin-transactions
-4. **入室アラート Realtime 連携**
-   - /alerts ページで spy_messages (msg_type='enter') を Realtime 購読
-   - VIPユーザーの場合はハイライト表示
-5. **VIPアラート（paid_users ルックアップ）**
-   - 入室時に paid_users の total_coins を参照
-   - whale (1000+tk) / high_level (Lv70+) で分類・通知
+1. **お礼DM自動送信**
+   - ギフト検出→DM自動キュー登録（spy_messages + dm_send_log トリガー）
+2. **離脱ユーザー→DM自動トリガー**
+   - リテンションコホートから一定期間未来訪ユーザーを抽出→DM自動送信
+3. **二重送信防止**
+   - dm_send_log で user_name + campaign の重複チェック
+4. **本番デプロイ**
+   - Vercel（フロントエンド）+ Cloud Run（バックエンド）+ Supabase本番

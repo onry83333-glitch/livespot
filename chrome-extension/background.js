@@ -1223,6 +1223,17 @@ async function handleCoinSync() {
   if (earningsTabs.length > 0) {
     targetTab = earningsTabs[0];
     console.log('[LS-BG] Coin同期: 既存earningsタブ使用 tab=', targetTab.id, targetTab.url);
+
+    // F5リロード直後はまだロード中の可能性がある — 完了を待つ
+    const tabInfo = await chrome.tabs.get(targetTab.id);
+    if (tabInfo.status !== 'complete') {
+      console.log('[LS-BG] Coin同期: タブがまだロード中 → 完了待ち');
+      const loaded = await waitForTabComplete(targetTab.id, 15000);
+      if (!loaded) {
+        return { ok: false, error: 'earningsページのロードがタイムアウトしました' };
+      }
+      await sleep_bg(2000);
+    }
   } else {
     // Stripchatタブを /earnings/tokens-history に遷移
     const tabs = await chrome.tabs.query({
@@ -1249,31 +1260,71 @@ async function handleCoinSync() {
     await sleep_bg(3000);
   }
 
-  // Step 2: content_coin_sync.jsを動的注入
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: targetTab.id },
-      files: ['content_coin_sync.js'],
-    });
-    console.log('[LS-BG] content_coin_sync.js 動的注入成功: tab=', targetTab.id);
-    await sleep_bg(500);
-  } catch (injectErr) {
-    console.error('[LS-BG] content_coin_sync.js 注入失敗:', injectErr.message);
-    return { ok: false, error: 'Content script注入失敗: ' + injectErr.message };
+  // Step 2: content_coin_sync.jsを動的注入 + PING確認（最大2回リトライ）
+  const MAX_INJECT_ATTEMPTS = 2;
+  let scriptReady = false;
+
+  for (let attempt = 1; attempt <= MAX_INJECT_ATTEMPTS; attempt++) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        files: ['content_coin_sync.js'],
+      });
+      console.log(`[LS-BG] content_coin_sync.js 動的注入成功 (attempt ${attempt}): tab=`, targetTab.id);
+      await sleep_bg(500);
+    } catch (injectErr) {
+      console.error(`[LS-BG] content_coin_sync.js 注入失敗 (attempt ${attempt}):`, injectErr.message);
+      if (attempt === MAX_INJECT_ATTEMPTS) {
+        return { ok: false, error: 'Content script注入失敗: ' + injectErr.message };
+      }
+      await sleep_bg(2000);
+      continue;
+    }
+
+    // PING送信でcontent scriptのlistenerが応答するか確認
+    try {
+      const pingResult = await Promise.race([
+        chrome.tabs.sendMessage(targetTab.id, { type: 'COIN_SYNC_PING' }),
+        sleep_bg(3000).then(() => null),
+      ]);
+      if (pingResult && pingResult.pong) {
+        console.log('[LS-BG] COIN_SYNC_PING成功 — content script応答確認');
+        scriptReady = true;
+        break;
+      } else {
+        console.warn(`[LS-BG] COIN_SYNC_PING応答なし (attempt ${attempt})`);
+      }
+    } catch (pingErr) {
+      console.warn(`[LS-BG] COIN_SYNC_PING失敗 (attempt ${attempt}):`, pingErr.message);
+    }
+
+    if (attempt < MAX_INJECT_ATTEMPTS) {
+      // 次の試行前にページが安定するのを待つ
+      console.log('[LS-BG] content script再注入を試行します...');
+      await sleep_bg(2000);
+    }
   }
 
-  // Step 3: FETCH_COINS送信
+  if (!scriptReady) {
+    return { ok: false, error: 'Content scriptが応答しません。ページをリロードして再試行してください。' };
+  }
+
+  // Step 3: FETCH_COINS送信（10分タイムアウト付き）
   const fetchOptions = isFullSync
     ? { maxPages: 600, limit: 100 }
     : { maxPages: 600, limit: 100, sinceISO: lastSyncISO };
   console.log('[LS-BG] FETCH_COINS options:', JSON.stringify(fetchOptions));
 
+  const FETCH_TIMEOUT_MS = 10 * 60 * 1000; // 10分
   let fetchResult;
   try {
-    fetchResult = await chrome.tabs.sendMessage(targetTab.id, {
-      type: 'FETCH_COINS',
-      options: fetchOptions,
-    });
+    fetchResult = await Promise.race([
+      chrome.tabs.sendMessage(targetTab.id, {
+        type: 'FETCH_COINS',
+        options: fetchOptions,
+      }),
+      sleep_bg(FETCH_TIMEOUT_MS).then(() => ({ error: 'timeout', message: `${FETCH_TIMEOUT_MS / 60000}分タイムアウト` })),
+    ]);
   } catch (err) {
     console.error('[LS-BG] FETCH_COINS送信失敗:', err.message);
     return { ok: false, error: 'Content script通信失敗: ' + err.message };

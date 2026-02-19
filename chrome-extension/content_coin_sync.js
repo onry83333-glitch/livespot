@@ -20,13 +20,44 @@ window._lsCoinSyncLoaded = true;
 var LOG = '[LS-COIN]';
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // 生存確認用PING（background.jsから呼ばれる）
+  if (msg.type === 'COIN_SYNC_PING') {
+    console.log(LOG, 'PING受信 → PONG応答');
+    sendResponse({ pong: true, url: window.location.href, timestamp: Date.now() });
+    return false;
+  }
+
   if (msg.type === 'FETCH_COINS') {
     console.log(LOG, '名簿同期リクエスト受信');
+
+    // 全体タイムアウト（9分 — background側の10分より短く）
+    const OVERALL_TIMEOUT_MS = 9 * 60 * 1000;
+    let responded = false;
+
+    const safeRespond = (result) => {
+      if (responded) return;
+      responded = true;
+      try {
+        sendResponse(result);
+      } catch (e) {
+        console.error(LOG, 'sendResponse失敗（チャネル切断済み）:', e.message);
+      }
+    };
+
+    const timeoutId = setTimeout(() => {
+      console.warn(LOG, `全体タイムアウト（${OVERALL_TIMEOUT_MS / 60000}分）`);
+      safeRespond({ error: 'timeout', message: '取得タイムアウト' });
+    }, OVERALL_TIMEOUT_MS);
+
     fetchCoinHistory(msg.options || {})
-      .then(sendResponse)
+      .then(result => {
+        clearTimeout(timeoutId);
+        safeRespond(result);
+      })
       .catch(err => {
+        clearTimeout(timeoutId);
         console.error(LOG, 'エラー:', err.message);
-        sendResponse({ error: 'fetch_error', message: err.message });
+        safeRespond({ error: 'fetch_error', message: err.message });
       });
     return true; // async response
   }
@@ -53,10 +84,14 @@ async function getUserId() {
   // 方法0: initial-dynamic APIから直接取得（最も信頼性が高い）
   // Earningsページロード時に呼ばれるAPIで、現在ログイン中のモデルIDを返す
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒タイムアウト
     const resp = await fetch('/api/front/v2/initial-dynamic?requestType=initial', {
       credentials: 'include',
       headers: { 'Accept': 'application/json' },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
     if (resp.ok) {
       const data = await resp.json();
       const uid = data?.initialDynamic?.user?.id;
@@ -205,13 +240,17 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
     console.log(LOG, `ページ ${page} 取得中... (offset=${offset}${totalStr2})`);
 
     try {
+      const fetchController = new AbortController();
+      const fetchTimeout = setTimeout(() => fetchController.abort(), 30000); // 30秒タイムアウト
       const res = await fetch(url, {
         credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0',
         },
+        signal: fetchController.signal,
       });
+      clearTimeout(fetchTimeout);
 
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
@@ -390,13 +429,17 @@ async function fetchPayingUsers(baseUrl, userId, options = {}) {
     console.log(LOG, `[users] ページ ${page} 取得中... (offset=${offset})`);
 
     try {
+      const fetchController = new AbortController();
+      const fetchTimeout = setTimeout(() => fetchController.abort(), 30000);
       const res = await fetch(url, {
         credentials: 'include',
         headers: {
           'Accept': 'application/json',
           'User-Agent': 'Mozilla/5.0',
         },
+        signal: fetchController.signal,
       });
+      clearTimeout(fetchTimeout);
 
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
