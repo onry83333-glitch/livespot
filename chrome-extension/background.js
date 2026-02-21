@@ -131,6 +131,12 @@ const MAX_SPY_ROTATION_TABS = 40;       // 同時オープンタブ上限
 let screenshotIntervalCache = {};
 let screenshotLastCapture = {};         // { castName: timestamp(ms) } — 前回撮影時刻
 
+// GC（グループチャット）課金トラッキング
+// key: "castName:userName" → { castName, userName, joinedAt (ms), ratePerMinute }
+const activeGroupChats = new Map();
+// キャスト別GCレート: { castName: coins_per_minute } — デフォルト12
+let gcRateCache = {};
+
 // ============================================================
 // A.1: Service Worker Keepalive via chrome.alarms
 // ============================================================
@@ -147,6 +153,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     checkHeartbeatTimeout();
     cleanupStaleSTTTabs();
     checkBroadcastEnd(); // C-2: 配信終了検出（5分タイムアウト）
+    // GC安全弁: 60分以上経過したGCを強制精算
+    settleStaleGroupChats();
     // DMスケジュールポーリング（30秒ごとにpending+期限到来をチェック）
     checkDmSchedules().catch(e => {
       console.warn('[LS-BG] DMスケジュールチェック失敗:', e.message);
@@ -226,6 +234,27 @@ function cleanupStaleSTTTabs() {
   }
 }
 
+// GC安全弁: 60分以上経過したGCを強制精算
+function settleStaleGroupChats() {
+  if (activeGroupChats.size === 0) return;
+  const now = Date.now();
+  const GC_MAX_DURATION_MS = 60 * 60 * 1000; // 60分
+  const staleCasts = new Set();
+  for (const [key, gc] of activeGroupChats.entries()) {
+    if (now - gc.joinedAt > GC_MAX_DURATION_MS) {
+      staleCasts.add(gc.castName);
+    }
+  }
+  if (staleCasts.size > 0) {
+    console.log('[LS-BG] GC安全弁: 60分超過あり, casts=', [...staleCasts]);
+    for (const castName of staleCasts) {
+      settleGroupChats(castName).catch(e => {
+        console.warn('[LS-BG] GC安全弁精算失敗:', e.message);
+      });
+    }
+  }
+}
+
 // タブが閉じられたらSTT状態 + autoPatrolタブをクリーンアップ
 chrome.tabs.onRemoved.addListener((tabId) => {
   if (sttTabStates[tabId]) {
@@ -297,7 +326,7 @@ async function loadRegisteredCasts() {
       // registered_casts（自社）+ spy_casts（他社分析）の両方を取得
       const [regRes, spyRes] = await Promise.all([
         fetch(
-          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,screenshot_interval`,
+          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,screenshot_interval,gc_rate_per_minute`,
           {
             headers: {
               'apikey': CONFIG.SUPABASE_ANON_KEY,
@@ -306,7 +335,7 @@ async function loadRegisteredCasts() {
           }
         ),
         fetch(
-          `${CONFIG.SUPABASE_URL}/rest/v1/spy_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,screenshot_interval`,
+          `${CONFIG.SUPABASE_URL}/rest/v1/spy_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,screenshot_interval,gc_rate_per_minute`,
           {
             headers: {
               'apikey': CONFIG.SUPABASE_ANON_KEY,
@@ -329,6 +358,11 @@ async function loadRegisteredCasts() {
         for (const r of regData) newIntervals[r.cast_name] = r.screenshot_interval ?? 5;
         for (const r of spyData) newIntervals[r.cast_name] = r.screenshot_interval ?? 0;
         screenshotIntervalCache = newIntervals;
+        // GCレートキャッシュ更新
+        const newGcRates = {};
+        for (const r of regData) if (r.gc_rate_per_minute) newGcRates[r.cast_name] = r.gc_rate_per_minute;
+        for (const r of spyData) if (r.gc_rate_per_minute) newGcRates[r.cast_name] = r.gc_rate_per_minute;
+        gcRateCache = newGcRates;
         console.log('[LS-BG] キャスト名キャッシュ更新: 自社=', [...ownCastNamesCache],
           'SPY=', [...spyCastNamesCache],
           '合計=', registeredCastNames.size, '件');
@@ -979,6 +1013,11 @@ async function closeCastSession(castName) {
     }
   }
 
+  // GC精算: セッション終了時に未精算のGCをすべて精算
+  await settleGroupChats(castName).catch(e => {
+    console.warn('[LS-BG] GC精算（セッション終了時）失敗:', e.message);
+  });
+
   // お礼DM自動トリガー（セッション終了時 — fire-and-forget）
   triggerThankYouDMs(castName, sessionId).catch(e => {
     console.warn('[LS-BG] お礼DMトリガー失敗:', e.message);
@@ -989,6 +1028,81 @@ async function closeCastSession(castName) {
   castBroadcastTitles.delete(castName);
   castSessionStarted.delete(castName);
   saveSessionState(); // SW再起動対策: 状態永続化
+}
+
+/**
+ * GC（グループチャット）精算: 指定キャストの全アクティブGCを精算し、coin_transactionsにINSERT
+ * castName指定: そのキャストの全GCを精算（group_end or セッション終了時）
+ * castName省略: 全GCを精算（安全弁用）
+ */
+async function settleGroupChats(castName) {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+
+  const keysToSettle = [];
+  for (const [key, gc] of activeGroupChats.entries()) {
+    if (!castName || gc.castName === castName) {
+      keysToSettle.push(key);
+    }
+  }
+
+  if (keysToSettle.length === 0) return;
+
+  console.log('[LS-BG] GC精算開始: cast=', castName || 'ALL', '対象=', keysToSettle.length, '件');
+
+  const transactions = [];
+  for (const key of keysToSettle) {
+    const gc = activeGroupChats.get(key);
+    if (!gc) continue;
+
+    const durationMs = Date.now() - gc.joinedAt;
+    const durationMin = Math.max(1, Math.round(durationMs / 60000)); // 最低1分
+    const tokens = durationMin * gc.ratePerMinute;
+
+    transactions.push({
+      account_id: accountId,
+      user_name: gc.userName,
+      cast_name: gc.castName,
+      tokens: tokens,
+      type: 'group_chat',
+      date: new Date(gc.joinedAt).toISOString(),
+      metadata: {
+        duration_minutes: durationMin,
+        rate_per_minute: gc.ratePerMinute,
+        joined_at: new Date(gc.joinedAt).toISOString(),
+        settled_at: new Date().toISOString(),
+        session_id: gc.sessionId,
+      },
+    });
+
+    activeGroupChats.delete(key);
+    console.log('[LS-BG] GC精算:', gc.userName, '@', gc.castName,
+      durationMin, '分 ×', gc.ratePerMinute, '=', tokens, 'tk');
+  }
+
+  if (transactions.length === 0) return;
+
+  // coin_transactions にバッチINSERT
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(transactions),
+    });
+    if (res.ok || res.status === 201) {
+      console.log('[LS-BG] GC coin_transactions INSERT成功:', transactions.length, '件');
+    } else {
+      const errText = await res.text();
+      console.warn('[LS-BG] GC coin_transactions INSERT失敗:', res.status, errText);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] GC coin_transactions INSERT例外:', e.message);
+  }
 }
 
 /**
@@ -1384,6 +1498,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       metadata: msg.metadata || {},
       session_id: perCastSessionId || currentSessionId || null,
     };
+
+    // GC（グループチャット）トラッキング
+    if (payload.msg_type === 'group_join' && payload.user_name && castName) {
+      const gcKey = `${castName}:${payload.user_name}`;
+      const rate = gcRateCache[castName] || 12; // デフォルト12コイン/分
+      activeGroupChats.set(gcKey, {
+        castName,
+        userName: payload.user_name,
+        joinedAt: Date.now(),
+        ratePerMinute: rate,
+        sessionId: perCastSessionId || currentSessionId || null,
+      });
+      console.log('[LS-BG] GC参加:', gcKey, 'rate=', rate, '/分, active=', activeGroupChats.size);
+    }
+    if (payload.msg_type === 'group_end' && castName) {
+      // group_end: そのキャストの全GCを精算
+      settleGroupChats(castName).catch(e => {
+        console.warn('[LS-BG] GC精算失敗:', e.message);
+      });
+    }
 
     // Safety net: validate tip classification before buffering
     const validated = validateTipBeforeSave(payload);

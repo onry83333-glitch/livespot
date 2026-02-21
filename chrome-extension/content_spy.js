@@ -594,27 +594,71 @@
       }
     }
 
+    // Group Chat Join / End — MUST be checked BEFORE generic enter/leave
+    const groupJoinPatterns = [
+      /^(.+?)\s+joined\s+the\s+group\s+chat/i,           // "User joined the group chat"
+      /^(.+?)\s+entered\s+the\s+group\s+chat/i,          // "User entered the group chat"
+      /^(.+?)\s+has\s+joined\s+the\s+group\s+chat/i,     // "User has joined the group chat"
+      /^(.+?)\s*さんがグループチャットに参加/,              // "Userさんがグループチャットに参加しました"
+      /^(.+?)\s*がグループチャットに(?:参加|入室)/,         // "Userがグループチャットに参加しました"
+    ];
+    const groupEndPatterns = [
+      /group\s+chat\s+(?:has\s+)?ended/i,                 // "Group chat ended" / "Group chat has ended"
+      /the\s+group\s+chat\s+(?:has\s+)?ended/i,           // "The group chat has ended"
+      /グループチャットが終了/,                             // "グループチャットが終了しました"
+      /^(.+?)\s+left\s+the\s+group\s+chat/i,              // "User left the group chat"
+      /^(.+?)\s+has\s+left\s+the\s+group\s+chat/i,        // "User has left the group chat"
+      /^(.+?)\s*さんがグループチャットから退室/,             // "Userさんがグループチャットから退室しました"
+    ];
+
+    if (msgType === 'chat') {
+      for (const pat of groupJoinPatterns) {
+        const m = fullText.match(pat);
+        if (m && m[1] && m[1].trim().length > 0 && m[1].trim().length < 50) {
+          msgType = 'group_join';
+          if (!userName) userName = m[1].trim();
+          message = '';
+          break;
+        }
+      }
+    }
+    if (msgType === 'chat') {
+      for (const pat of groupEndPatterns) {
+        const m = fullText.match(pat);
+        if (m) {
+          msgType = 'group_end';
+          // group_end patterns may or may not capture a user_name
+          if (m[1] && m[1].trim().length > 0 && m[1].trim().length < 50) {
+            if (!userName) userName = m[1].trim();
+          }
+          message = '';
+          break;
+        }
+      }
+    }
+
     // Enter / Leave — テキストパターンで判定 + ユーザー名抽出
+    // NOTE: Generic enter/leave patterns below; group chat patterns are handled above
     const enterPatterns = [
       /^(.+?)\s+has joined/i,                            // "User has joined"
-      /^(.+?)\s+joined\s+the\s+(?:group\s+)?chat/i,     // "User joined the chat"
+      /^(.+?)\s+joined\s+the\s+chat/i,                   // "User joined the chat" (NOT group chat)
       /^(.+?)\s+entered/i,                               // "User entered"
       /^(.+?)\s+has entered/i,                           // "User has entered"
-      /^(.+?)\s+entered\s+the\s+(?:group\s+)?chat/i,    // "User entered the chat"
+      /^(.+?)\s+entered\s+the\s+chat/i,                  // "User entered the chat" (NOT group chat)
       /^(.+?)\s+is\s+here/i,                             // "User is here"
       /^(.+?)\s+arrived/i,                               // "User arrived"
-      /^(.+?)\s*さんが.*(?:参加|入室)/,                   // "Userさんがグループチャットに参加しました"
-      /^(.+?)\s*が(?:参加|入室)しました/,                 // "Userが参加しました"
+      /^(.+?)\s*さんが(?!グループ).*(?:参加|入室)/,        // 参加/入室 (NOT グループチャット)
+      /^(.+?)\s*が(?!グループ)(?:参加|入室)しました/,      // 参加/入室しました (NOT グループ)
     ];
     const leavePatterns = [
       /^(.+?)\s+has left/i,                              // "User has left"
-      /^(.+?)\s+left\s+the\s+(?:group\s+)?chat/i,       // "User left the chat"
+      /^(.+?)\s+left\s+the\s+chat/i,                     // "User left the chat" (NOT group chat)
       /^(.+?)\s+left/i,                                  // "User left"
       /^(.+?)\s+has gone/i,                              // "User has gone"
       /^(.+?)\s+departed/i,                              // "User departed"
       /^(.+?)\s+exited/i,                                // "User exited"
-      /^(.+?)\s*さんが.*退室/,                            // "Userさんが退室しました"
-      /^(.+?)\s*が退室しました/,                          // "Userが退室しました"
+      /^(.+?)\s*さんが(?!グループ).*退室/,                 // 退室 (NOT グループチャット)
+      /^(.+?)\s*が(?!グループ)退室しました/,               // 退室しました (NOT グループ)
     ];
 
     if (msgType === 'chat') {

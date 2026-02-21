@@ -60,7 +60,7 @@ export interface SpyMessage {
   account_id: string;
   cast_name: string;
   message_time: string;
-  msg_type: 'chat' | 'gift' | 'tip' | 'goal' | 'enter' | 'leave' | 'system' | 'viewer_count' | 'speech';
+  msg_type: 'chat' | 'gift' | 'tip' | 'goal' | 'enter' | 'leave' | 'system' | 'viewer_count' | 'speech' | 'group_join' | 'group_end';
   user_name: string | null;
   message: string | null;
   tokens: number;
@@ -194,6 +194,7 @@ export interface RegisteredCast {
   category: string | null;
   cast_type_id: string | null;
   screenshot_interval: number | null;
+  gc_rate_per_minute: number | null;
   last_seen_online: string | null;
   is_extinct: boolean;
   extinct_at: string | null;
@@ -219,6 +220,7 @@ export interface SpyCast {
   is_active: boolean;
   auto_monitor: boolean;
   screenshot_interval: number | null;
+  gc_rate_per_minute: number | null;
   last_seen_online: string | null;
   is_extinct: boolean;
   extinct_at: string | null;
@@ -269,6 +271,46 @@ export interface CastType {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+// ============================================================
+// Cast Persona (Persona Agent)
+// ============================================================
+export interface CastPersona {
+  id: string;
+  account_id: string;
+  cast_name: string;
+  character_type: string;
+  speaking_style: {
+    suffix: string[];
+    emoji_rate: 'low' | 'medium' | 'high';
+    formality: 'casual' | 'casual_polite' | 'polite';
+    max_length: number;
+  };
+  personality_traits: string[];
+  ng_behaviors: string[];
+  greeting_patterns: Record<string, string>;
+  dm_tone_examples: Record<string, string>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PersonaApiRequest {
+  task_type: 'dm_generate' | 'fb_report' | 'dm_evaluate' | 'realtime_coach' | 'recruitment_copy' | 'training_task';
+  mode?: 'customer' | 'recruitment';
+  cast_name: string;
+  context: Record<string, unknown>;
+}
+
+export interface PersonaApiResponse {
+  output: unknown;
+  raw_text: string;
+  reasoning: string | null;
+  confidence: number | null;
+  cost_tokens: number;
+  cost_usd: number;
+  persona_used: string;
+  persona_found: boolean;
 }
 
 // ============================================================

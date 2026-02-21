@@ -25,6 +25,18 @@ const typeStyles: Record<string, { color: string; bg: string; border: string; la
   system: { color: 'var(--text-muted)',    bg: 'rgba(100,116,139,0.04)', border: 'transparent',           label: '\ud83d\udd14' },
   viewer_count: { color: '#38bdf8',      bg: 'rgba(56,189,248,0.06)', border: 'rgba(56,189,248,0.18)', label: '\ud83d\udcca' },
   speech: { color: 'var(--accent-purple)', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.25)', label: '\ud83c\udfa4' },
+  group_join: {
+    color: '#2dd4bf',
+    bg: 'rgba(45,212,191,0.06)',
+    border: 'rgba(45,212,191,0.15)',
+    label: '\ud83d\udc65',
+  },
+  group_end: {
+    color: '#f59e0b',
+    bg: 'rgba(245,158,11,0.08)',
+    border: 'rgba(245,158,11,0.2)',
+    label: '\ud83d\udc65\ud83d\udcb0',
+  },
 };
 
 export function ChatMessage({ message: msg }: { message: SpyMessage }) {

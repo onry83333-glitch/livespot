@@ -27,7 +27,7 @@ interface ViewerStat {
 // メッセージタイプフィルタ定義
 const MSG_TYPE_FILTERS = [
   { key: 'chat',    label: '💬 チャット', types: ['chat'] },
-  { key: 'tip',     label: '🪙 チップ',   types: ['tip', 'gift'] },
+  { key: 'tip',     label: '🪙 チップ',   types: ['tip', 'gift', 'group_join', 'group_end'] },
   { key: 'speech',  label: '🎤 音声',     types: ['speech'] },
   { key: 'enter',   label: '🚪 入退室',   types: ['enter', 'leave'] },
   { key: 'system',  label: '⚙️ システム', types: ['goal', 'viewer_count', 'system'] },
@@ -1068,7 +1068,7 @@ function SpyListTab() {
   const [newCastName, setNewCastName] = useState('');
   const [addingCast, setAddingCast] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editFields, setEditFields] = useState<{ genre: string; benchmark: string; category: string; format_tag: string; notes: string }>({ genre: '', benchmark: '', category: '', format_tag: '', notes: '' });
+  const [editFields, setEditFields] = useState<{ genre: string; benchmark: string; category: string; format_tag: string; notes: string; screenshot_interval: number }>({ genre: '', benchmark: '', category: '', format_tag: '', notes: '', screenshot_interval: 0 });
 
   // Filter state
   const [filterGenre, setFilterGenre] = useState('');
@@ -1161,6 +1161,7 @@ function SpyListTab() {
         category: editFields.category || null,
         format_tag: editFields.format_tag || null,
         notes: editFields.notes || null,
+        screenshot_interval: editFields.screenshot_interval || 0,
         updated_at: new Date().toISOString(),
       })
       .eq('id', editingId);
@@ -1171,6 +1172,7 @@ function SpyListTab() {
       category: editFields.category || null,
       format_tag: editFields.format_tag || null,
       notes: editFields.notes || null,
+      screenshot_interval: editFields.screenshot_interval || 0,
       updated_at: new Date().toISOString(),
     } : c));
     setEditingId(null);
@@ -1256,6 +1258,7 @@ function SpyListTab() {
                   <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>USERS</th>
                   <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>最終配信</th>
                   <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>最終活動</th>
+                  <th className="text-center py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>📷</th>
                   <th className="text-right py-2 px-2"></th>
                   <th className="w-6 py-2 px-1"></th>
                 </tr>
@@ -1308,6 +1311,22 @@ function SpyListTab() {
                             </select>
                             <input type="text" value={editFields.notes} onChange={e => setEditFields(f => ({ ...f, notes: e.target.value }))}
                               className="input-glass text-[10px] py-0.5 px-1.5" placeholder="メモ" />
+                            <div>
+                              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>スクショ間隔</label>
+                              <select
+                                className="input-glass text-xs px-2 py-1.5 w-28"
+                                value={editFields.screenshot_interval ?? 0}
+                                onChange={e => setEditFields(prev => ({ ...prev, screenshot_interval: Number(e.target.value) }))}
+                              >
+                                <option value={0}>OFF</option>
+                                <option value={1}>1分</option>
+                                <option value={3}>3分</option>
+                                <option value={5}>5分</option>
+                                <option value={10}>10分</option>
+                                <option value={15}>15分</option>
+                                <option value={30}>30分</option>
+                              </select>
+                            </div>
                           </div>
                         ) : (
                           <CastTagBadges genre={cast.genre} benchmark={cast.benchmark} category={cast.category} />
@@ -1324,6 +1343,13 @@ function SpyListTab() {
                       <td className="py-2.5 px-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
                         {s?.last_activity ? timeAgo(s.last_activity) : '-'}
                       </td>
+                      <td className="py-2.5 px-2 text-center">
+                        {cast.screenshot_interval && cast.screenshot_interval > 0 ? (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(45,212,191,0.1)', color: '#2dd4bf', border: '1px solid rgba(45,212,191,0.2)' }}>📷 {cast.screenshot_interval}分</span>
+                        ) : (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(100,116,139,0.08)', color: 'var(--text-muted)' }}>📷 OFF</span>
+                        )}
+                      </td>
                       <td className="py-2.5 px-2 text-right">
                         <div className="flex items-center gap-1 justify-end">
                           {isEditing ? (
@@ -1333,7 +1359,7 @@ function SpyListTab() {
                             </>
                           ) : (
                             <>
-                              <button onClick={() => { setEditingId(cast.id); setEditFields({ genre: cast.genre || '', benchmark: cast.benchmark || '', category: cast.category || '', format_tag: cast.format_tag || '', notes: cast.notes || '' }); }}
+                              <button onClick={() => { setEditingId(cast.id); setEditFields({ genre: cast.genre || '', benchmark: cast.benchmark || '', category: cast.category || '', format_tag: cast.format_tag || '', notes: cast.notes || '', screenshot_interval: cast.screenshot_interval ?? 0 }); }}
                                 className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="タグ編集">✏️</button>
                               <button onClick={() => handleDelete(cast.id)} className="text-[10px] px-1.5 py-0.5 rounded hover:bg-rose-500/10" style={{ color: 'var(--accent-pink)' }} title="削除">🗑</button>
                             </>
