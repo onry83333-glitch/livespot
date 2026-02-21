@@ -261,6 +261,27 @@ function updateSpyButton(enabled) {
   }
 }
 
+function updateSpyRotationButton(enabled) {
+  const btn = $('spyRotationBtn');
+  const info = $('spyRotationInfo');
+  if (!btn) return;
+  if (enabled) {
+    btn.textContent = 'ON';
+    btn.style.background = 'linear-gradient(135deg, #f43f5e, #e11d48)';
+    if (info) {
+      info.innerHTML = '<span style="color:#f59e0b;">● 自動巡回中</span> — 3分間隔';
+      info.classList.remove('hidden');
+    }
+  } else {
+    btn.textContent = 'OFF';
+    btn.style.background = 'linear-gradient(135deg, #f59e0b, #d97706)';
+    if (info) {
+      info.innerHTML = '';
+      info.classList.add('hidden');
+    }
+  }
+}
+
 function updateSTTButton(enabled) {
   const btn = $('sttToggleBtn');
   const info = $('sttStatusInfo');
@@ -350,6 +371,7 @@ async function init() {
   const data = await chrome.storage.local.get([
     'access_token', 'refresh_token', 'logged_in', 'account_id',
     'api_base_url', 'spy_enabled', 'spy_cast', 'spy_started_at', 'stt_enabled',
+    'spy_rotation_enabled',
   ]);
 
   console.log('[LSP] Storage読込結果:', JSON.stringify({
@@ -394,6 +416,9 @@ async function init() {
     // STT状態の復元
     updateSTTButton(data.stt_enabled === true);
 
+    // SPYローテーション状態の復元
+    updateSpyRotationButton(data.spy_rotation_enabled === true);
+
     // さらにbackgroundに最新状態を問い合わせて補正
     chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
       if (chrome.runtime.lastError) {
@@ -417,6 +442,10 @@ async function init() {
         // STT状態も同期
         if (response.sttEnabled !== undefined) {
           updateSTTButton(response.sttEnabled);
+        }
+        // SPYローテーション状態同期
+        if (response.spyRotationEnabled !== undefined) {
+          updateSpyRotationButton(response.spyRotationEnabled);
         }
         // Coin同期ステータス表示
         if (response.lastCoinSync) {
@@ -575,6 +604,23 @@ $('sttToggleBtn').addEventListener('click', async () => {
   });
 });
 
+// --- SPY Rotation Toggle ---
+$('spyRotationBtn').addEventListener('click', async () => {
+  const data = await chrome.storage.local.get(['spy_rotation_enabled']);
+  const newState = !(data.spy_rotation_enabled === true);
+  console.log('[LSP] SPYローテーション切替:', data.spy_rotation_enabled, '→', newState);
+
+  chrome.runtime.sendMessage({ type: 'TOGGLE_SPY_ROTATION', enabled: newState }, (response) => {
+    if (chrome.runtime.lastError) {
+      console.error('[LSP] TOGGLE_SPY_ROTATION送信失敗:', chrome.runtime.lastError.message);
+      return;
+    }
+    if (response && response.ok) {
+      updateSpyRotationButton(newState);
+    }
+  });
+});
+
 // --- Coin Sync ---
 $('coinSyncBtn').addEventListener('click', async () => {
   const btn = $('coinSyncBtn');
@@ -646,13 +692,14 @@ logoutBtn.addEventListener('click', async () => {
     clearInterval(spyElapsedTimer);
     spyElapsedTimer = null;
   }
-  // SPY/STT停止をbackgroundに通知
+  // SPY/STT/ローテーション停止をbackgroundに通知
   chrome.runtime.sendMessage({ type: 'TOGGLE_SPY', enabled: false });
   chrome.runtime.sendMessage({ type: 'TOGGLE_STT', enabled: false });
+  chrome.runtime.sendMessage({ type: 'TOGGLE_SPY_ROTATION', enabled: false });
   await chrome.storage.local.remove([
     'access_token', 'refresh_token', 'account_id',
     'user_email', 'logged_in', 'spy_enabled', 'stt_enabled',
-    'spy_cast', 'spy_started_at',
+    'spy_cast', 'spy_started_at', 'spy_rotation_enabled',
     'last_coin_sync', 'coin_sync_count',
   ]);
   showLogin();

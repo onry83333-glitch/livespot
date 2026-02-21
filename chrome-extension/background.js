@@ -120,6 +120,13 @@ let autoPatrolEnabled = false;          // 自動巡回ON/OFF（storage: auto_pa
 let monitoredCastStatus = {};           // { castName: 'public'|'offline'|... } — 前回ステータス
 let autoPatrolTabs = {};                // { castName: tabId } — 自動オープンしたタブの追跡
 
+// SPY他社ローテーション 状態管理
+let spyRotationEnabled = false;         // 他社ローテーションON/OFF（storage: spy_rotation_enabled）
+let spyRotationTabs = {};               // { castName: tabId } — ローテーションで開いたタブ
+let ownCastNamesCache = new Set();      // registered_castsのみ（自社キャスト保護用）
+let spyCastNamesCache = new Set();      // spy_castsのみ（ローテーション対象）
+const MAX_SPY_ROTATION_TABS = 10;       // 同時オープンタブ上限
+
 // ============================================================
 // A.1: Service Worker Keepalive via chrome.alarms
 // ============================================================
@@ -127,6 +134,7 @@ chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.create('coinSyncPeriodic', { periodInMinutes: 360 }); // 6時間ごと
 chrome.alarms.create('spyAutoPatrol', { periodInMinutes: 3 });      // 3分ごとに配信開始検出
 chrome.alarms.create('check-extinct-casts', { periodInMinutes: 1440 }); // 24時間ごと（消滅キャスト検出）
+chrome.alarms.create('spyRotation', { periodInMinutes: 3 });          // 3分ごと（他社SPYローテーション）
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepalive') {
@@ -185,6 +193,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'check-extinct-casts') {
     checkExtinctCasts().catch(e => {
       console.warn('[LS-BG] ExtinctCasts: チェック失敗:', e.message);
+    });
+  }
+
+  // 他社SPYローテーション（3分ごと）
+  if (alarm.name === 'spyRotation') {
+    handleSpyRotation().catch(e => {
+      console.warn('[LS-BG] SpyRotation: エラー:', e.message);
     });
   }
 
@@ -299,6 +314,8 @@ async function loadRegisteredCasts() {
       if (regRes.ok) {
         const regData = await regRes.json();
         const spyData = spyRes.ok ? await spyRes.json() : [];
+        ownCastNamesCache = new Set(regData.map(r => r.cast_name));
+        spyCastNamesCache = new Set(spyData.map(r => r.cast_name));
         registeredCastNames = new Set([
           ...regData.map(r => r.cast_name),
           ...spyData.map(r => r.cast_name),
@@ -1495,6 +1512,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sttEnabled: sttEnabled,
         sttTabs: sttTabs,
         autoPatrolEnabled: autoPatrolEnabled,
+        spyRotationEnabled: spyRotationEnabled,
         monitoredCasts: Object.entries(monitoredCastStatus).map(([name, st]) => ({ name, status: st })),
         polling: !!dmPollingTimer,
         spyMsgCount,
@@ -1715,6 +1733,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       });
     }
     sendResponse({ ok: true, autoPatrolEnabled });
+    return false;
+  }
+
+  // --- Toggle SPY Rotation ---
+  if (msg.type === 'TOGGLE_SPY_ROTATION') {
+    spyRotationEnabled = msg.enabled;
+    chrome.storage.local.set({ spy_rotation_enabled: spyRotationEnabled });
+    console.log('[LS-BG] SpyRotation切替: enabled=', spyRotationEnabled);
+    if (spyRotationEnabled) {
+      handleSpyRotation().catch(e => {
+        console.warn('[LS-BG] SpyRotation: 手動ON後エラー:', e.message);
+      });
+    }
+    sendResponse({ ok: true, spyRotationEnabled });
     return false;
   }
 
@@ -3378,6 +3410,119 @@ async function checkExtinctCasts() {
 }
 
 // ============================================================
+// SPY他社ローテーション — spy_castsのキャストを自動巡回・タブ管理
+// ============================================================
+
+/**
+ * SPYローテーション初期化: storageから状態を復元
+ */
+async function initSpyRotation() {
+  const data = await chrome.storage.local.get(['spy_rotation_enabled']);
+  spyRotationEnabled = data.spy_rotation_enabled === true; // デフォルトOFF
+  console.log('[LS-BG] SpyRotation: 初期化 enabled=', spyRotationEnabled);
+}
+
+/**
+ * 他社SPYローテーション メインロジック
+ * - spy_castsのキャストのオンライン状態をチェック
+ * - オンラインならタブオープン、オフラインならタブクローズ
+ * - 自社キャスト（registered_casts）のタブは絶対に閉じない
+ * - 同時タブ数上限あり
+ */
+async function handleSpyRotation() {
+  if (!spyRotationEnabled || !spyEnabled) return;
+
+  await loadAuth();
+  if (!accessToken || !accountId) return;
+
+  // キャッシュが空ならロード
+  if (spyCastNamesCache.size === 0) {
+    await loadRegisteredCasts();
+  }
+  if (spyCastNamesCache.size === 0) return;
+
+  const EXCLUDE_PAGES = ['favorites', 'messages', 'settings', 'feed', 'members', 'login', 'signup', 'new', 'search', 'models', 'categories', '404'];
+
+  // 現在開いているStripchatタブを取得
+  const existingTabs = await chrome.tabs.query({ url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] });
+  const openCastTabs = new Map(); // castName → tabId
+  for (const tab of existingTabs) {
+    if (!tab.url || !tab.id) continue;
+    const m = tab.url.match(/stripchat\.com\/([A-Za-z0-9_-]+)/);
+    if (!m) continue;
+    if (EXCLUDE_PAGES.includes(m[1])) continue;
+    openCastTabs.set(m[1], tab.id);
+  }
+
+  let opened = 0;
+  let closed = 0;
+  const onlineCount = { total: 0 };
+
+  // 各spy_castのオンライン状態をチェック
+  for (const castName of spyCastNamesCache) {
+    // 自社キャストはAutoPatrolの管轄なのでスキップ
+    if (ownCastNamesCache.has(castName)) continue;
+
+    const status = await checkCastOnlineStatus(castName);
+    if (status === 'unknown') continue;
+
+    const nowStreaming = isStreamingStatus(status);
+    const prevStatus = monitoredCastStatus[castName] || 'offline';
+    monitoredCastStatus[castName] = status;
+
+    // Survival tracking
+    if (nowStreaming) {
+      onlineCount.total++;
+      updateCastLastSeen(castName).catch(() => {});
+    }
+
+    // オンラインなのにタブが開いていない → オープン
+    if (nowStreaming && !openCastTabs.has(castName)) {
+      // タブ数上限チェック
+      if (openCastTabs.size + opened - closed >= MAX_SPY_ROTATION_TABS) {
+        console.log('[LS-BG] SpyRotation: タブ上限到達 skip=', castName);
+        continue;
+      }
+      try {
+        const newTab = await chrome.tabs.create({
+          url: `https://stripchat.com/${castName}`,
+          active: false,
+        });
+        spyRotationTabs[castName] = newTab.id;
+        opened++;
+        console.log('[LS-BG] SpyRotation: タブオープン cast=', castName, 'tab=', newTab.id);
+        await sleep_bg(500);
+      } catch (e) {
+        console.warn('[LS-BG] SpyRotation: タブ作成失敗 cast=', castName, e.message);
+      }
+    }
+
+    // オフラインでタブが開いている → クローズ（ローテーションで開いたタブのみ）
+    if (!nowStreaming && isStreamingStatus(prevStatus)) {
+      const tabId = spyRotationTabs[castName];
+      if (tabId) {
+        // 自社キャスト保護: 絶対に閉じない
+        if (ownCastNamesCache.has(castName)) continue;
+        try {
+          await chrome.tabs.remove(tabId);
+          delete spyRotationTabs[castName];
+          closed++;
+          console.log('[LS-BG] SpyRotation: タブクローズ cast=', castName, 'tab=', tabId);
+        } catch {
+          delete spyRotationTabs[castName];
+        }
+      }
+    }
+
+    // API レート制限回避
+    await sleep_bg(1000);
+  }
+
+  const totalTabs = openCastTabs.size + opened - closed;
+  console.log(`[LS-BG] SpyRotation: online=${onlineCount.total}, opened=${opened}, closed=${closed}, tabs=${totalTabs}/${MAX_SPY_ROTATION_TABS}`);
+}
+
+// ============================================================
 // Screenshot Capture — SPY監視中の全タブスクリーンショット（5分間隔）
 // ============================================================
 
@@ -3584,6 +3729,7 @@ restoreBuffers().then(() => {
       startWhisperPolling();
       loadRegisteredCasts();
       initAutoPatrol(); // SPY自動巡回の初期化
+      initSpyRotation(); // 他社SPYローテーション初期化
       if (spyEnabled) startScreenshotCapture(); // SW再起動時にSPY有効ならスクショ再開
       console.log('[LS-BG] 初期化完了 DM/Whisperポーリング開始');
       // SW再起動時: currentSessionIdが復元されていたらsessionsレコード存在チェック
@@ -3630,6 +3776,7 @@ restoreBuffers().then(() => {
             startWhisperPolling();
             loadRegisteredCasts();
             initAutoPatrol(); // SPY自動巡回の初期化
+            initSpyRotation(); // 他社SPYローテーション初期化
             if (messageBuffer.length > 0) flushMessageBuffer();
           }
         } else {
@@ -3676,6 +3823,10 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.auto_patrol_enabled) {
     autoPatrolEnabled = changes.auto_patrol_enabled.newValue !== false;
     console.log('[LS-BG] auto_patrol_enabled変更:', autoPatrolEnabled);
+  }
+  if (changes.spy_rotation_enabled) {
+    spyRotationEnabled = changes.spy_rotation_enabled.newValue === true;
+    console.log('[LS-BG] spy_rotation_enabled変更:', spyRotationEnabled);
   }
 });
 
