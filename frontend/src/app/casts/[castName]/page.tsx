@@ -213,6 +213,7 @@ function CastDetailInner() {
   // Overview: weekly revenue
   const [thisWeekCoins, setThisWeekCoins] = useState(0);
   const [lastWeekCoins, setLastWeekCoins] = useState(0);
+  const [totalCoinTx, setTotalCoinTx] = useState<number | null>(null);
 
   // Sessions
   const [sessions, setSessions] = useState<SessionItem[]>([]);
@@ -427,10 +428,16 @@ function CastDetailInner() {
     Promise.all([
       sb.rpc('get_cast_stats', { p_account_id: accountId, p_cast_names: [castName] }),
       sb.rpc('get_cast_fans', { p_account_id: accountId, p_cast_name: castName, p_limit: 10 }),
-    ]).then(([statsRes, fansRes]) => {
+      sb.from('coin_transactions')
+        .select('tokens')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .limit(50000),
+    ]).then(([statsRes, fansRes, coinTotalRes]) => {
       const s = statsRes.data as CastStatsData[] | null;
       if (s && s.length > 0) setStats(s[0]);
       setFans((fansRes.data || []) as FanItem[]);
+      setTotalCoinTx((coinTotalRes.data || []).reduce((sum: number, r: { tokens: number }) => sum + (r.tokens || 0), 0));
       setLoading(false);
     });
   }, [accountId, castName, sb]);
@@ -475,53 +482,33 @@ function CastDetailInner() {
   }, [activeTab, accountId, sb]);
 
   // ============================================================
-  // Overview: weekly revenue
+  // Overview: weekly revenue (coin_transactionsベース)
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'overview') return;
     const thisMonday = getWeekStart(0);
     const lastMonday = getWeekStart(1);
 
-    // spy_messagesからtip/giftの週間集計（registeredAt以降のみ）
     const thisStart = registeredAt && registeredAt > thisMonday.toISOString() ? registeredAt : thisMonday.toISOString();
     const lastStart = registeredAt && registeredAt > lastMonday.toISOString() ? registeredAt : lastMonday.toISOString();
 
     Promise.all([
-      sb.from('spy_messages')
-        .select('tokens')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .in('msg_type', ['tip', 'gift'])
-        .gte('message_time', thisStart),
-      sb.from('spy_messages')
-        .select('tokens')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .in('msg_type', ['tip', 'gift'])
-        .gte('message_time', lastStart)
-        .lt('message_time', thisMonday.toISOString()),
       sb.from('coin_transactions')
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
-        .in('type', ['tip', 'gift'])
         .gte('date', thisStart)
         .limit(10000),
       sb.from('coin_transactions')
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
-        .in('type', ['tip', 'gift'])
         .gte('date', lastStart)
         .lt('date', thisMonday.toISOString())
         .limit(10000),
-    ]).then(([thisSpyRes, lastSpyRes, thisTxRes, lastTxRes]) => {
-      const thisSpy = (thisSpyRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
-      const lastSpy = (lastSpyRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
-      const thisTx = (thisTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
-      const lastTx = (lastTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
-      setThisWeekCoins(Math.max(thisSpy, thisTx));
-      setLastWeekCoins(Math.max(lastSpy, lastTx));
+    ]).then(([thisTxRes, lastTxRes]) => {
+      setThisWeekCoins((thisTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
+      setLastWeekCoins((lastTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
     });
 
     // 新規課金ユーザー検出（直近24時間）
@@ -1185,10 +1172,10 @@ function CastDetailInner() {
                 MSG <span className="font-bold text-slate-300">{stats.total_messages.toLocaleString()}</span>
               </span>
               <span style={{ color: 'var(--accent-amber)' }}>
-                TIP <span className="font-bold">{formatTokens(stats.total_coins)}</span>
+                TIP <span className="font-bold">{formatTokens(totalCoinTx ?? stats.total_coins)}</span>
               </span>
               <span style={{ color: 'var(--accent-green)' }}>
-                <span className="font-bold">{tokensToJPY(stats.total_coins, coinRate)}</span>
+                <span className="font-bold">{tokensToJPY(totalCoinTx ?? stats.total_coins, coinRate)}</span>
               </span>
               <span style={{ color: 'var(--accent-purple, #a855f7)' }}>
                 USERS <span className="font-bold">{stats.unique_users}</span>

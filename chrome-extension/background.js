@@ -1559,9 +1559,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'OPEN_ALL_SPY_TABS') {
     (async () => {
       try {
-        // キャスト一覧を最新化
-        await loadRegisteredCasts();
-        const castNames = [...registeredCastNames];
+        // フロントエンドからキャスト一覧が渡された場合はそれを使う、なければDB取得
+        let castNames;
+        if (msg.castNames && Array.isArray(msg.castNames) && msg.castNames.length > 0) {
+          castNames = msg.castNames;
+        } else {
+          await loadRegisteredCasts();
+          castNames = [...registeredCastNames];
+        }
         if (castNames.length === 0) {
           sendResponse({ ok: true, opened: 0, skipped: 0, total: 0, message: '登録キャストなし' });
           return;

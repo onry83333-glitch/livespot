@@ -80,14 +80,34 @@ export default function SpyPage() {
       ]);
       const allCasts = [...(reg || []), ...(spy || [])].map(c => c.cast_name);
       if (allCasts.length === 0) { setOpenResult('登録キャストなし'); return; }
-      let opened = 0;
-      for (const castName of allCasts) {
-        window.open(`https://stripchat.com/${castName}`, '_blank');
-        opened++;
-        if (opened < allCasts.length) await new Promise(r => setTimeout(r, 500));
+
+      // Chrome拡張経由でタブを開く（ポップアップブロック回避）
+      const result = await new Promise<{ ok: boolean; opened?: number; skipped?: number; total?: number; error?: string }>((resolve) => {
+        const timeout = setTimeout(() => {
+          window.removeEventListener('message', handler);
+          resolve({ ok: false, error: 'timeout' });
+        }, 5000);
+
+        const handler = (event: MessageEvent) => {
+          if (event.source !== window || event.data?.type !== 'LS_OPEN_ALL_SPY_TABS_RESULT') return;
+          clearTimeout(timeout);
+          window.removeEventListener('message', handler);
+          resolve(event.data);
+        };
+        window.addEventListener('message', handler);
+        window.postMessage({ type: 'LS_OPEN_ALL_SPY_TABS', castNames: allCasts }, '*');
+      });
+
+      if (result.ok) {
+        setOpenResult(`${result.opened}タブオープン（${result.skipped}スキップ）`);
+      } else if (result.error === 'timeout') {
+        // フォールバック: 拡張未インストール等 → window.open()で1つだけ開く
+        window.open(`https://stripchat.com/${allCasts[0]}`, '_blank');
+        setOpenResult(`拡張未検出: 1/${allCasts.length}タブ`);
+      } else {
+        setOpenResult(`エラー: ${result.error}`);
       }
-      setOpenResult(`${opened}タブオープン`);
-      setTimeout(() => setOpenResult(null), 3000);
+      setTimeout(() => setOpenResult(null), 4000);
     } catch {
       setOpenResult('オープン失敗');
     } finally {

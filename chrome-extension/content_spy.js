@@ -913,6 +913,22 @@
   }
 
   // ============================================================
+  // Window Message Relay: フロントエンド → background.js
+  // ============================================================
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    if (event.data?.type === 'LS_OPEN_ALL_SPY_TABS') {
+      console.log(LOG, 'LS_OPEN_ALL_SPY_TABS受信 → background.jsへ転送', event.data.castNames?.length, 'キャスト');
+      chrome.runtime.sendMessage(
+        { type: 'OPEN_ALL_SPY_TABS', castNames: event.data.castNames || [] },
+        (response) => {
+          window.postMessage({ type: 'LS_OPEN_ALL_SPY_TABS_RESULT', ...response }, '*');
+        }
+      );
+    }
+  });
+
+  // ============================================================
   // Message Handlers
   // ============================================================
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
