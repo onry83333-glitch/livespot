@@ -125,7 +125,7 @@ let spyRotationEnabled = false;         // 他社ローテーションON/OFF（s
 let spyRotationTabs = {};               // { castName: tabId } — ローテーションで開いたタブ
 let ownCastNamesCache = new Set();      // registered_castsのみ（自社キャスト保護用）
 let spyCastNamesCache = new Set();      // spy_castsのみ（ローテーション対象）
-const MAX_SPY_ROTATION_TABS = 10;       // 同時オープンタブ上限
+const MAX_SPY_ROTATION_TABS = 40;       // 同時オープンタブ上限
 
 // スクリーンショット間隔キャッシュ: { castName: intervalMinutes } — 0=OFF
 let screenshotIntervalCache = {};
@@ -329,7 +329,9 @@ async function loadRegisteredCasts() {
         for (const r of regData) newIntervals[r.cast_name] = r.screenshot_interval ?? 5;
         for (const r of spyData) newIntervals[r.cast_name] = r.screenshot_interval ?? 0;
         screenshotIntervalCache = newIntervals;
-        console.log('[LS-BG] キャスト名キャッシュ更新 (自社+SPY):', [...registeredCastNames]);
+        console.log('[LS-BG] キャスト名キャッシュ更新: 自社=', [...ownCastNamesCache],
+          'SPY=', [...spyCastNamesCache],
+          '合計=', registeredCastNames.size, '件');
         return;
       }
       console.warn('[LS-BG] キャスト名取得 HTTP', regRes.status, '(attempt', attempt, ')');
@@ -606,7 +608,12 @@ async function flushMessageBuffer() {
   });
 
   const hasSessionId = rows.some(r => r.session_id);
-  console.log('[LS-BG] SPYメッセージ一括送信:', rows.length, '件 → Supabase REST API', `session_id: ${hasSessionId ? rows[0].session_id : 'NULL'}`);
+  // キャスト別件数をログ出力（データフロー診断用）
+  const castCounts = {};
+  rows.forEach(r => { castCounts[r.cast_name] = (castCounts[r.cast_name] || 0) + 1; });
+  console.log('[LS-BG] SPYメッセージ一括送信:', rows.length, '件 → Supabase REST API',
+    `session_id: ${hasSessionId ? rows[0].session_id : 'NULL'}`,
+    'casts:', JSON.stringify(castCounts));
 
   try {
     let res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/spy_messages`, {
@@ -639,10 +646,12 @@ async function flushMessageBuffer() {
     }
 
     if (res.ok || res.status === 201) {
-      console.log('[LS-BG] SPYメッセージ一括送信成功:', rows.length, '件');
+      console.log('[LS-BG] SPYメッセージ一括送信成功:', rows.length, '件',
+        'casts:', Object.keys(castCounts).join(','));
     } else {
       const errText = await res.text().catch(() => '');
-      console.warn('[LS-BG] SPYメッセージ送信失敗:', res.status, errText);
+      console.warn('[LS-BG] SPYメッセージ送信失敗:', res.status, errText,
+        'casts:', Object.keys(castCounts).join(','));
       messageBuffer.push(...batch);
       persistBuffer();
     }
@@ -1339,7 +1348,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     // 未登録キャストのデータは収集しない（registered_casts + spy_casts のみ許可）
     const castName = msg.cast_name || '';
     if (registeredCastNames.size > 0 && castName && !registeredCastNames.has(castName)) {
-      console.log('[LS-BG] 未登録キャスト スキップ: cast=', castName);
+      console.log('[LS-BG] 未登録キャスト スキップ: cast=', castName,
+        'registeredCastNames=', [...registeredCastNames].join(','));
       sendResponse({ ok: false, error: '未登録キャスト' });
       return false;
     }
