@@ -34,6 +34,12 @@ export interface DMLog {
   queued_at: string;
   campaign: string;
   template_name: string;
+  ai_generated?: boolean;
+  ai_reasoning?: string | null;
+  ai_confidence?: number | null;
+  scenario_enrollment_id?: string | null;
+  edited_by_human?: boolean;
+  original_ai_message?: string | null;
 }
 
 export interface DMTemplate {

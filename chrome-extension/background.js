@@ -137,6 +137,34 @@ const activeGroupChats = new Map();
 // キャスト別GCレート: { castName: coins_per_minute } — デフォルト12
 let gcRateCache = {};
 
+// DM文面フォールバックテンプレート（Persona API失敗時に使用）
+const FALLBACK_TEMPLATES = {
+  thankyou_vip: [
+    '{username}さん、今日は本当にありがとう💕 あなたがいてくれると特別な時間になります。また会えたら嬉しいな😊',
+    '{username}さん、実は次の配信でちょっと特別なことやろうと思ってるんだ😊 来てくれたら嬉しいな💕',
+    '{username}さん、元気にしてますか？😊 今度の配信で限定企画やるんだけど、気が向いたら来てくれたら嬉しいな💕',
+  ],
+  thankyou_regular: [
+    '{username}さん、ありがとう😊 あなたがいてくれるとすごく楽しいです！ またふらっと遊びに来てくださいね💕',
+    '{username}さん、最近どうですか？😊 いつも来てくれて嬉しいです。また気が向いたらね！',
+  ],
+  thankyou_first: [
+    '{username}さん、ありがとう😊 すごく嬉しかったです！',
+    '{username}さん、昨日はありがとうございました😊 また気が向いたら遊びに来てくださいね💕',
+  ],
+  churn_recovery: [
+    '{username}さん、最近見かけないので気になっちゃって😊 元気にしてますか？ 無理しないでね💕',
+    '{username}さん、お久しぶりです😊 気が向いたらふらっと来てくれたら嬉しいな💕 でも無理しないでね！',
+    '{username}さん、ずっと気になってました😊 またいつか会えたら嬉しいな。でも無理しないでね💕',
+  ],
+};
+
+function getFallbackMessage(triggerType, stepNumber, userName, segment) {
+  const templates = FALLBACK_TEMPLATES[triggerType] || FALLBACK_TEMPLATES.thankyou_regular;
+  const idx = Math.min(stepNumber, templates.length - 1);
+  return (templates[idx] || templates[0]).replace(/\{username\}/g, userName);
+}
+
 // ============================================================
 // A.1: Service Worker Keepalive via chrome.alarms
 // ============================================================
@@ -1359,6 +1387,91 @@ async function triggerChurnRecoveryDMs() {
 // ============================================================
 
 /**
+ * generateDmMessage: Persona APIを呼び出してDM文面を生成
+ * フォールバック: API失敗時はFALLBACK_TEMPLATESを使用
+ * @returns { message, ai_generated, ai_reasoning, ai_confidence }
+ */
+async function generateDmMessage(userName, castName, triggerType, stepNumber, segment) {
+  // PERSONA_API_URL: localhost:3000 (dev) or livespot-rouge.vercel.app (prod)
+  const personaUrl = CONFIG.PERSONA_API_URL || 'http://localhost:3000';
+
+  try {
+    await loadAuth();
+    if (!accessToken) throw new Error('No access token');
+
+    const res = await fetch(`${personaUrl}/api/persona`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        task_type: 'dm_generate',
+        cast_name: castName,
+        context: {
+          user_name: userName,
+          cast_name: castName,
+          scenario_type: triggerType,
+          step_number: stepNumber,
+          segment: segment,
+        },
+      }),
+    });
+
+    if (!res.ok) throw new Error(`API ${res.status}`);
+    const data = await res.json();
+
+    // Parse output (may be JSON string or object with .message)
+    let message = '';
+    let reasoning = null;
+    let confidence = null;
+
+    if (data.output && typeof data.output === 'object' && data.output.message) {
+      message = data.output.message;
+      reasoning = data.output.reasoning || data.reasoning || null;
+      confidence = data.confidence || null;
+    } else if (typeof data.raw_text === 'string') {
+      // Try JSON extraction from raw_text
+      try {
+        const jsonMatch = data.raw_text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          message = parsed.message || data.raw_text;
+          reasoning = parsed.reasoning || null;
+        } else {
+          message = data.raw_text;
+        }
+      } catch {
+        message = data.raw_text;
+      }
+    }
+
+    if (!message) throw new Error('Empty message from API');
+
+    // Replace {username} placeholder if still present
+    message = message.replace(/\{username\}/g, userName);
+
+    console.log('[LS-BG] AI DM生成成功:', userName, castName, triggerType, 'step', stepNumber);
+    return {
+      message,
+      ai_generated: true,
+      ai_reasoning: reasoning,
+      ai_confidence: confidence,
+    };
+  } catch (e) {
+    console.warn('[LS-BG] AI DM生成失敗 → フォールバック:', e.message);
+    // Fallback to FALLBACK_TEMPLATES
+    const fallbackMsg = getFallbackMessage(triggerType, stepNumber, userName, segment);
+    return {
+      message: fallbackMsg,
+      ai_generated: false,
+      ai_reasoning: `fallback: ${e.message}`,
+      ai_confidence: null,
+    };
+  }
+}
+
+/**
  * enrollScenario: ユーザーをシナリオにエンロールする
  * - 既にactiveなエンロールメントがあればcancelledに変更→新規エンロール
  * - Step0のDMをdm_send_logにINSERT
@@ -1447,9 +1560,9 @@ async function enrollScenario(triggerType, userName, castName, segment) {
 
     console.log('[LS-BG] シナリオ: エンロール成功', userName, '→', scenario.scenario_name, '(step0)');
 
-    // 4. Step0のDMをdm_send_logにINSERT
-    if (step0 && step0.message) {
-      const dmMessage = (step0.message || '').replace('{username}', userName);
+    // 4. Step0のDMをdm_send_logにINSERT（AI生成）
+    if (step0) {
+      const generated = await generateDmMessage(userName, castName, triggerType, 0, segment);
       const status = scenario.auto_approve_step0 ? 'queued' : 'pending';
       const campaign = `scenario_${scenario.id}_step0_${Date.now()}`;
 
@@ -1466,14 +1579,18 @@ async function enrollScenario(triggerType, userName, castName, segment) {
           user_name: userName,
           cast_name: castName,
           profile_url: `https://stripchat.com/user/${userName}`,
-          message: dmMessage,
+          message: generated.message,
           status: status,
           campaign: campaign,
           template_name: `scenario_${triggerType}_step0`,
           queued_at: new Date().toISOString(),
+          ai_generated: generated.ai_generated,
+          ai_reasoning: generated.ai_reasoning,
+          ai_confidence: generated.ai_confidence,
+          scenario_enrollment_id: null, // step0 is during enrollment, enrollment may not have ID yet
         }),
       });
-      console.log('[LS-BG] シナリオStep0 DM:', userName, status, '(', triggerType, ')');
+      console.log('[LS-BG] シナリオStep0 DM:', userName, status, '(', triggerType, ') AI:', generated.ai_generated);
     }
   } catch (e) {
     console.warn('[LS-BG] enrollScenario失敗:', e.message);
@@ -1581,9 +1698,19 @@ async function processScenarioSteps() {
       const stepDef = steps[nextStep];
       if (!stepDef) continue;
 
-      // DM INSERT
-      const dmMessage = (stepDef.message || stepDef.template || '').replace('{username}', enrollment.username);
+      // AI文面生成（フォールバック内蔵）
+      const seg = (enrollment.metadata && enrollment.metadata.segment) || 'S9';
+      const generated = await generateDmMessage(
+        enrollment.username,
+        enrollment.cast_name || '',
+        scenario.trigger_type,
+        nextStep,
+        seg
+      );
+
       const campaign = `scenario_${scenario.id}_step${nextStep}_${Date.now()}`;
+      // Step1+は常にpending（承認待ち）、AI生成失敗時もpending
+      const dmStatus = 'pending';
 
       await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
         method: 'POST',
@@ -1598,11 +1725,15 @@ async function processScenarioSteps() {
           user_name: enrollment.username,
           cast_name: enrollment.cast_name,
           profile_url: `https://stripchat.com/user/${enrollment.username}`,
-          message: dmMessage,
-          status: 'pending',
+          message: generated.message,
+          status: dmStatus,
           campaign: campaign,
           template_name: `scenario_${scenario.trigger_type}_step${nextStep}`,
           queued_at: new Date().toISOString(),
+          ai_generated: generated.ai_generated,
+          ai_reasoning: generated.ai_reasoning,
+          ai_confidence: generated.ai_confidence,
+          scenario_enrollment_id: enrollment.id,
         }),
       });
 

@@ -237,14 +237,23 @@ async function buildUserPrompt(
         ? getSegmentLabel(paidUser.total_coins, paidUser.last_seen)
         : 'S10:単発';
 
-      // 前回DM
-      const { data: lastDm } = await supabase
+      // 前回DM（成功したもの最大3件）
+      const { data: lastDms } = await supabase
         .from('dm_send_log')
-        .select('message, sent_at')
+        .select('message, sent_at, template_name')
         .eq('user_name', userName)
         .eq('cast_name', castName)
         .eq('status', 'success')
         .order('sent_at', { ascending: false })
+        .limit(3);
+
+      // シナリオエンロールメント状態
+      const { data: enrollment } = await supabase
+        .from('dm_scenario_enrollments')
+        .select('scenario_id, current_step, status, enrolled_at, metadata')
+        .eq('username', userName)
+        .eq('status', 'active')
+        .order('enrolled_at', { ascending: false })
         .limit(1)
         .single();
 
@@ -252,16 +261,29 @@ async function buildUserPrompt(
         `[${m.message_time?.slice(11, 16) || '??:??'}] ${m.msg_type}: ${m.message || ''} ${m.tokens ? `(${m.tokens}tk)` : ''}`
       ).join('\n') || 'なし';
 
+      const lastDmLog = lastDms?.map(d =>
+        `- ${d.message || '?'} (${d.sent_at?.slice(0, 10) || '?'}, ${d.template_name || ''})`
+      ).join('\n') || 'なし';
+
+      const enrollmentInfo = enrollment
+        ? `ステータス: ${enrollment.status}, Step${enrollment.current_step}, 登録: ${enrollment.enrolled_at?.slice(0, 10) || '?'}`
+        : 'なし';
+
       return `ユーザー名: ${userName}
 セグメント: ${segment}
 累計コイン: ${totalCoins}tk / 平均: ${avgCoins}tk / 最終: ${lastTxDate}
 シナリオ: ${scenarioType} (Step ${stepNumber})
-前回DM: ${lastDm?.message || 'なし'} (${lastDm?.sent_at || ''})
+エンロールメント: ${enrollmentInfo}
+
+前回DM履歴（直近3件）:
+${lastDmLog}
 
 直近の発言ログ:
 ${spyLog}
 
-上記の情報をもとに、このユーザーに最適なDMを生成してください。`;
+上記の情報をもとに、このユーザーに最適なDMを生成してください。
+- 前回DMと異なるトーンにしてください（感情→事実→感情の交互）。
+- ユーザーの発言内容に触れて個別感を出してください。`;
     }
 
     case 'fb_report': {

@@ -73,6 +73,24 @@ interface AutoDMItem {
   campaign: string;
   template_name: string;
   queued_at: string;
+  ai_generated?: boolean;
+  ai_reasoning?: string | null;
+  ai_confidence?: number | null;
+  scenario_enrollment_id?: string | null;
+}
+
+interface PendingAIDM {
+  id: number;
+  user_name: string;
+  cast_name: string | null;
+  message: string | null;
+  campaign: string;
+  template_name: string;
+  queued_at: string;
+  ai_generated: boolean;
+  ai_reasoning: string | null;
+  ai_confidence: number | null;
+  scenario_enrollment_id: string | null;
 }
 
 interface ScenarioItem {
@@ -156,6 +174,8 @@ export default function DmPage() {
   const [autoLoading, setAutoLoading] = useState(false);
   const [autoApproving, setAutoApproving] = useState(false);
   const [autoChecked, setAutoChecked] = useState<Set<number>>(new Set());
+  const [editingDMId, setEditingDMId] = useState<number | null>(null);
+  const [editingDMMessage, setEditingDMMessage] = useState('');
 
   // === シナリオ state ===
   const [scenarios, setScenarios] = useState<ScenarioItem[]>([]);
@@ -220,10 +240,9 @@ export default function DmPage() {
     setAutoLoading(true);
     try {
       const { data } = await sb.from('dm_send_log')
-        .select('id, user_name, cast_name, message, campaign, template_name, queued_at')
+        .select('id, user_name, cast_name, message, campaign, template_name, queued_at, ai_generated, ai_reasoning, ai_confidence, scenario_enrollment_id')
         .eq('account_id', selectedAccount)
         .eq('status', 'pending')
-        .or('template_name.eq.auto_thankyou,template_name.eq.auto_churn')
         .order('queued_at', { ascending: false })
         .limit(200);
       setAutoDMs((data || []) as AutoDMItem[]);
@@ -296,6 +315,33 @@ export default function DmPage() {
         return next;
       });
     } catch { /* ignore */ }
+  };
+
+  const handleEditDM = (dm: AutoDMItem) => {
+    setEditingDMId(dm.id);
+    setEditingDMMessage(dm.message || '');
+  };
+
+  const handleSaveEdit = async (id: number) => {
+    try {
+      await sb.from('dm_send_log')
+        .update({
+          message: editingDMMessage,
+          edited_by_human: true,
+          original_ai_message: autoDMs.find(d => d.id === id)?.message || null,
+        })
+        .eq('id', id);
+      setAutoDMs(prev => prev.map(d =>
+        d.id === id ? { ...d, message: editingDMMessage } : d
+      ));
+      setEditingDMId(null);
+      setEditingDMMessage('');
+    } catch { /* ignore */ }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingDMId(null);
+    setEditingDMMessage('');
   };
 
   // === 一斉送信ロジック ===
@@ -1196,17 +1242,22 @@ export default function DmPage() {
                 });
                 return Array.from(groups.entries()).map(([campaign, items]) => {
                   const isThankYou = campaign.startsWith('auto_thankyou');
-                  const label = isThankYou ? 'お礼DM' : '離脱リカバリーDM';
-                  const labelColor = isThankYou ? 'text-emerald-400' : 'text-amber-400';
-                  const bgColor = isThankYou ? 'rgba(34,197,94,0.04)' : 'rgba(245,158,11,0.04)';
-                  const borderColor = isThankYou ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)';
+                  const isScenario = items.some(d => d.template_name?.startsWith('scenario_'));
+                  const label = isScenario ? 'シナリオDM' : isThankYou ? 'お礼DM' : '離脱リカバリーDM';
+                  const labelColor = isScenario ? 'text-sky-400' : isThankYou ? 'text-emerald-400' : 'text-amber-400';
+                  const bgColor = isScenario ? 'rgba(56,189,248,0.04)' : isThankYou ? 'rgba(34,197,94,0.04)' : 'rgba(245,158,11,0.04)';
+                  const borderColor = isScenario ? 'rgba(56,189,248,0.15)' : isThankYou ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)';
                   const castName = items[0]?.cast_name || '';
                   const queuedAt = items[0]?.queued_at ? new Date(items[0].queued_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+                  const hasAI = items.some(d => d.ai_generated);
 
                   return (
                     <div key={campaign} className="glass-card p-5" style={{ background: bgColor, borderColor }}>
                       <div className="flex items-center gap-3 mb-4">
                         <span className={`text-xs font-bold ${labelColor}`}>{label}</span>
+                        {hasAI && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">AI</span>
+                        )}
                         {castName && (
                           <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-500/10 text-slate-400">
                             {castName}
@@ -1217,50 +1268,65 @@ export default function DmPage() {
                         </span>
                       </div>
                       <div className="space-y-2">
-                        {items.map(d => {
-                          const checked = autoChecked.has(d.id);
-                          return (
-                            <div key={d.id}
-                              className="flex items-start gap-3 px-3 py-2.5 rounded-lg transition-all cursor-pointer hover:bg-white/[0.02]"
-                              style={{ background: checked ? 'rgba(14,165,233,0.04)' : 'transparent' }}
-                              onClick={() => {
-                                setAutoChecked(prev => {
-                                  const next = new Set(prev);
-                                  if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
-                                  return next;
-                                });
-                              }}>
-                              {/* Checkbox */}
-                              <div className={`w-4 h-4 rounded border-2 flex items-center justify-center mt-0.5 transition-all ${
-                                checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'
-                              }`}>
-                                {checked && (
-                                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                                    <path d="M2 5L4 7L8 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                                  </svg>
+                        {items.map(dm => (
+                          <div key={dm.id} className="glass-panel p-3 rounded-xl space-y-2">
+                            <div className="flex items-center gap-2">
+                              <input type="checkbox" className="accent-sky-400"
+                                checked={autoChecked.has(dm.id)}
+                                onChange={() => {
+                                  setAutoChecked(prev => {
+                                    const next = new Set(prev);
+                                    if (next.has(dm.id)) next.delete(dm.id); else next.add(dm.id);
+                                    return next;
+                                  });
+                                }} />
+                              <span className="font-medium text-xs">{dm.user_name}</span>
+                              {dm.cast_name && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400">{dm.cast_name}</span>
+                              )}
+                              {dm.ai_generated && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">AI生成</span>
+                              )}
+                              {dm.template_name?.startsWith('scenario_') && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                                  {dm.template_name.replace('scenario_', '').replace(/_step\d+$/, '')}
+                                </span>
+                              )}
+                              <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>
+                                {new Date(dm.queued_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+
+                            {editingDMId === dm.id ? (
+                              <div className="space-y-2">
+                                <textarea className="input-glass text-xs h-20 resize-none"
+                                  value={editingDMMessage}
+                                  onChange={e => setEditingDMMessage(e.target.value)} />
+                                <div className="flex gap-2">
+                                  <button onClick={() => handleSaveEdit(dm.id)} className="btn-primary text-[10px] px-3 py-1">保存</button>
+                                  <button onClick={handleCancelEdit} className="btn-ghost text-[10px] px-3 py-1">キャンセル</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <p className="text-xs px-2 py-1.5 rounded whitespace-pre-wrap" style={{ background: 'rgba(15,23,42,0.4)', color: 'var(--text-secondary)' }}>
+                                  {dm.message || '(空)'}
+                                </p>
+                                {dm.ai_reasoning && (
+                                  <p className="text-[10px] mt-1 px-2" style={{ color: 'var(--text-muted)' }}>
+                                    理由: {dm.ai_reasoning}
+                                  </p>
                                 )}
                               </div>
-                              {/* User + message */}
-                              <div className="flex-1 min-w-0">
-                                <span className="text-sm font-medium">{d.user_name}</span>
-                                <p className="text-xs mt-1 whitespace-pre-wrap line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
-                                  {d.message}
-                                </p>
-                              </div>
-                              {/* Individual actions */}
-                              <div className="flex gap-1 shrink-0">
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); handleApproveAutoDMs([d.id]); }}
-                                  className="px-2 py-1 rounded text-[10px] text-emerald-400 hover:bg-emerald-500/10 transition-colors"
-                                  title="承認">&#10003;</button>
-                                <button
-                                  onClick={(e) => { e.stopPropagation(); handleDismissAutoDMs([d.id]); }}
-                                  className="px-2 py-1 rounded text-[10px] text-rose-400 hover:bg-rose-500/10 transition-colors"
-                                  title="破棄">&#10005;</button>
-                              </div>
+                            )}
+
+                            <div className="flex gap-2">
+                              <button onClick={() => handleEditDM(dm)} className="btn-ghost text-[10px] px-2 py-1">編集</button>
+                              <button onClick={() => handleApproveAutoDMs([dm.id])} className="btn-primary text-[10px] px-2 py-1">承認</button>
+                              <button onClick={() => handleDismissAutoDMs([dm.id])} className="text-[10px] px-2 py-1 text-rose-400 hover:text-rose-300">削除</button>
                             </div>
-                          );
-                        })}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   );
