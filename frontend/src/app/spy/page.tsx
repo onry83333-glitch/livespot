@@ -45,7 +45,6 @@ export default function SpyPage() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const [openingTabs, setOpeningTabs] = useState(false);
   const [openResult, setOpenResult] = useState<string | null>(null);
 
   const viewParam = searchParams.get('view') as MainView | null;
@@ -67,52 +66,9 @@ export default function SpyPage() {
     }
   }, [viewParam]);
 
-  const handleOpenAllTabs = useCallback(async () => {
-    setOpeningTabs(true);
-    setOpenResult(null);
-    try {
-      const sb = createClient();
-      const { data: acct } = await sb.from('accounts').select('id').limit(1).single();
-      if (!acct) { setOpenResult('アカウント未設定'); return; }
-      const [{ data: reg }, { data: spy }] = await Promise.all([
-        sb.from('registered_casts').select('cast_name').eq('account_id', acct.id).eq('is_active', true),
-        sb.from('spy_casts').select('cast_name').eq('account_id', acct.id).eq('is_active', true),
-      ]);
-      const allCasts = [...(reg || []), ...(spy || [])].map(c => c.cast_name);
-      if (allCasts.length === 0) { setOpenResult('登録キャストなし'); return; }
-
-      // Chrome拡張経由でタブを開く（ポップアップブロック回避）
-      const result = await new Promise<{ ok: boolean; opened?: number; skipped?: number; total?: number; error?: string }>((resolve) => {
-        const timeout = setTimeout(() => {
-          window.removeEventListener('message', handler);
-          resolve({ ok: false, error: 'timeout' });
-        }, 5000);
-
-        const handler = (event: MessageEvent) => {
-          if (event.source !== window || event.data?.type !== 'LS_OPEN_ALL_SPY_TABS_RESULT') return;
-          clearTimeout(timeout);
-          window.removeEventListener('message', handler);
-          resolve(event.data);
-        };
-        window.addEventListener('message', handler);
-        window.postMessage({ type: 'LS_OPEN_ALL_SPY_TABS', castNames: allCasts }, '*');
-      });
-
-      if (result.ok) {
-        setOpenResult(`${result.opened}タブオープン（${result.skipped}スキップ）`);
-      } else if (result.error === 'timeout') {
-        // フォールバック: 拡張未インストール等 → window.open()で1つだけ開く
-        window.open(`https://stripchat.com/${allCasts[0]}`, '_blank');
-        setOpenResult(`拡張未検出: 1/${allCasts.length}タブ`);
-      } else {
-        setOpenResult(`エラー: ${result.error}`);
-      }
-      setTimeout(() => setOpenResult(null), 4000);
-    } catch {
-      setOpenResult('オープン失敗');
-    } finally {
-      setOpeningTabs(false);
-    }
+  const handleOpenAllTabs = useCallback(() => {
+    setOpenResult('Chrome拡張のポップアップ → 「全タブオープン」ボタンを押してください');
+    setTimeout(() => setOpenResult(null), 5000);
   }, []);
 
   if (!user) return null;
@@ -161,22 +117,17 @@ export default function SpyPage() {
           {/* 全タブ一斉オープン */}
           <button
             onClick={handleOpenAllTabs}
-            disabled={openingTabs}
             className="ml-auto px-3 py-2 rounded-xl text-[11px] font-bold transition-all flex items-center gap-1.5"
             style={{
               background: 'linear-gradient(135deg, rgba(34,197,94,0.12), rgba(34,197,94,0.04))',
-              color: openingTabs ? 'var(--text-muted)' : '#22c55e',
+              color: '#22c55e',
               border: '1px solid rgba(34,197,94,0.2)',
             }}
           >
-            {openingTabs ? (
-              <><span className="w-3 h-3 border-2 border-green-400 border-t-transparent rounded-full animate-spin" /> オープン中...</>
-            ) : (
-              <>🖥️ 全タブオープン</>
-            )}
+            🖥️ 全タブオープン
           </button>
           {openResult && (
-            <span className="text-[10px] font-semibold" style={{ color: 'var(--accent-green)' }}>{openResult}</span>
+            <span className="text-[10px] font-semibold" style={{ color: 'var(--accent-amber)' }}>{openResult}</span>
           )}
         </div>
 

@@ -7,6 +7,18 @@ import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, timeAgo } from '@/lib/utils';
 import type { Account, RegisteredCast } from '@/types';
 
+/** 今週の月曜00:00（JST）をUTCで返す。offset=1で前週月曜。 */
+function getWeekStartJST(offset = 0): Date {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+  const day = jst.getUTCDay();
+  const diff = day === 0 ? 6 : day - 1;
+  const monday = new Date(jst);
+  monday.setUTCDate(jst.getUTCDate() - diff - offset * 7);
+  monday.setUTCHours(0, 0, 0, 0);
+  return new Date(monday.getTime() - 9 * 60 * 60 * 1000);
+}
+
 interface CastStats {
   cast_name: string;
   total_messages: number;
@@ -104,15 +116,9 @@ export default function CastsPage() {
         });
         setCastStats((stats || []) as CastStats[]);
 
-        // coin_transactionsから今週・前週のコイン集計
-        const now = new Date();
-        const day = now.getDay(); // 0=日, 1=月, ...
-        const diffToMon = day === 0 ? 6 : day - 1;
-        const thisWeekStart = new Date(now);
-        thisWeekStart.setDate(now.getDate() - diffToMon);
-        thisWeekStart.setHours(0, 0, 0, 0);
-        const lastWeekStart = new Date(thisWeekStart);
-        lastWeekStart.setDate(thisWeekStart.getDate() - 7);
+        // coin_transactionsから今週・前週のコイン集計（JST暦週: 月曜〜日曜）
+        const thisWeekStart = getWeekStartJST(0); // 今週月曜 00:00 JST
+        const lastWeekStart = getWeekStartJST(1); // 前週月曜 00:00 JST
 
         const { data: coinRows } = await supabase
           .from('coin_transactions')

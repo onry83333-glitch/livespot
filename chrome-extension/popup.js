@@ -621,6 +621,36 @@ $('spyRotationBtn').addEventListener('click', async () => {
   });
 });
 
+// --- Open All Tabs ---
+$('openAllTabsBtn').addEventListener('click', async () => {
+  const btn = $('openAllTabsBtn');
+  const resultEl = $('openAllTabsResult');
+  btn.disabled = true;
+  btn.textContent = '開始中...';
+  resultEl.innerHTML = '<span style="color:#f59e0b;">● タブオープン中...</span>';
+  resultEl.classList.remove('hidden');
+
+  chrome.runtime.sendMessage({ type: 'OPEN_ALL_SPY_TABS' }, (response) => {
+    btn.disabled = false;
+    btn.textContent = '開く';
+
+    if (chrome.runtime.lastError) {
+      resultEl.innerHTML = `<span style="color:#f43f5e;">✕ ${chrome.runtime.lastError.message}</span>`;
+      return;
+    }
+    if (!response) {
+      resultEl.innerHTML = '<span style="color:#f43f5e;">✕ 応答なし</span>';
+      return;
+    }
+    if (response.ok) {
+      resultEl.innerHTML = `<span style="color:#22c55e;">✓ ${response.opened}タブオープン（${response.skipped}スキップ / ${response.total}キャスト）</span>`;
+    } else {
+      resultEl.innerHTML = `<span style="color:#f43f5e;">✕ ${response.error || response.message || 'エラー'}</span>`;
+    }
+    setTimeout(() => resultEl.classList.add('hidden'), 5000);
+  });
+});
+
 // --- Coin Sync ---
 $('coinSyncBtn').addEventListener('click', async () => {
   const btn = $('coinSyncBtn');
