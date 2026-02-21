@@ -127,6 +127,10 @@ let ownCastNamesCache = new Set();      // registered_castsのみ（自社キャ
 let spyCastNamesCache = new Set();      // spy_castsのみ（ローテーション対象）
 const MAX_SPY_ROTATION_TABS = 10;       // 同時オープンタブ上限
 
+// スクリーンショット間隔キャッシュ: { castName: intervalMinutes } — 0=OFF
+let screenshotIntervalCache = {};
+let screenshotLastCapture = {};         // { castName: timestamp(ms) } — 前回撮影時刻
+
 // ============================================================
 // A.1: Service Worker Keepalive via chrome.alarms
 // ============================================================
@@ -293,7 +297,7 @@ async function loadRegisteredCasts() {
       // registered_casts（自社）+ spy_casts（他社分析）の両方を取得
       const [regRes, spyRes] = await Promise.all([
         fetch(
-          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name`,
+          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,screenshot_interval`,
           {
             headers: {
               'apikey': CONFIG.SUPABASE_ANON_KEY,
@@ -302,7 +306,7 @@ async function loadRegisteredCasts() {
           }
         ),
         fetch(
-          `${CONFIG.SUPABASE_URL}/rest/v1/spy_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name`,
+          `${CONFIG.SUPABASE_URL}/rest/v1/spy_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,screenshot_interval`,
           {
             headers: {
               'apikey': CONFIG.SUPABASE_ANON_KEY,
@@ -320,6 +324,11 @@ async function loadRegisteredCasts() {
           ...regData.map(r => r.cast_name),
           ...spyData.map(r => r.cast_name),
         ]);
+        // スクリーンショット間隔キャッシュ更新
+        const newIntervals = {};
+        for (const r of regData) newIntervals[r.cast_name] = r.screenshot_interval ?? 5;
+        for (const r of spyData) newIntervals[r.cast_name] = r.screenshot_interval ?? 0;
+        screenshotIntervalCache = newIntervals;
         console.log('[LS-BG] キャスト名キャッシュ更新 (自社+SPY):', [...registeredCastNames]);
         return;
       }
@@ -3534,12 +3543,12 @@ async function handleSpyRotation() {
 function startScreenshotCapture() {
   chrome.alarms.get('spy-screenshot', (existing) => {
     if (!existing) {
-      chrome.alarms.create('spy-screenshot', { periodInMinutes: 5 });
+      chrome.alarms.create('spy-screenshot', { periodInMinutes: 1 });
     }
   });
   // 即時キャプチャ（初回）
   captureAllSpyTabs().catch(e => console.warn('[LS-BG] Screenshot: 初回キャプチャ失敗:', e.message));
-  console.log('[LS-SPY] Screenshot alarm registered (5分間隔)');
+  console.log('[LS-SPY] Screenshot alarm registered (1分間隔, キャスト別判定)');
 }
 
 function stopScreenshotCapture() {
@@ -3572,8 +3581,20 @@ async function captureAllSpyTabs() {
     return;
   }
 
-  const castNames = spyTabs.map(t => t.castName).join(', ');
-  console.log(`[LS-SPY] Capturing screenshots for ${spyTabs.length} tabs: ${castNames}`);
+  // キャスト別間隔チェック: 撮影対象のタブだけに絞る
+  const now = Date.now();
+  const tabsToCapture = spyTabs.filter(t => {
+    const interval = screenshotIntervalCache[t.castName];
+    if (interval === undefined || interval === null || interval <= 0) return false; // OFF
+    const lastCapture = screenshotLastCapture[t.castName] || 0;
+    const elapsedMin = (now - lastCapture) / 60000;
+    return elapsedMin >= interval;
+  });
+
+  if (tabsToCapture.length === 0) return; // 全キャストまだ撮影不要
+
+  const castNames = tabsToCapture.map(t => `${t.castName}(${screenshotIntervalCache[t.castName]}m)`).join(', ');
+  console.log(`[LS-SPY] Capturing screenshots for ${tabsToCapture.length}/${spyTabs.length} tabs: ${castNames}`);
 
   // 元のアクティブタブを記憶（ウィンドウごと）
   const originalActiveTabs = new Map(); // windowId → tabId
@@ -3592,7 +3613,7 @@ async function captureAllSpyTabs() {
     }
   } catch { /* ignore */ }
 
-  for (const spy of spyTabs) {
+  for (const spy of tabsToCapture) {
     try {
       // タブがまだ存在するか確認
       let tabInfo;
@@ -3622,6 +3643,9 @@ async function captureAllSpyTabs() {
 
       // アップロード + メタデータ保存
       await uploadScreenshot(spy.castName, dataUrl);
+
+      // 前回撮影時刻を記録
+      screenshotLastCapture[spy.castName] = Date.now();
 
     } catch (err) {
       console.warn('[LS-SPY] Screenshot failed for', spy.castName, ':', err.message);

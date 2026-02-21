@@ -193,6 +193,7 @@ export interface RegisteredCast {
   benchmark: string | null;
   category: string | null;
   cast_type_id: string | null;
+  screenshot_interval: number | null;
   last_seen_online: string | null;
   is_extinct: boolean;
   extinct_at: string | null;

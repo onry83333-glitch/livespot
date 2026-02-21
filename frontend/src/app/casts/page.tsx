@@ -67,6 +67,7 @@ export default function CastsPage() {
   const [editGenre, setEditGenre] = useState('');
   const [editBenchmark, setEditBenchmark] = useState('');
   const [editCategory, setEditCategory] = useState('');
+  const [editScreenshotInterval, setEditScreenshotInterval] = useState(5);
 
   // Tag presets
   const GENRE_PRESETS = ['女性単体', '絡み配信', 'カップル', 'レズ', '3P+', '男性単体'];
@@ -215,6 +216,7 @@ export default function CastsPage() {
         genre: editGenre || null,
         benchmark: editBenchmark || null,
         category: editCategory || null,
+        screenshot_interval: editScreenshotInterval,
         updated_at: new Date().toISOString(),
       })
       .eq('id', castId);
@@ -222,12 +224,12 @@ export default function CastsPage() {
     if (error) return;
     setRegisteredCasts(prev =>
       prev.map(c => c.id === castId
-        ? { ...c, display_name: editDisplayName.trim() || null, notes: editNotes.trim() || null, genre: editGenre || null, benchmark: editBenchmark || null, category: editCategory || null }
+        ? { ...c, display_name: editDisplayName.trim() || null, notes: editNotes.trim() || null, genre: editGenre || null, benchmark: editBenchmark || null, category: editCategory || null, screenshot_interval: editScreenshotInterval }
         : c
       )
     );
     setEditingId(null);
-  }, [editDisplayName, editNotes, editGenre, editBenchmark, editCategory]);
+  }, [editDisplayName, editNotes, editGenre, editBenchmark, editCategory, editScreenshotInterval]);
 
   // キャスト非活性化
   const handleDeactivate = useCallback(async (castId: number, castName: string) => {
@@ -358,6 +360,7 @@ export default function CastsPage() {
                 <th className="text-right px-4 py-3 font-semibold">前週コイン</th>
                 <th className="text-right px-4 py-3 font-semibold">前週比</th>
                 <th className="text-right px-4 py-3 font-semibold">最終活動</th>
+                <th className="text-center px-3 py-3 font-semibold">📸</th>
                 <th className="text-center px-3 py-3 font-semibold">操作</th>
               </tr>
             </thead>
@@ -451,6 +454,25 @@ export default function CastsPage() {
                     </td>
                     <td className="text-center px-3 py-3">
                       {editingId === cast.id ? (
+                        <select value={editScreenshotInterval} onChange={e => setEditScreenshotInterval(Number(e.target.value))}
+                          className="text-[10px] px-1.5 py-0.5 rounded border outline-none"
+                          style={{ background: 'rgba(15,23,42,0.6)', borderColor: 'var(--border-glass)', color: 'var(--text-primary)' }}>
+                          <option value={0}>OFF</option>
+                          <option value={1}>1分</option>
+                          <option value={3}>3分</option>
+                          <option value={5}>5分</option>
+                          <option value={10}>10分</option>
+                          <option value={15}>15分</option>
+                          <option value={30}>30分</option>
+                        </select>
+                      ) : (
+                        <span className="text-[10px]" style={{ color: (cast.screenshot_interval ?? 5) > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                          {(cast.screenshot_interval ?? 5) > 0 ? `${cast.screenshot_interval ?? 5}分` : 'OFF'}
+                        </span>
+                      )}
+                    </td>
+                    <td className="text-center px-3 py-3">
+                      {editingId === cast.id ? (
                         <div className="flex items-center justify-center gap-1">
                           <button onClick={() => handleSaveEdit(cast.id)}
                             className="text-[10px] px-2 py-1 rounded-lg hover:bg-emerald-500/10 transition-all"
@@ -461,7 +483,7 @@ export default function CastsPage() {
                         </div>
                       ) : (
                         <div className="flex items-center justify-center gap-1">
-                          <button onClick={() => { setEditingId(cast.id); setEditDisplayName(cast.display_name || ''); setEditNotes(cast.notes || ''); setEditGenre(cast.genre || ''); setEditBenchmark(cast.benchmark || ''); setEditCategory(cast.category || ''); }}
+                          <button onClick={() => { setEditingId(cast.id); setEditDisplayName(cast.display_name || ''); setEditNotes(cast.notes || ''); setEditGenre(cast.genre || ''); setEditBenchmark(cast.benchmark || ''); setEditCategory(cast.category || ''); setEditScreenshotInterval(cast.screenshot_interval ?? 5); }}
                             className="p-1.5 rounded-lg hover:bg-white/5 transition-all text-[11px]"
                             style={{ color: 'var(--accent-primary)' }}>編集</button>
                           <button onClick={() => handleDeactivate(cast.id, cast.cast_name)}
