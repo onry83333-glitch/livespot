@@ -268,7 +268,14 @@ function CastDetailInner() {
   // Analytics: segments
   const [segments, setSegments] = useState<UserSegment[]>([]);
   const [segmentsLoading, setSegmentsLoading] = useState(false);
-  const [expandedSegment, setExpandedSegment] = useState<string | null>(null);
+  const [expandedSegments, setExpandedSegments] = useState<Set<string>>(new Set());
+  const toggleSegment = (id: string) => {
+    setExpandedSegments(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   // Segment refresh
   const [refreshingSegments, setRefreshingSegments] = useState(false);
@@ -477,6 +484,7 @@ function CastDetailInner() {
     sb.from('paid_users')
       .select('user_name, total_coins')
       .eq('account_id', accountId)
+      .eq('cast_name', castName)
       .order('total_coins', { ascending: false })
       .limit(500)
       .then(({ data }) => {
@@ -1086,6 +1094,7 @@ function CastDetailInner() {
     (async () => {
       const { data, error } = await sb.from('screenshots')
         .select('id, cast_name, session_id, filename, storage_path, captured_at')
+        .eq('account_id', accountId)
         .eq('cast_name', castName)
         .order('captured_at', { ascending: false })
         .limit(100);
@@ -1906,7 +1915,7 @@ function CastDetailInner() {
                         {/* セグメント一覧 */}
                         <div className="space-y-1.5">
                           {[...segments].sort((a, b) => parseInt(a.segment_id.replace('S','')) - parseInt(b.segment_id.replace('S',''))).map(seg => {
-                            const isExpanded = expandedSegment === seg.segment_id;
+                            const isExpanded = expandedSegments.has(seg.segment_id);
                             const grandTotal = segments.reduce((s, x) => s + x.total_coins, 0);
                             const coinPct = grandTotal > 0 ? (seg.total_coins / grandTotal * 100).toFixed(1) : '0';
                             const priorityColor =
@@ -1920,7 +1929,7 @@ function CastDetailInner() {
                               <div key={seg.segment_id} className="glass-panel rounded-xl overflow-hidden">
                                 {/* Header row */}
                                 <button
-                                  onClick={() => setExpandedSegment(isExpanded ? null : seg.segment_id)}
+                                  onClick={() => toggleSegment(seg.segment_id)}
                                   className="w-full text-left px-4 py-3 flex items-center justify-between hover:bg-white/[0.02] transition-colors"
                                 >
                                   <div className="flex items-center gap-3">

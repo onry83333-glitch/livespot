@@ -182,6 +182,8 @@ export default function DmPage() {
   const [enrollments, setEnrollments] = useState<EnrollmentItem[]>([]);
   const [scenarioLoading, setScenarioLoading] = useState(false);
   const [scenarioFilter, setScenarioFilter] = useState<'all' | 'active' | 'completed' | 'goal_reached' | 'cancelled'>('all');
+  const [enrollmentListExpanded, setEnrollmentListExpanded] = useState(false);
+  const [autoGroupExpanded, setAutoGroupExpanded] = useState<Set<string>>(new Set());
 
   // === URL preset handled flag ===
   const presetHandledRef = useRef(false);
@@ -1250,10 +1252,22 @@ export default function DmPage() {
                   const castName = items[0]?.cast_name || '';
                   const queuedAt = items[0]?.queued_at ? new Date(items[0].queued_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
                   const hasAI = items.some(d => d.ai_generated);
+                  const shouldCollapseGroup = items.length > 10;
+                  const isGroupExpanded = autoGroupExpanded.has(campaign);
+                  const visibleItems = shouldCollapseGroup && !isGroupExpanded ? items.slice(0, 10) : items;
 
                   return (
                     <div key={campaign} className="glass-card p-5" style={{ background: bgColor, borderColor }}>
                       <div className="flex items-center gap-3 mb-4">
+                        {shouldCollapseGroup && (
+                          <button onClick={() => setAutoGroupExpanded(prev => {
+                            const next = new Set(prev);
+                            if (next.has(campaign)) next.delete(campaign); else next.add(campaign);
+                            return next;
+                          })}>
+                            <span className="text-xs">{isGroupExpanded ? '\u25BC' : '\u25B6'}</span>
+                          </button>
+                        )}
                         <span className={`text-xs font-bold ${labelColor}`}>{label}</span>
                         {hasAI && (
                           <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 border border-purple-500/20">AI</span>
@@ -1268,7 +1282,7 @@ export default function DmPage() {
                         </span>
                       </div>
                       <div className="space-y-2">
-                        {items.map(dm => (
+                        {visibleItems.map(dm => (
                           <div key={dm.id} className="glass-panel p-3 rounded-xl space-y-2">
                             <div className="flex items-center gap-2">
                               <input type="checkbox" className="accent-sky-400"
@@ -1328,6 +1342,15 @@ export default function DmPage() {
                           </div>
                         ))}
                       </div>
+                      {shouldCollapseGroup && !isGroupExpanded && (
+                        <button
+                          onClick={() => setAutoGroupExpanded(prev => { const next = new Set(prev); next.add(campaign); return next; })}
+                          className="w-full text-center py-2 mt-2 text-[10px] hover:bg-white/[0.02] rounded-lg"
+                          style={{ color: 'var(--accent-primary)' }}
+                        >
+                          残り {items.length - 10}件を表示...
+                        </button>
+                      )}
                     </div>
                   );
                 });
@@ -1461,13 +1484,24 @@ export default function DmPage() {
           )}
 
           {/* Enrollment List */}
-          {!scenarioLoading && enrollments.length > 0 && (
+          {!scenarioLoading && enrollments.length > 0 && (() => {
+            const filteredEnrollments = enrollments.filter(e => scenarioFilter === 'all' || e.status === scenarioFilter);
+            const shouldCollapse = filteredEnrollments.length > 10;
+            const visibleEnrollments = shouldCollapse && !enrollmentListExpanded ? filteredEnrollments.slice(0, 10) : filteredEnrollments;
+            return (
             <div className="glass-card p-5">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold">エンロールメント</h3>
+                <button
+                  onClick={() => shouldCollapse && setEnrollmentListExpanded(prev => !prev)}
+                  className="flex items-center gap-2"
+                  style={{ cursor: shouldCollapse ? 'pointer' : 'default' }}
+                >
+                  {shouldCollapse && <span className="text-xs">{enrollmentListExpanded ? '\u25BC' : '\u25B6'}</span>}
+                  <h3 className="text-sm font-bold">エンロールメント ({filteredEnrollments.length}件)</h3>
+                </button>
                 <div className="flex gap-1">
                   {(['all', 'active', 'goal_reached', 'completed', 'cancelled'] as const).map(f => (
-                    <button key={f} onClick={() => setScenarioFilter(f)}
+                    <button key={f} onClick={() => { setScenarioFilter(f); setEnrollmentListExpanded(false); }}
                       className={`px-3 py-1 rounded-lg text-[10px] transition-all ${
                         scenarioFilter === f ? 'bg-sky-500/15 text-sky-400 border border-sky-500/20' : 'text-slate-500 hover:text-slate-300'
                       }`}>
@@ -1477,9 +1511,7 @@ export default function DmPage() {
                 </div>
               </div>
               <div className="space-y-1 max-h-96 overflow-auto">
-                {enrollments
-                  .filter(e => scenarioFilter === 'all' || e.status === scenarioFilter)
-                  .map(e => {
+                {visibleEnrollments.map(e => {
                     const sc = scenarios.find(s => s.id === e.scenario_id);
                     const statusColors: Record<string, string> = {
                       active: 'text-sky-400',
@@ -1491,7 +1523,7 @@ export default function DmPage() {
                       <div key={e.id} className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs hover:bg-white/[0.02]"
                         style={{ background: 'rgba(15,23,42,0.3)' }}>
                         <span className={statusColors[e.status] || 'text-slate-500'}>
-                          {e.status === 'active' ? '●' : e.status === 'goal_reached' ? '✓' : e.status === 'completed' ? '◎' : '○'}
+                          {e.status === 'active' ? '\u25CF' : e.status === 'goal_reached' ? '\u2713' : e.status === 'completed' ? '\u25CE' : '\u25CB'}
                         </span>
                         <span className="font-medium w-32 truncate">{e.username}</span>
                         {e.cast_name && (
@@ -1517,8 +1549,18 @@ export default function DmPage() {
                     );
                   })}
               </div>
+              {shouldCollapse && !enrollmentListExpanded && (
+                <button
+                  onClick={() => setEnrollmentListExpanded(true)}
+                  className="w-full text-center py-2 mt-2 text-[10px] hover:bg-white/[0.02] rounded-lg"
+                  style={{ color: 'var(--accent-primary)' }}
+                >
+                  残り {filteredEnrollments.length - 10}件を表示...
+                </button>
+              )}
             </div>
-          )}
+            );
+          })()}
         </div>
       )}
     </div>
