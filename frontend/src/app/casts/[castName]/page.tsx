@@ -267,6 +267,10 @@ function CastDetailInner() {
   const [segmentsLoading, setSegmentsLoading] = useState(false);
   const [expandedSegment, setExpandedSegment] = useState<string | null>(null);
 
+  // Segment refresh
+  const [refreshingSegments, setRefreshingSegments] = useState(false);
+  const [refreshResult, setRefreshResult] = useState<string | null>(null);
+
   // Coin sync alert
   const [daysSinceSync, setDaysSinceSync] = useState<number | null>(null);
 
@@ -1094,6 +1098,35 @@ function CastDetailInner() {
     return counts;
   }, [retentionUsers]);
 
+  // Refresh segments from coin_transactions
+  const handleRefreshSegments = useCallback(async () => {
+    if (!accountId) return;
+    setRefreshingSegments(true);
+    setRefreshResult(null);
+    try {
+      const { data, error } = await sb.rpc('refresh_segments', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+      });
+      if (error) {
+        setRefreshResult(`エラー: ${error.message}`);
+      } else {
+        const count = typeof data === 'number' ? data : 0;
+        setRefreshResult(`${count.toLocaleString()}件更新しました`);
+        // セグメントデータをリロード
+        sb.rpc('get_user_segments', { p_account_id: accountId, p_cast_name: castName })
+          .then(({ data: segData }) => {
+            const parsed = Array.isArray(segData) ? segData : [];
+            setSegments(parsed as UserSegment[]);
+          });
+      }
+    } catch {
+      setRefreshResult('エラーが発生しました');
+    } finally {
+      setRefreshingSegments(false);
+    }
+  }, [accountId, castName, sb]);
+
   // Navigate to DM tab with segment targets
   const sendSegmentDm = useCallback((segmentId: string, segmentName: string) => {
     const seg = segments.find(s => s.segment_id === segmentId);
@@ -1729,10 +1762,36 @@ function CastDetailInner() {
                 <>
                   {/* ============ SEGMENT ANALYSIS ============ */}
                   <div className="glass-card p-4">
-                    <h3 className="text-sm font-bold mb-3">📊 ユーザーセグメント分析</h3>
-                    <p className="text-[10px] mb-4" style={{ color: 'var(--text-muted)' }}>
-                      このキャストの有料ユーザーをコイン累計額 × 最終課金日の2軸で10パターンに分類（コイン同期データ基準）
-                    </p>
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="text-sm font-bold">📊 ユーザーセグメント分析</h3>
+                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                          コイン累計額 × 最終課金日の2軸で分類（coin_transactions基準）
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {refreshResult && (
+                          <span className="text-[10px] px-2 py-1 rounded-full" style={{
+                            background: refreshResult.startsWith('エラー') ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)',
+                            color: refreshResult.startsWith('エラー') ? '#ef4444' : '#22c55e',
+                          }}>
+                            {refreshResult}
+                          </span>
+                        )}
+                        <button
+                          onClick={handleRefreshSegments}
+                          disabled={refreshingSegments}
+                          className="text-[10px] px-3 py-1.5 rounded-lg font-medium transition-all"
+                          style={{
+                            background: refreshingSegments ? 'rgba(56,189,248,0.1)' : 'rgba(56,189,248,0.15)',
+                            color: 'var(--accent-primary)',
+                            border: '1px solid rgba(56,189,248,0.2)',
+                          }}
+                        >
+                          {refreshingSegments ? '更新中...' : '🔄 セグメント更新'}
+                        </button>
+                      </div>
+                    </div>
 
                     {segmentsLoading ? (
                       <div className="text-center py-4 text-xs" style={{ color: 'var(--text-muted)' }}>セグメント分析中...</div>

@@ -2248,6 +2248,26 @@ async function processCoinSyncData(transactions, castName = 'unknown') {
     console.warn('[LS-BG] refresh_paying_users RPC失敗（非致命的）:', err.message);
   }
 
+  // refresh_segments RPC呼び出し（コイン同期後にセグメント自動更新）
+  try {
+    const segRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/rpc/refresh_segments`,
+      {
+        method: 'POST',
+        headers: { ...CONFIG.SUPABASE_HEADERS, Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_account_id: accountId }),
+      }
+    );
+    if (segRes.ok) {
+      const count = await segRes.json();
+      console.log('[LS-BG] refresh_segments RPC成功:', count, '件更新');
+    } else {
+      console.warn('[LS-BG] refresh_segments RPC: HTTP', segRes.status, '(関数が未作成の可能性 — 非致命的)');
+    }
+  } catch (err) {
+    console.warn('[LS-BG] refresh_segments RPC失敗（非致命的）:', err.message);
+  }
+
   // 同期ステータス保存
   await chrome.storage.local.set({
     last_coin_sync: now,
