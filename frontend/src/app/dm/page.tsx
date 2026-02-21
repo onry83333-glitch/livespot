@@ -6,7 +6,6 @@ import { useAuth } from '@/components/auth-provider';
 
 import { createClient } from '@/lib/supabase/client';
 import { tokensToJPY } from '@/lib/utils';
-import { api } from '@/lib/api';
 
 /* ============================================================
    Constants
@@ -159,41 +158,8 @@ export default function DmPage() {
     const castName = acct?.cast_usernames?.[0];
     if (!castName) return;
 
-    setThankCandidateLoading(true);
-    try {
-      const data = await api<ThankYouCandidate[]>(
-        `/api/dm/thankyou-candidates?account_id=${selectedAccount}&cast_name=${encodeURIComponent(castName)}&min_tokens=${thankMinCoins}`
-      );
-      setThankApiAvailable(true);
-      setThankCandidates(data);
-
-      // Auto-check all except S1
-      const checked = new Set<string>();
-      const messages: Record<string, string> = {};
-      data.forEach(c => {
-        if (c.segment !== 'S1') {
-          checked.add(c.user_name);
-        }
-        // Pre-fill message: use API template, fall back to local constant
-        const tpl = c.suggested_template || THANK_TEMPLATES[c.segment];
-        if (tpl) {
-          messages[c.user_name] = tpl.replace(/\{username\}/g, c.user_name);
-        } else {
-          messages[c.user_name] = '';
-        }
-      });
-      setThankCandidateChecked(checked);
-      setThankCandidateMessages(messages);
-    } catch (e: unknown) {
-      // If 404, API not available => fall back to manual mode
-      const errMsg = e instanceof Error ? e.message : String(e);
-      if (errMsg.includes('404') || errMsg.includes('Not Found')) {
-        setThankApiAvailable(false);
-      } else {
-        console.warn('[DM] thankyou-candidates API error:', errMsg);
-        setThankApiAvailable(false);
-      }
-    }
+    // FastAPIバックエンド未デプロイのためフォールバックモード
+    setThankApiAvailable(false);
     setThankCandidateLoading(false);
   }, [selectedAccount, accounts, thankMinCoins, thankApiAvailable]);
 

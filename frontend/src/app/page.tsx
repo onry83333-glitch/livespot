@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { tokensToJPY } from '@/lib/utils';
-import { api } from '@/lib/api';
 
 interface Account {
   id: string;
@@ -138,41 +137,11 @@ export default function DashboardPage() {
   }, [sb]);
 
   // Churn risk data loading
-  const loadChurnRisk = useCallback(async (accountId: string, accts: Account[]) => {
-    // Prevent re-fetching for the same account
+  const loadChurnRisk = useCallback(async (accountId: string, _accts: Account[]) => {
+    // FastAPIバックエンド未デプロイのため無効化
     if (churnFetchedRef.current === accountId) return;
     churnFetchedRef.current = accountId;
-
-    const acct = accts.find(a => a.id === accountId);
-    const castNames = acct?.cast_usernames || [];
-    if (castNames.length === 0) return;
-
-    try {
-      // Aggregate across all casts
-      const allUsers: ChurnRiskUser[] = [];
-      const seenUsers = new Set<string>();
-
-      for (const castName of castNames) {
-        try {
-          const data = await api<ChurnRiskUser[]>(
-            `/api/dm/churn-risk?account_id=${accountId}&cast_name=${encodeURIComponent(castName)}`
-          );
-          for (const u of data) {
-            if (!seenUsers.has(u.user_name)) {
-              seenUsers.add(u.user_name);
-              allUsers.push(u);
-            }
-          }
-        } catch {
-          // If any single cast fails, continue with others
-        }
-      }
-
-      setChurnRiskUsers(allUsers);
-    } catch {
-      // Silently hide if API error/404
-      setChurnRiskUsers([]);
-    }
+    setChurnRiskUsers([]);
   }, []);
 
   // 初回ロード
