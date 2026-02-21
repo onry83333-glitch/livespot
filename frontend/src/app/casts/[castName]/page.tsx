@@ -9,11 +9,12 @@ import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
+import { PersonaTab } from '@/components/persona-tab';
 
 /* ============================================================
    Types
    ============================================================ */
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots' | 'persona';
 
 interface CastStatsData {
   total_messages: number;
@@ -170,6 +171,7 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'sales',     icon: '💰', label: '売上' },
   { key: 'realtime',  icon: '👁', label: 'リアルタイム' },
   { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
+  { key: 'persona',     icon: '🎭', label: 'ペルソナ' },
 ];
 
 /* ============================================================
@@ -2891,6 +2893,10 @@ function CastDetailInner() {
                 )}
               </div>
             </div>
+          )}
+
+          {activeTab === 'persona' && accountId && (
+            <PersonaTab castName={castName} accountId={accountId} />
           )}
         </>
       )}
