@@ -145,6 +145,7 @@ chrome.alarms.create('coinSyncPeriodic', { periodInMinutes: 360 }); // 6時間�
 chrome.alarms.create('spyAutoPatrol', { periodInMinutes: 3 });      // 3分ごとに配信開始検出
 chrome.alarms.create('check-extinct-casts', { periodInMinutes: 1440 }); // 24時間ごと（消滅キャスト検出）
 chrome.alarms.create('spyRotation', { periodInMinutes: 3 });          // 3分ごと（他社SPYローテーション）
+chrome.alarms.create('scenarioSteps', { periodInMinutes: 60 });        // 1時間ごと（シナリオステップ処理）
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'keepalive') {
@@ -212,6 +213,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'spyRotation') {
     handleSpyRotation().catch(e => {
       console.warn('[LS-BG] SpyRotation: エラー:', e.message);
+    });
+  }
+
+  // シナリオステップ処理（1時間ごと）
+  if (alarm.name === 'scenarioSteps') {
+    processScenarioSteps().catch(e => {
+      console.warn('[LS-BG] ScenarioSteps: 処理失敗:', e.message);
     });
   }
 
@@ -682,6 +690,14 @@ async function flushMessageBuffer() {
     if (res.ok || res.status === 201) {
       console.log('[LS-BG] SPYメッセージ一括送信成功:', rows.length, '件',
         'casts:', Object.keys(castCounts).join(','));
+
+      // シナリオゴール検出: spy_messagesに含まれるユーザーのactiveエンロールメントをチェック
+      const uniqueUserNames = [...new Set(rows.filter(r => r.user_name).map(r => r.user_name))];
+      if (uniqueUserNames.length > 0) {
+        checkScenarioGoals(uniqueUserNames).catch(e => {
+          console.warn('[LS-BG] シナリオゴール検出失敗:', e.message);
+        });
+      }
     } else {
       const errText = await res.text().catch(() => '');
       console.warn('[LS-BG] SPYメッセージ送信失敗:', res.status, errText,
@@ -1207,6 +1223,18 @@ async function triggerThankYouDMs(castName, sessionId) {
     } else {
       console.warn('[LS-BG] お礼DM: INSERT失敗 HTTP', insertRes.status);
     }
+
+    // シナリオエンロール（fire-and-forget）
+    for (const c of filtered) {
+      const seg = c.segment || 'S9';
+      let triggerType = 'thankyou_regular';
+      if (['S1', 'S2', 'S3'].includes(seg)) triggerType = 'thankyou_vip';
+      else if (seg === 'S9') triggerType = 'thankyou_first';
+
+      enrollScenario(triggerType, c.username, castName, seg).catch(e => {
+        console.warn('[LS-BG] シナリオエンロール失敗:', c.username, e.message);
+      });
+    }
   } catch (e) {
     console.warn('[LS-BG] お礼DM: エラー:', e.message);
   }
@@ -1304,6 +1332,13 @@ async function triggerChurnRecoveryDMs() {
         totalQueued += filtered.length;
         // 送信済みセットに追加（次のキャストで重複しないように）
         filtered.forEach(c => globalAlreadySent.add(c.username));
+
+        // シナリオエンロール（fire-and-forget）
+        for (const c of filtered) {
+          enrollScenario('churn_recovery', c.username, castName, c.segment || 'S9').catch(e => {
+            console.warn('[LS-BG] 離脱シナリオエンロール失敗:', c.username, e.message);
+          });
+        }
       } else {
         console.warn('[LS-BG] 離脱DM: INSERT失敗 (', castName, ') HTTP', insertRes.status);
       }
@@ -1316,6 +1351,348 @@ async function triggerChurnRecoveryDMs() {
     }
   } catch (e) {
     console.warn('[LS-BG] 離脱DM: エラー:', e.message);
+  }
+}
+
+// ============================================================
+// DMシナリオエンジン
+// ============================================================
+
+/**
+ * enrollScenario: ユーザーをシナリオにエンロールする
+ * - 既にactiveなエンロールメントがあればcancelledに変更→新規エンロール
+ * - Step0のDMをdm_send_logにINSERT
+ */
+async function enrollScenario(triggerType, userName, castName, segment) {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+
+  try {
+    // 1. 該当トリガーのアクティブシナリオを取得
+    const scenarioRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenarios?account_id=eq.${accountId}&trigger_type=eq.${triggerType}&is_active=eq.true&limit=1`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!scenarioRes.ok) return;
+    const scenarios = await scenarioRes.json();
+    if (!scenarios || scenarios.length === 0) return;
+    const scenario = scenarios[0];
+
+    // セグメントターゲットチェック
+    if (scenario.segment_targets && scenario.segment_targets.length > 0) {
+      if (!scenario.segment_targets.includes(segment)) {
+        console.log('[LS-BG] シナリオ: セグメント対象外', userName, segment, '→', scenario.segment_targets);
+        return;
+      }
+    }
+
+    // 2. 既存activeエンロールメントをキャンセル
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?account_id=eq.${accountId}&username=eq.${encodeURIComponent(userName)}&status=eq.active`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ status: 'cancelled' }),
+      }
+    );
+
+    // 3. 新規エンロール
+    const steps = scenario.steps || [];
+    const step0 = steps[0] || null;
+    const nextStepDue = steps.length > 1
+      ? new Date(Date.now() + (steps[1].delay_hours || 24) * 3600000).toISOString()
+      : null;
+
+    const enrollRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        scenario_id: scenario.id,
+        account_id: accountId,
+        cast_name: castName,
+        username: userName,
+        current_step: 0,
+        status: 'active',
+        last_step_sent_at: new Date().toISOString(),
+        next_step_due_at: nextStepDue,
+        goal_type: step0?.goal || 'reply_or_visit',
+        metadata: { segment, trigger_type: triggerType },
+      }),
+    });
+
+    if (!enrollRes.ok && enrollRes.status !== 201) {
+      // UNIQUE制約違反は想定内（既にエンロール済み）
+      if (enrollRes.status === 409) {
+        console.log('[LS-BG] シナリオ: 既にエンロール済み', userName, triggerType);
+        return;
+      }
+      console.warn('[LS-BG] シナリオ: エンロール失敗', enrollRes.status);
+      return;
+    }
+
+    console.log('[LS-BG] シナリオ: エンロール成功', userName, '→', scenario.scenario_name, '(step0)');
+
+    // 4. Step0のDMをdm_send_logにINSERT
+    if (step0 && step0.message) {
+      const dmMessage = (step0.message || '').replace('{username}', userName);
+      const status = scenario.auto_approve_step0 ? 'queued' : 'pending';
+      const campaign = `scenario_${scenario.id}_step0_${Date.now()}`;
+
+      await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          user_name: userName,
+          cast_name: castName,
+          profile_url: `https://stripchat.com/user/${userName}`,
+          message: dmMessage,
+          status: status,
+          campaign: campaign,
+          template_name: `scenario_${triggerType}_step0`,
+          queued_at: new Date().toISOString(),
+        }),
+      });
+      console.log('[LS-BG] シナリオStep0 DM:', userName, status, '(', triggerType, ')');
+    }
+  } catch (e) {
+    console.warn('[LS-BG] enrollScenario失敗:', e.message);
+  }
+}
+
+/**
+ * processScenarioSteps: 1時間ごとにnext_step_due_at <= NOW()のエンロールメントを処理
+ * 次ステップのDMをdm_send_logにINSERT → current_step++
+ */
+async function processScenarioSteps() {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+
+  try {
+    // next_step_due_at <= NOW() かつ status='active' のエンロールメントを取得
+    const now = new Date().toISOString();
+    const enrollRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?account_id=eq.${accountId}&status=eq.active&next_step_due_at=lte.${encodeURIComponent(now)}&select=*&limit=100`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!enrollRes.ok) return;
+    const enrollments = await enrollRes.json();
+    if (!enrollments || enrollments.length === 0) return;
+
+    console.log('[LS-BG] シナリオステップ処理:', enrollments.length, '件');
+
+    // シナリオ定義をバッチ取得
+    const scenarioIds = [...new Set(enrollments.map(e => e.scenario_id))];
+    const scenarioRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenarios?id=in.(${scenarioIds.map(id => `"${id}"`).join(',')})&select=*`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!scenarioRes.ok) return;
+    const scenarioList = await scenarioRes.json();
+    const scenarioMap = {};
+    (scenarioList || []).forEach(s => { scenarioMap[s.id] = s; });
+
+    // 日別送信カウント（daily_send_limit チェック用）
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todaySentRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?account_id=eq.${accountId}&template_name=like.scenario_*&queued_at=gte.${encodeURIComponent(todayStart.toISOString())}&select=id`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Prefer': 'count=exact',
+        },
+      }
+    );
+    let todaySentCount = 0;
+    if (todaySentRes.ok) {
+      const countHeader = todaySentRes.headers.get('content-range');
+      if (countHeader) {
+        const match = countHeader.match(/\/(\d+)/);
+        if (match) todaySentCount = parseInt(match[1], 10);
+      }
+    }
+
+    let processedCount = 0;
+    for (const enrollment of enrollments) {
+      const scenario = scenarioMap[enrollment.scenario_id];
+      if (!scenario) continue;
+
+      // daily_send_limit チェック
+      if (todaySentCount + processedCount >= (scenario.daily_send_limit || 50)) {
+        console.log('[LS-BG] シナリオ: 日次上限到達', todaySentCount + processedCount);
+        break;
+      }
+
+      const steps = scenario.steps || [];
+      const nextStep = enrollment.current_step + 1;
+
+      // 全ステップ完了チェック
+      if (nextStep >= steps.length) {
+        // completed に更新
+        await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?id=eq.${enrollment.id}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal',
+            },
+            body: JSON.stringify({ status: 'completed', next_step_due_at: null }),
+          }
+        );
+        console.log('[LS-BG] シナリオ完了:', enrollment.username, scenario.scenario_name);
+        continue;
+      }
+
+      const stepDef = steps[nextStep];
+      if (!stepDef) continue;
+
+      // DM INSERT
+      const dmMessage = (stepDef.message || stepDef.template || '').replace('{username}', enrollment.username);
+      const campaign = `scenario_${scenario.id}_step${nextStep}_${Date.now()}`;
+
+      await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          user_name: enrollment.username,
+          cast_name: enrollment.cast_name,
+          profile_url: `https://stripchat.com/user/${enrollment.username}`,
+          message: dmMessage,
+          status: 'pending',
+          campaign: campaign,
+          template_name: `scenario_${scenario.trigger_type}_step${nextStep}`,
+          queued_at: new Date().toISOString(),
+        }),
+      });
+
+      // エンロールメント更新
+      const nextNextStep = nextStep + 1;
+      const nextDue = nextNextStep < steps.length
+        ? new Date(Date.now() + (steps[nextNextStep].delay_hours || 24) * 3600000).toISOString()
+        : null;
+
+      await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?id=eq.${enrollment.id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({
+            current_step: nextStep,
+            last_step_sent_at: new Date().toISOString(),
+            next_step_due_at: nextDue,
+            status: nextDue ? 'active' : 'completed',
+          }),
+        }
+      );
+
+      processedCount++;
+      console.log('[LS-BG] シナリオStep', nextStep, 'DM:', enrollment.username, scenario.scenario_name);
+    }
+
+    if (processedCount > 0) {
+      console.log('[LS-BG] シナリオステップ処理完了:', processedCount, '件');
+    }
+  } catch (e) {
+    console.warn('[LS-BG] processScenarioSteps失敗:', e.message);
+  }
+}
+
+/**
+ * checkScenarioGoals: spy_messagesバッチ後にゴール到達チェック
+ * activeなエンロールメントのユーザーがspy_messagesに新規メッセージを持っていれば
+ * goal_reached に更新（以降のステップは発火しない）
+ */
+async function checkScenarioGoals(userNames, castName) {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+  if (!userNames || userNames.length === 0) return;
+
+  try {
+    // activeなエンロールメントでuserNamesに含まれるものを検索
+    const nameFilter = userNames.map(u => `"${u}"`).join(',');
+    const enrollRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?account_id=eq.${accountId}&status=eq.active&username=in.(${nameFilter})&select=id,username,scenario_id`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!enrollRes.ok) return;
+    const enrollments = await enrollRes.json();
+    if (!enrollments || enrollments.length === 0) return;
+
+    // goal_reached に更新
+    const ids = enrollments.map(e => `"${e.id}"`).join(',');
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?id=in.(${ids})`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          status: 'goal_reached',
+          goal_reached_at: new Date().toISOString(),
+          next_step_due_at: null,
+        }),
+      }
+    );
+
+    const userNamesList = enrollments.map(e => e.username);
+    console.log('[LS-BG] シナリオゴール到達:', userNamesList.length, '名', userNamesList.join(','));
+  } catch (e) {
+    console.warn('[LS-BG] checkScenarioGoals失敗:', e.message);
   }
 }
 

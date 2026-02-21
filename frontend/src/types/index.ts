@@ -52,6 +52,37 @@ export interface DMEffectiveness {
   reconverted_tokens: number;
 }
 
+export interface DMScenario {
+  id: string;
+  account_id: string;
+  scenario_name: string;
+  trigger_type: 'thankyou_vip' | 'thankyou_regular' | 'thankyou_first' | 'churn_recovery';
+  segment_targets: string[];
+  steps: { step: number; delay_hours: number; template: string; message?: string; goal: string }[];
+  is_active: boolean;
+  auto_approve_step0: boolean;
+  daily_send_limit: number;
+  min_interval_hours: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DMScenarioEnrollment {
+  id: string;
+  scenario_id: string;
+  account_id: string;
+  cast_name: string | null;
+  username: string;
+  enrolled_at: string;
+  current_step: number;
+  status: 'active' | 'completed' | 'cancelled' | 'goal_reached';
+  last_step_sent_at: string | null;
+  next_step_due_at: string | null;
+  goal_type: string | null;
+  goal_reached_at: string | null;
+  metadata: Record<string, unknown>;
+}
+
 // ============================================================
 // SPY
 // ============================================================

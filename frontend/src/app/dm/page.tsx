@@ -75,6 +75,29 @@ interface AutoDMItem {
   queued_at: string;
 }
 
+interface ScenarioItem {
+  id: string;
+  scenario_name: string;
+  trigger_type: string;
+  segment_targets: string[];
+  steps: { step: number; delay_hours: number; template: string; message?: string; goal: string }[];
+  is_active: boolean;
+  auto_approve_step0: boolean;
+  daily_send_limit: number;
+}
+
+interface EnrollmentItem {
+  id: string;
+  scenario_id: string;
+  cast_name: string | null;
+  username: string;
+  enrolled_at: string;
+  current_step: number;
+  status: string;
+  next_step_due_at: string | null;
+  goal_reached_at: string | null;
+}
+
 /* ============================================================
    Page
    ============================================================ */
@@ -83,7 +106,7 @@ export default function DmPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [tab, setTab] = useState<'bulk' | 'thank' | 'auto'>('bulk');
+  const [tab, setTab] = useState<'bulk' | 'thank' | 'auto' | 'scenario'>('bulk');
 
   // === 共通 ===
   const [accounts, setAccounts] = useState<AccountWithCasts[]>([]);
@@ -133,6 +156,12 @@ export default function DmPage() {
   const [autoLoading, setAutoLoading] = useState(false);
   const [autoApproving, setAutoApproving] = useState(false);
   const [autoChecked, setAutoChecked] = useState<Set<number>>(new Set());
+
+  // === シナリオ state ===
+  const [scenarios, setScenarios] = useState<ScenarioItem[]>([]);
+  const [enrollments, setEnrollments] = useState<EnrollmentItem[]>([]);
+  const [scenarioLoading, setScenarioLoading] = useState(false);
+  const [scenarioFilter, setScenarioFilter] = useState<'all' | 'active' | 'completed' | 'goal_reached' | 'cancelled'>('all');
 
   // === URL preset handled flag ===
   const presetHandledRef = useRef(false);
@@ -206,6 +235,34 @@ export default function DmPage() {
   useEffect(() => {
     if (tab === 'auto' && selectedAccount) {
       loadAutoDMs();
+    }
+  }, [tab, selectedAccount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // === シナリオロジック ===
+  const loadScenarios = useCallback(async () => {
+    if (!selectedAccount) return;
+    setScenarioLoading(true);
+    try {
+      const [scenarioRes, enrollRes] = await Promise.all([
+        sb.from('dm_scenarios')
+          .select('id, scenario_name, trigger_type, segment_targets, steps, is_active, auto_approve_step0, daily_send_limit')
+          .eq('account_id', selectedAccount)
+          .order('created_at'),
+        sb.from('dm_scenario_enrollments')
+          .select('id, scenario_id, cast_name, username, enrolled_at, current_step, status, next_step_due_at, goal_reached_at')
+          .eq('account_id', selectedAccount)
+          .order('enrolled_at', { ascending: false })
+          .limit(500),
+      ]);
+      setScenarios((scenarioRes.data || []) as ScenarioItem[]);
+      setEnrollments((enrollRes.data || []) as EnrollmentItem[]);
+    } catch { /* ignore */ }
+    setScenarioLoading(false);
+  }, [selectedAccount, sb]);
+
+  useEffect(() => {
+    if (tab === 'scenario' && selectedAccount) {
+      loadScenarios();
     }
   }, [tab, selectedAccount]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -527,6 +584,7 @@ export default function DmPage() {
           { key: 'bulk' as const, label: '\u4E00\u6589\u9001\u4FE1' },
           { key: 'thank' as const, label: '\u304A\u793C\uFF24\uFF2D' },
           { key: 'auto' as const, label: `\u81EA\u52D5DM${autoDMs.length > 0 ? ` (${autoDMs.length})` : ''}` },
+          { key: 'scenario' as const, label: '\u30B7\u30CA\u30EA\u30AA' },
         ]).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-all ${
@@ -1209,6 +1267,191 @@ export default function DmPage() {
                 });
               })()}
             </>
+          )}
+        </div>
+      )}
+
+      {/* ============ シナリオタブ ============ */}
+      {tab === 'scenario' && (
+        <div className="space-y-4 anim-fade-up">
+          {/* Header */}
+          <div className="glass-card p-5">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <h3 className="text-sm font-bold">DMシナリオ</h3>
+                <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  セグメント別の連続DMシナリオ。ゴール（来訪/返信）検出で自動停止します。
+                </p>
+              </div>
+              <button onClick={loadScenarios} disabled={scenarioLoading}
+                className="btn-ghost text-[10px] px-3 py-1.5">
+                {scenarioLoading ? '読込中...' : '再読み込み'}
+              </button>
+            </div>
+          </div>
+
+          {/* Loading */}
+          {scenarioLoading && (
+            <div className="glass-card p-5 space-y-3">
+              {[1, 2, 3].map(i => (
+                <div key={i} className="flex items-center gap-4">
+                  <div className="w-4 h-4 rounded animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  <div className="h-4 w-48 rounded animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* KPI Summary */}
+          {!scenarioLoading && enrollments.length > 0 && (
+            <div className="grid grid-cols-4 gap-3">
+              {[
+                { label: 'Active', count: enrollments.filter(e => e.status === 'active').length, color: 'text-sky-400' },
+                { label: 'ゴール到達', count: enrollments.filter(e => e.status === 'goal_reached').length, color: 'text-emerald-400' },
+                { label: '完了', count: enrollments.filter(e => e.status === 'completed').length, color: 'text-slate-400' },
+                { label: 'キャンセル', count: enrollments.filter(e => e.status === 'cancelled').length, color: 'text-amber-400' },
+              ].map(kpi => (
+                <div key={kpi.label} className="glass-panel p-3 rounded-xl text-center">
+                  <p className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>{kpi.label}</p>
+                  <p className={`text-lg font-bold ${kpi.color}`}>{kpi.count}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Scenario List */}
+          {!scenarioLoading && scenarios.length > 0 && (
+            <div className="space-y-3">
+              {scenarios.map(sc => {
+                const triggerLabels: Record<string, string> = {
+                  thankyou_vip: 'VIPお礼',
+                  thankyou_regular: '常連お礼',
+                  thankyou_first: '初回お礼',
+                  churn_recovery: '離脱防止',
+                };
+                const triggerColors: Record<string, string> = {
+                  thankyou_vip: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+                  thankyou_regular: 'text-sky-400 bg-sky-500/10 border-sky-500/20',
+                  thankyou_first: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+                  churn_recovery: 'text-rose-400 bg-rose-500/10 border-rose-500/20',
+                };
+                const scEnrollments = enrollments.filter(e => e.scenario_id === sc.id);
+                const activeCount = scEnrollments.filter(e => e.status === 'active').length;
+                const goalCount = scEnrollments.filter(e => e.status === 'goal_reached').length;
+                const totalCount = scEnrollments.length;
+                const goalRate = totalCount > 0 ? Math.round((goalCount / totalCount) * 100) : 0;
+
+                return (
+                  <div key={sc.id} className="glass-card p-5">
+                    <div className="flex items-center gap-3 mb-3">
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${triggerColors[sc.trigger_type] || 'text-slate-400'}`}>
+                        {triggerLabels[sc.trigger_type] || sc.trigger_type}
+                      </span>
+                      <h4 className="text-sm font-bold flex-1">{sc.scenario_name}</h4>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full ${sc.is_active ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-500/10 text-slate-500'}`}>
+                        {sc.is_active ? 'ON' : 'OFF'}
+                      </span>
+                    </div>
+
+                    {/* Steps */}
+                    <div className="flex items-center gap-1 mb-3">
+                      {sc.steps.map((step, i) => (
+                        <div key={i} className="flex items-center gap-1">
+                          <div className="glass-panel px-2 py-1 rounded text-[10px]"
+                            title={step.template}>
+                            Step{step.step}: {step.template}
+                            {step.delay_hours > 0 && <span className="ml-1" style={{ color: 'var(--text-muted)' }}>({step.delay_hours}h)</span>}
+                          </div>
+                          {i < sc.steps.length - 1 && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>→</span>}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Stats */}
+                    <div className="flex items-center gap-4 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                      <span>対象: {sc.segment_targets.join(', ')}</span>
+                      <span>登録: {totalCount}名</span>
+                      <span className="text-sky-400">Active: {activeCount}</span>
+                      <span className="text-emerald-400">ゴール: {goalCount} ({goalRate}%)</span>
+                      <span>上限: {sc.daily_send_limit}/日</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!scenarioLoading && scenarios.length === 0 && (
+            <div className="glass-card p-10 text-center">
+              <p className="text-4xl mb-4 opacity-30">&#9881;</p>
+              <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
+                シナリオ未登録
+              </p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                マイグレーション041を実行して初期シナリオを登録してください。
+              </p>
+            </div>
+          )}
+
+          {/* Enrollment List */}
+          {!scenarioLoading && enrollments.length > 0 && (
+            <div className="glass-card p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-bold">エンロールメント</h3>
+                <div className="flex gap-1">
+                  {(['all', 'active', 'goal_reached', 'completed', 'cancelled'] as const).map(f => (
+                    <button key={f} onClick={() => setScenarioFilter(f)}
+                      className={`px-3 py-1 rounded-lg text-[10px] transition-all ${
+                        scenarioFilter === f ? 'bg-sky-500/15 text-sky-400 border border-sky-500/20' : 'text-slate-500 hover:text-slate-300'
+                      }`}>
+                      {f === 'all' ? '全て' : f === 'active' ? 'Active' : f === 'goal_reached' ? 'ゴール' : f === 'completed' ? '完了' : 'キャンセル'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1 max-h-96 overflow-auto">
+                {enrollments
+                  .filter(e => scenarioFilter === 'all' || e.status === scenarioFilter)
+                  .map(e => {
+                    const sc = scenarios.find(s => s.id === e.scenario_id);
+                    const statusColors: Record<string, string> = {
+                      active: 'text-sky-400',
+                      goal_reached: 'text-emerald-400',
+                      completed: 'text-slate-400',
+                      cancelled: 'text-amber-400',
+                    };
+                    return (
+                      <div key={e.id} className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs hover:bg-white/[0.02]"
+                        style={{ background: 'rgba(15,23,42,0.3)' }}>
+                        <span className={statusColors[e.status] || 'text-slate-500'}>
+                          {e.status === 'active' ? '●' : e.status === 'goal_reached' ? '✓' : e.status === 'completed' ? '◎' : '○'}
+                        </span>
+                        <span className="font-medium w-32 truncate">{e.username}</span>
+                        {e.cast_name && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/10 text-slate-400 truncate max-w-[100px]">
+                            {e.cast_name}
+                          </span>
+                        )}
+                        <span className="text-[10px] flex-1 truncate" style={{ color: 'var(--text-muted)' }}>
+                          {sc?.scenario_name || ''}
+                        </span>
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          Step {e.current_step}/{sc?.steps.length || '?'}
+                        </span>
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          {new Date(e.enrolled_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })}
+                        </span>
+                        {e.status === 'goal_reached' && e.goal_reached_at && (
+                          <span className="text-[10px] text-emerald-400">
+                            到達: {new Date(e.goal_reached_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' })}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
           )}
         </div>
       )}
