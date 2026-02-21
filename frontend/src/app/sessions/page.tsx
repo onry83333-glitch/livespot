@@ -340,6 +340,7 @@ export default function SessionsPage() {
       .select('id, session_id, output_text, created_at, tokens_used, cost_usd')
       .eq('session_id', expandedId)
       .eq('report_type', 'session_analysis')
+      .in('account_id', accounts.map(a => a.id))
       .order('created_at', { ascending: false })
       .limit(1)
       .then(({ data }) => {
@@ -871,6 +872,7 @@ function ViewerChart({ session }: { session: ComputedSession }) {
     let query = supabase.from('viewer_stats')
       .select('total, coin_users, others, recorded_at')
       .eq('account_id', session.account_id)
+      .eq('cast_name', session.cast_name)
       .gte('recorded_at', session.started_at)
       .order('recorded_at');
 

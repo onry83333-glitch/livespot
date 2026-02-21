@@ -133,10 +133,8 @@ export default function DmPage() {
   const sb = supabaseRef.current;
 
   // === 一斉送信 state ===
-  const [targetsText, setTargetsText] = useState(
-    'https://ja.stripchat.com/user/p_yutayuta_p\nhttps://ja.stripchat.com/user/Nekomeem34\nhttps://ja.stripchat.com/user/kantou1234\nhttps://ja.stripchat.com/user/pojipojipoji'
-  );
-  const [message, setMessage] = useState('\u304A\u4E45\u3057\u3076\u308A\u3067\u3059\uFF01\u4ECA\u591C\u7A7A\u3044\u3066\u307E\u3059\u304B\uFF1F\u307E\u305F\u304A\u8A71\u3057\u3067\u304D\u305F\u3089\u5B09\u3057\u3044\u3067\u3059\uFF01');
+  const [targetsText, setTargetsText] = useState('');
+  const [message, setMessage] = useState('');
   const [sendOrder, setSendOrder] = useState<'text-image' | 'image-text' | 'text-only'>('text-image');
   const [accessImage, setAccessImage] = useState<'free' | 'paid'>('free');
   const [sendMode, setSendMode] = useState<'sequential' | 'pipeline'>('pipeline');
@@ -352,6 +350,7 @@ export default function DmPage() {
       const { data: items } = await sb.from('dm_send_log')
         .select('*')
         .eq('campaign', bid)
+        .eq('account_id', selectedAccount)
         .order('created_at', { ascending: false });
       const logs = items || [];
       const counts = { total: logs.length, queued: 0, sending: 0, success: 0, error: 0 };
@@ -365,18 +364,18 @@ export default function DmPage() {
         queued_at: l.queued_at || l.created_at, sent_at: l.sent_at,
       })));
     } catch { /* ignore */ }
-  }, [sb]);
+  }, [sb, selectedAccount]);
 
   useEffect(() => {
     if (!user) return;
     const channel = sb
       .channel('dm-status')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: selectedAccount ? `account_id=eq.${selectedAccount}` : undefined }, () => {
         if (batchId) pollStatus(batchId);
       })
       .subscribe();
     return () => { sb.removeChannel(channel); };
-  }, [user, batchId, pollStatus, sb]);
+  }, [user, batchId, pollStatus, sb, selectedAccount]);
 
   const handleSend = async () => {
     if (targets.length === 0) { setError('\u30BF\u30FC\u30B2\u30C3\u30C8\u30921\u4EF6\u4EE5\u4E0A\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044'); return; }

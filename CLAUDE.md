@@ -534,8 +534,11 @@ claude
 | DM効果測定ダッシュボード（campaign別集計） | 完了 |
 | ユーザーセグメント分析（10セグメント RPC） | 完了 |
 | キャスト横並び比較（/analytics/compare） | 完了 |
-| お礼DM自動送信（ギフト検出→DM自動キュー登録） | 未着手 |
-| 離脱ユーザー→DM自動トリガー | 未着手 |
+| お礼DM自動送信（ギフト検出→DM自動キュー登録） | 完了（シナリオエンジン Phase 1） |
+| 離脱ユーザー→DM自動トリガー | 完了（churn_recovery シナリオ） |
+| DMシナリオエンジン（ステップ配信 + ゴール検出） | 完了（Phase 1 + Phase 2 AI統合） |
+| Persona Agent統合（AI DM文面生成） | 完了（Phase 2） |
+| キャスト間データ分離修正 | 完了（品質巡回で発見・修正） |
 | 二重送信防止ロジック | 未着手 |
 | ブラックリスト機能 | 未着手 |
 
@@ -551,13 +554,59 @@ claude
 
 ---
 
+## Recent Changes
+
+### [2026-02-22] 🔍 品質巡回エージェント実施 — データ分離修正6件
+
+**自動修正済み（コミット済み）:**
+- [CRITICAL] dm/page.tsx: pollStatus に account_id フィルタ欠落 → 修正
+- [CRITICAL] dm/page.tsx: Realtime subscription にアカウントフィルタ欠落 → 修正
+- [HIGH] sessions/page.tsx: viewer_stats に cast_name フィルタ欠落 → 修正
+- [HIGH] casts/[castName]/page.tsx: paid_users に cast_name フィルタ欠落 → 修正（前セッション）
+- [HIGH] casts/[castName]/page.tsx: screenshots に account_id フィルタ欠落 → 修正（前セッション）
+- [MED] dm/page.tsx: ハードコードされたテストURL/メッセージ → クリア
+- [MED] sessions/page.tsx: ai_reports に account_id フィルタ欠落 → 修正
+
+**残タスク（Production Hardening — 要判断）:**
+- [Pre-deploy] Backend CORS: ワイルドカード許可 → 本番ドメイン限定に変更必要
+- [Pre-deploy] Backend: 暗号化されていないCookie、ヘッダーインジェクション対策
+- [Pre-deploy] Chrome拡張: ハードコードされたngrok URL → 環境変数化
+- [Pre-deploy] Chrome拡張: localhost persona URL → 本番URL切替
+- [Medium] Chrome拡張: background.js の Map/Set が無限増殖（メモリリーク）
+- [Medium] Backend: 広範な except Exception: pass → 適切なエラーハンドリング
+- [Medium] DM: ステータス遷移のバリデーションなし
+- [Medium] Input: cast_name URLエンコーディング、ペイロードサイズ制限
+- [Low] casts/page.tsx:651: DM送信エラーが警告ではなくブロッキング
+- [Low] casts/page.tsx:860-868: RPC JSONB解析のエラーハンドリングなし
+- [Low] analytics/page.tsx:189: daysWindow state 未使用
+- [Low] use-realtime-spy.ts:179: delete に account_id なし（RLSで保護済み）
+
+- [2026-02-20] ✅ GC（グループチャット）検出＋課金トラッキング — content_spy.js + background.js + migration 040
+- [2026-02-20] ✅ DMシナリオエンジン Phase 1 — dm_scenarios + dm_scenario_enrollments テーブル、エンロール/ステップ進行/ゴール検出
+- [2026-02-20] ✅ DM Phase 2: Persona Agent統合 — generateDmMessage() + AI文面生成 + フォールバック + 承認UI + migration 042
+- [2026-02-20] ✅ キャスト間データ分離修正 — paid_usersキャッシュ cast_name欠落 + screenshots account_id欠落
+- [2026-02-20] ✅ UIアコーディオン — セグメントS1-S10折りたたみ + エンロールメントリスト折りたたみ
+- [2026-02-20] 🔍 品質巡回実施 — SPY vs コインAPI乖離は設計上の仕様（SPYはchat tip/giftのみ）
+
+## Known Issues
+
+- SPYログベースの売上表示はchat内tip/giftのみ（private/cam2cam/GC/ticket未計上）→ セッション詳細にコインAPI集計を並列表示する改善が必要
+- テストDMデータ（campaign LIKE 'bulk_%', 'pipe3_bulk_%', '20250217_test_%'）が本番DBに残留 → 手動DELETE待ち
+- dm_scenarios の CHECK制約にCR文字混入の可能性（Supabase SQL Editor経由のコピペ問題）
+
+### Production Hardening（品質巡回で発見）
+- [ ] CORS本番ドメイン限定（main.py）
+- [ ] Chrome拡張の環境変数化（config.js: ngrok/localhost → 環境切替）
+- [ ] Chrome拡張メモリリーク対策（background.js: Map/Setの上限設定）
+- [ ] Backend例外処理の改善（spy/sync/analytics の except pass）
+- [ ] DM送信ステータスバリデーション
+- [ ] Input validation強化（cast_name, payload size）
+
+---
+
 ## 次のタスク
 
-1. **お礼DM自動送信**
-   - ギフト検出→DM自動キュー登録（spy_messages + dm_send_log トリガー）
-2. **離脱ユーザー→DM自動トリガー**
-   - リテンションコホートから一定期間未来訪ユーザーを抽出→DM自動送信
-3. **二重送信防止**
-   - dm_send_log で user_name + campaign の重複チェック
-4. **本番デプロイ**
-   - Vercel（フロントエンド）+ Cloud Run（バックエンド）+ Supabase本番
+1. **テストDMデータ削除** — dm_send_log の test/bulk キャンペーン削除（SQL確認待ち）
+2. **セッション詳細にコインAPI売上を並列表示** — SPYベース + コインAPIベースの二重表示
+3. **二重送信防止** — dm_send_log で user_name + campaign の重複チェック
+4. **本番デプロイ** — Vercel（フロントエンド）+ Cloud Run（バックエンド）+ Supabase本番
