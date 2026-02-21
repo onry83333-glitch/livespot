@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { Sidebar } from '@/components/sidebar';
+import { CoinSyncAlert } from '@/components/coin-sync-alert';
 
 const PUBLIC_PATHS = ['/login', '/signup'];
 
@@ -37,8 +38,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <Sidebar />
-      <main className="flex-1 ml-[220px] p-6 overflow-auto">
-        {children}
+      <main className="flex-1 ml-[220px] overflow-auto">
+        <CoinSyncAlert />
+        <div className="p-6">
+          {children}
+        </div>
       </main>
     </>
   );
