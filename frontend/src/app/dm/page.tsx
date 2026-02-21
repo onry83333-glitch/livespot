@@ -65,6 +65,16 @@ interface AccountWithCasts {
   cast_usernames?: string[];
 }
 
+interface AutoDMItem {
+  id: number;
+  user_name: string;
+  cast_name: string | null;
+  message: string | null;
+  campaign: string;
+  template_name: string;
+  queued_at: string;
+}
+
 /* ============================================================
    Page
    ============================================================ */
@@ -73,7 +83,7 @@ export default function DmPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [tab, setTab] = useState<'bulk' | 'thank'>('bulk');
+  const [tab, setTab] = useState<'bulk' | 'thank' | 'auto'>('bulk');
 
   // === 共通 ===
   const [accounts, setAccounts] = useState<AccountWithCasts[]>([]);
@@ -117,6 +127,12 @@ export default function DmPage() {
   const [thankCandidateLoading, setThankCandidateLoading] = useState(false);
   const [thankApiAvailable, setThankApiAvailable] = useState<boolean | null>(null); // null = unknown, true/false after first call
   const [thankConfirmOpen, setThankConfirmOpen] = useState(false);
+
+  // === 自動DM state ===
+  const [autoDMs, setAutoDMs] = useState<AutoDMItem[]>([]);
+  const [autoLoading, setAutoLoading] = useState(false);
+  const [autoApproving, setAutoApproving] = useState(false);
+  const [autoChecked, setAutoChecked] = useState<Set<number>>(new Set());
 
   // === URL preset handled flag ===
   const presetHandledRef = useRef(false);
@@ -168,6 +184,62 @@ export default function DmPage() {
       loadThankCandidates();
     }
   }, [tab, selectedAccount, accounts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // === 自動DMロジック ===
+  const loadAutoDMs = useCallback(async () => {
+    if (!selectedAccount) return;
+    setAutoLoading(true);
+    try {
+      const { data } = await sb.from('dm_send_log')
+        .select('id, user_name, cast_name, message, campaign, template_name, queued_at')
+        .eq('account_id', selectedAccount)
+        .eq('status', 'pending')
+        .or('template_name.eq.auto_thankyou,template_name.eq.auto_churn')
+        .order('queued_at', { ascending: false })
+        .limit(200);
+      setAutoDMs((data || []) as AutoDMItem[]);
+      setAutoChecked(new Set());
+    } catch { /* ignore */ }
+    setAutoLoading(false);
+  }, [selectedAccount, sb]);
+
+  useEffect(() => {
+    if (tab === 'auto' && selectedAccount) {
+      loadAutoDMs();
+    }
+  }, [tab, selectedAccount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleApproveAutoDMs = async (ids: number[]) => {
+    if (ids.length === 0) return;
+    setAutoApproving(true);
+    try {
+      await sb.from('dm_send_log')
+        .update({ status: 'queued' })
+        .in('id', ids);
+      setAutoDMs(prev => prev.filter(d => !ids.includes(d.id)));
+      setAutoChecked(prev => {
+        const next = new Set(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      });
+    } catch { /* ignore */ }
+    setAutoApproving(false);
+  };
+
+  const handleDismissAutoDMs = async (ids: number[]) => {
+    if (ids.length === 0) return;
+    try {
+      await sb.from('dm_send_log')
+        .delete()
+        .in('id', ids);
+      setAutoDMs(prev => prev.filter(d => !ids.includes(d.id)));
+      setAutoChecked(prev => {
+        const next = new Set(prev);
+        ids.forEach(id => next.delete(id));
+        return next;
+      });
+    } catch { /* ignore */ }
+  };
 
   // === 一斉送信ロジック ===
   const pollStatus = useCallback(async (bid: string) => {
@@ -454,6 +526,7 @@ export default function DmPage() {
         {([
           { key: 'bulk' as const, label: '\u4E00\u6589\u9001\u4FE1' },
           { key: 'thank' as const, label: '\u304A\u793C\uFF24\uFF2D' },
+          { key: 'auto' as const, label: `\u81EA\u52D5DM${autoDMs.length > 0 ? ` (${autoDMs.length})` : ''}` },
         ]).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-all ${
@@ -975,6 +1048,166 @@ export default function DmPage() {
                   </p>
                 </div>
               )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ============ 自動DMタブ ============ */}
+      {tab === 'auto' && (
+        <div className="space-y-4 anim-fade-up">
+          {/* Header */}
+          <div className="glass-card p-5">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <h3 className="text-sm font-bold">自動生成DM</h3>
+                <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                  配信終了時のお礼DM・離脱ユーザーへのリカバリーDMが自動で候補に追加されます。
+                  承認するとChrome拡張で送信されます。
+                </p>
+              </div>
+              <button onClick={loadAutoDMs} disabled={autoLoading}
+                className="btn-ghost text-[10px] px-3 py-1.5">
+                {autoLoading ? '読込中...' : '再読み込み'}
+              </button>
+            </div>
+          </div>
+
+          {/* Loading */}
+          {autoLoading && (
+            <div className="glass-card p-5 space-y-3">
+              {[1, 2, 3].map(i => (
+                <div key={i} className="flex items-center gap-4">
+                  <div className="w-4 h-4 rounded animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  <div className="h-4 w-32 rounded animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  <div className="h-4 w-20 rounded animate-pulse ml-auto" style={{ background: 'var(--bg-card)' }} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!autoLoading && autoDMs.length === 0 && (
+            <div className="glass-card p-10 text-center">
+              <p className="text-4xl mb-4 opacity-30">&#10003;</p>
+              <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
+                承認待ちの自動DMはありません
+              </p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                配信終了時やコイン同期後に、お礼DM・離脱DMの候補が自動追加されます。
+              </p>
+            </div>
+          )}
+
+          {/* Auto DM list */}
+          {!autoLoading && autoDMs.length > 0 && (
+            <>
+              {/* Bulk actions */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setAutoChecked(new Set(autoDMs.map(d => d.id)))}
+                  className="btn-ghost text-[10px] px-3 py-1">全選択</button>
+                <button
+                  onClick={() => setAutoChecked(new Set())}
+                  className="btn-ghost text-[10px] px-3 py-1">全解除</button>
+                {autoChecked.size > 0 && (
+                  <>
+                    <button
+                      onClick={() => handleApproveAutoDMs(Array.from(autoChecked))}
+                      disabled={autoApproving}
+                      className="px-4 py-1.5 rounded-lg text-[10px] font-medium text-white disabled:opacity-50"
+                      style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)' }}>
+                      {autoApproving ? '処理中...' : `承認して送信 (${autoChecked.size}件)`}
+                    </button>
+                    <button
+                      onClick={() => handleDismissAutoDMs(Array.from(autoChecked))}
+                      className="px-4 py-1.5 rounded-lg text-[10px] font-medium text-rose-400 border border-rose-500/20 hover:bg-rose-500/10">
+                      破棄 ({autoChecked.size}件)
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Group by campaign */}
+              {(() => {
+                const groups = new Map<string, AutoDMItem[]>();
+                autoDMs.forEach(d => {
+                  const key = d.campaign;
+                  if (!groups.has(key)) groups.set(key, []);
+                  groups.get(key)!.push(d);
+                });
+                return Array.from(groups.entries()).map(([campaign, items]) => {
+                  const isThankYou = campaign.startsWith('auto_thankyou');
+                  const label = isThankYou ? 'お礼DM' : '離脱リカバリーDM';
+                  const labelColor = isThankYou ? 'text-emerald-400' : 'text-amber-400';
+                  const bgColor = isThankYou ? 'rgba(34,197,94,0.04)' : 'rgba(245,158,11,0.04)';
+                  const borderColor = isThankYou ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)';
+                  const castName = items[0]?.cast_name || '';
+                  const queuedAt = items[0]?.queued_at ? new Date(items[0].queued_at).toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+
+                  return (
+                    <div key={campaign} className="glass-card p-5" style={{ background: bgColor, borderColor }}>
+                      <div className="flex items-center gap-3 mb-4">
+                        <span className={`text-xs font-bold ${labelColor}`}>{label}</span>
+                        {castName && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-500/10 text-slate-400">
+                            {castName}
+                          </span>
+                        )}
+                        <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>
+                          {queuedAt} ・ {items.length}件
+                        </span>
+                      </div>
+                      <div className="space-y-2">
+                        {items.map(d => {
+                          const checked = autoChecked.has(d.id);
+                          return (
+                            <div key={d.id}
+                              className="flex items-start gap-3 px-3 py-2.5 rounded-lg transition-all cursor-pointer hover:bg-white/[0.02]"
+                              style={{ background: checked ? 'rgba(14,165,233,0.04)' : 'transparent' }}
+                              onClick={() => {
+                                setAutoChecked(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(d.id)) next.delete(d.id); else next.add(d.id);
+                                  return next;
+                                });
+                              }}>
+                              {/* Checkbox */}
+                              <div className={`w-4 h-4 rounded border-2 flex items-center justify-center mt-0.5 transition-all ${
+                                checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'
+                              }`}>
+                                {checked && (
+                                  <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                                    <path d="M2 5L4 7L8 3" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                  </svg>
+                                )}
+                              </div>
+                              {/* User + message */}
+                              <div className="flex-1 min-w-0">
+                                <span className="text-sm font-medium">{d.user_name}</span>
+                                <p className="text-xs mt-1 whitespace-pre-wrap line-clamp-2" style={{ color: 'var(--text-secondary)' }}>
+                                  {d.message}
+                                </p>
+                              </div>
+                              {/* Individual actions */}
+                              <div className="flex gap-1 shrink-0">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleApproveAutoDMs([d.id]); }}
+                                  className="px-2 py-1 rounded text-[10px] text-emerald-400 hover:bg-emerald-500/10 transition-colors"
+                                  title="承認">&#10003;</button>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleDismissAutoDMs([d.id]); }}
+                                  className="px-2 py-1 rounded text-[10px] text-rose-400 hover:bg-rose-500/10 transition-colors"
+                                  title="破棄">&#10005;</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                });
+              })()}
             </>
           )}
         </div>

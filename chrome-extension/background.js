@@ -970,11 +970,230 @@ async function closeCastSession(castName) {
     }
   }
 
+  // お礼DM自動トリガー（セッション終了時 — fire-and-forget）
+  triggerThankYouDMs(castName, sessionId).catch(e => {
+    console.warn('[LS-BG] お礼DMトリガー失敗:', e.message);
+  });
+
   castSessions.delete(castName);
   castLastActivity.delete(castName);
   castBroadcastTitles.delete(castName);
   castSessionStarted.delete(castName);
   saveSessionState(); // SW再起動対策: 状態永続化
+}
+
+/**
+ * お礼DM自動トリガー: セッション終了時にtip/giftユーザーにDMを自動キュー登録
+ * get_thankyou_dm_candidates RPCで候補取得 → dm_send_logにINSERT (status='pending')
+ * 二重送信防止: 24時間以内に同一ユーザーへ auto_thankyou DM済みならスキップ
+ */
+async function triggerThankYouDMs(castName, sessionId) {
+  try {
+    await loadAuth();
+    if (!accountId || !accessToken) return;
+
+    // 自社キャストのみ（spy_castsは除外）
+    if (ownCastNamesCache.size > 0 && !ownCastNamesCache.has(castName)) {
+      console.log('[LS-BG] お礼DM: 自社キャストではないためスキップ:', castName);
+      return;
+    }
+
+    // get_thankyou_dm_candidates RPC呼び出し
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/get_thankyou_dm_candidates`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_session_id: sessionId,
+        p_min_tokens: 100,
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn('[LS-BG] お礼DM: RPC失敗 HTTP', res.status);
+      return;
+    }
+
+    const candidates = await res.json();
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      console.log('[LS-BG] お礼DM: 候補なし (cast:', castName, ')');
+      return;
+    }
+
+    console.log('[LS-BG] お礼DM: 候補', candidates.length, '名 (cast:', castName, ')');
+
+    // 二重送信防止: 24時間以内にauto_thankyou DMを送信済みのユーザーを除外
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const dupRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?account_id=eq.${accountId}&template_name=eq.auto_thankyou&queued_at=gte.${encodeURIComponent(since24h)}&select=user_name`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    const alreadySent = new Set();
+    if (dupRes.ok) {
+      const dupData = await dupRes.json();
+      (dupData || []).forEach(d => alreadySent.add(d.user_name));
+    }
+
+    // フィルタ: 二重送信防止 + dm_sent_this_session除外（RPCが既に除外しているが念のため）
+    const filtered = candidates.filter(c =>
+      !alreadySent.has(c.username) && !c.dm_sent_this_session
+    );
+
+    if (filtered.length === 0) {
+      console.log('[LS-BG] お礼DM: 全員24h以内にDM済み — スキップ');
+      return;
+    }
+
+    // dm_send_log にINSERT (status='pending' — フロントで承認後に'queued'に変更)
+    const campaign = `auto_thankyou_${Date.now()}`;
+    const rows = filtered.map(c => ({
+      account_id: accountId,
+      user_name: c.username,
+      cast_name: castName,
+      profile_url: `https://stripchat.com/user/${c.username}`,
+      message: c.suggested_template || `${c.username}さん、今日はありがとう😊 また遊びに来てくださいね。`,
+      status: 'pending',
+      campaign: campaign,
+      template_name: 'auto_thankyou',
+      queued_at: new Date().toISOString(),
+    }));
+
+    const insertRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(rows),
+    });
+
+    if (insertRes.ok || insertRes.status === 201) {
+      console.log('[LS-BG] お礼DM:', filtered.length, '件をキューに登録 (campaign:', campaign, ')');
+    } else {
+      console.warn('[LS-BG] お礼DM: INSERT失敗 HTTP', insertRes.status);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] お礼DM: エラー:', e.message);
+  }
+}
+
+/**
+ * 離脱DM自動トリガー: refresh_segments後に離脱リスクユーザーにDMを自動キュー登録
+ * detect_churn_risk RPCで候補取得 → dm_send_logにINSERT (status='pending')
+ * 二重送信防止: 7日以内に同一ユーザーへ auto_churn DM済みならスキップ
+ */
+async function triggerChurnRecoveryDMs() {
+  try {
+    await loadAuth();
+    if (!accountId || !accessToken) return;
+
+    // 自社キャストのみ対象
+    if (ownCastNamesCache.size === 0) {
+      console.log('[LS-BG] 離脱DM: 自社キャスト未キャッシュ — スキップ');
+      return;
+    }
+
+    // 7日以内のauto_churn DM送信済みユーザーを一括取得（全キャスト共通）
+    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const globalDupRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?account_id=eq.${accountId}&template_name=eq.auto_churn&queued_at=gte.${encodeURIComponent(since7d)}&select=user_name`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    const globalAlreadySent = new Set();
+    if (globalDupRes.ok) {
+      const dupData = await globalDupRes.json();
+      (dupData || []).forEach(d => globalAlreadySent.add(d.user_name));
+    }
+
+    let totalQueued = 0;
+    const campaign = `auto_churn_${Date.now()}`;
+    const churnTemplate = '{username}さん、最近見かけないので気になっちゃって😊\n元気にしてますか？\nまた気が向いたらふらっと来てくれたら嬉しいです。\nでも無理しないでね、あなたの自由だから😊';
+
+    for (const castName of ownCastNamesCache) {
+      const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/detect_churn_risk`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          p_account_id: accountId,
+          p_cast_name: castName,
+          p_lookback_sessions: 7,
+          p_absence_threshold: 2,
+        }),
+      });
+
+      if (!res.ok) {
+        console.warn('[LS-BG] 離脱DM: detect_churn_risk失敗 (', castName, ') HTTP', res.status);
+        continue;
+      }
+
+      const candidates = await res.json();
+      if (!Array.isArray(candidates) || candidates.length === 0) continue;
+
+      // 二重送信防止
+      const filtered = candidates.filter(c => !globalAlreadySent.has(c.username));
+      if (filtered.length === 0) continue;
+
+      const rows = filtered.map(c => ({
+        account_id: accountId,
+        user_name: c.username,
+        cast_name: castName,
+        profile_url: `https://stripchat.com/user/${c.username}`,
+        message: churnTemplate.replace('{username}', c.username),
+        status: 'pending',
+        campaign: campaign,
+        template_name: 'auto_churn',
+        queued_at: new Date().toISOString(),
+      }));
+
+      const insertRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify(rows),
+      });
+
+      if (insertRes.ok || insertRes.status === 201) {
+        totalQueued += filtered.length;
+        // 送信済みセットに追加（次のキャストで重複しないように）
+        filtered.forEach(c => globalAlreadySent.add(c.username));
+      } else {
+        console.warn('[LS-BG] 離脱DM: INSERT失敗 (', castName, ') HTTP', insertRes.status);
+      }
+    }
+
+    if (totalQueued > 0) {
+      console.log('[LS-BG] 離脱DM:', totalQueued, '件をキューに登録 (campaign:', campaign, ')');
+    } else {
+      console.log('[LS-BG] 離脱DM: 候補なし');
+    }
+  } catch (e) {
+    console.warn('[LS-BG] 離脱DM: エラー:', e.message);
+  }
 }
 
 /**
@@ -2267,6 +2486,11 @@ async function processCoinSyncData(transactions, castName = 'unknown') {
   } catch (err) {
     console.warn('[LS-BG] refresh_segments RPC失敗（非致命的）:', err.message);
   }
+
+  // 離脱DM自動トリガー（refresh_segments後 — fire-and-forget）
+  triggerChurnRecoveryDMs().catch(e => {
+    console.warn('[LS-BG] 離脱DMトリガー失敗（非致命的）:', e.message);
+  });
 
   // 同期ステータス保存
   await chrome.storage.local.set({
