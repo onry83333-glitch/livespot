@@ -1,6 +1,7 @@
-"""DM router - Queue management, templates, effectiveness"""
+"""DM router - Queue management, templates, effectiveness, thank-you candidates, churn risk"""
 import re
 from datetime import datetime, timedelta
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from config import get_supabase_admin
 from routers.auth import get_current_user
@@ -265,3 +266,57 @@ async def delete_template(template_id: str, user=Depends(get_current_user)):
     sb = get_supabase_admin()
     sb.table("dm_templates").delete().eq("id", template_id).execute()
     return {"deleted": True}
+
+
+# ============================================================
+# Thank-you DM Candidates
+# ============================================================
+@router.get("/thankyou-candidates")
+async def get_thankyou_candidates(
+    account_id: str,
+    cast_name: str = Query(..., description="対象キャスト名"),
+    session_id: Optional[str] = Query(default=None, description="セッションID（省略時は最新セッション）"),
+    min_tokens: int = Query(default=100, ge=0, description="最小トークン数"),
+    user=Depends(get_current_user),
+):
+    """配信終了後のお礼DM候補を取得"""
+    sb = get_supabase_admin()
+    _verify_account_ownership(sb, account_id, user["user_id"])
+
+    try:
+        result = sb.rpc("get_thankyou_dm_candidates", {
+            "p_account_id": account_id,
+            "p_cast_name": cast_name,
+            "p_session_id": session_id,
+            "p_min_tokens": min_tokens,
+        }).execute()
+        return {"data": result.data, "count": len(result.data)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"お礼DM候補の取得に失敗: {e}")
+
+
+# ============================================================
+# Churn Risk Detection
+# ============================================================
+@router.get("/churn-risk")
+async def get_churn_risk(
+    account_id: str,
+    cast_name: str = Query(..., description="対象キャスト名"),
+    lookback_sessions: int = Query(default=7, ge=1, le=30, description="遡るセッション数"),
+    absence_threshold: int = Query(default=2, ge=1, le=10, description="連続欠席の閾値"),
+    user=Depends(get_current_user),
+):
+    """離脱予兆ユーザーを検出"""
+    sb = get_supabase_admin()
+    _verify_account_ownership(sb, account_id, user["user_id"])
+
+    try:
+        result = sb.rpc("detect_churn_risk", {
+            "p_account_id": account_id,
+            "p_cast_name": cast_name,
+            "p_lookback_sessions": lookback_sessions,
+            "p_absence_threshold": absence_threshold,
+        }).execute()
+        return {"data": result.data, "count": len(result.data)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"離脱予兆の検出に失敗: {e}")

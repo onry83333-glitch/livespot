@@ -130,6 +130,8 @@ async def sync_coins(body: CoinSyncRequest, user=Depends(get_current_user)):
 
         if not user_name:
             continue
+        if tokens <= 0:
+            continue
 
         tx_rows.append(
             {
@@ -407,6 +409,7 @@ async def upload_coin_transactions(
             "source_detail": tx.get("source_detail", ""),
         }
         for tx in tx_list
+        if int(tx.get("tokens", 0)) > 0
     ]
 
     if rows:

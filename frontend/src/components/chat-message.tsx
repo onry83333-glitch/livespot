@@ -1,7 +1,18 @@
 'use client';
 
 import type { SpyMessage } from '@/types';
-import { getUserLeagueColor, tokensToJPY } from '@/lib/utils';
+import { getUserHashColor, tokensToJPY } from '@/lib/utils';
+
+/** Stripchat league color mapping (7 tiers, extracted from DOM color-league-{name} class) */
+const LEAGUE_COLORS: Record<string, string> = {
+  grey: '#888888',
+  bronze: '#de884a',
+  silver: '#c0c0c0',
+  gold: '#ffcc00',
+  diamond: '#b9f2ff',
+  royal: '#ff1a1a',
+  legend: '#9933ff',
+};
 
 /** メッセージタイプ別の色設定 (B.2 enhanced) */
 const typeStyles: Record<string, { color: string; bg: string; border: string; label: string }> = {
@@ -43,13 +54,18 @@ export function ChatMessage({ message: msg }: { message: SpyMessage }) {
       {/* タイプアイコン */}
       <span className="mr-1.5">{style.label}</span>
 
-      {/* ユーザー名 (league color) */}
-      {msg.user_name && (
-        <span className={`font-semibold mr-2 ${isTip ? 'text-sm' : 'text-xs'}`}
-          style={{ color: msg.user_color || getUserLeagueColor((msg as unknown as Record<string, unknown>).user_level as number | null) }}>
-          {msg.user_name}
-        </span>
-      )}
+      {/* ユーザー名 (3段階フォールバック: DOM色 → league色 → ハッシュ色) */}
+      {msg.user_name && (() => {
+        const nameColor = msg.user_color
+          || (msg.user_league ? LEAGUE_COLORS[msg.user_league] : null)
+          || getUserHashColor(msg.user_name);
+        return (
+          <span className={`font-semibold mr-2 ${isTip ? 'text-sm' : 'text-xs'}`}
+            style={{ color: nameColor }}>
+            {msg.user_name}
+          </span>
+        );
+      })()}
 
       {/* トークン (B.2: 大きめ + 円換算) */}
       {msg.tokens > 0 && (

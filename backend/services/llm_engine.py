@@ -69,6 +69,78 @@ async def generate_live_assist(
     }
 
 
+async def generate_competitive_analysis(
+    data: dict,
+    analysis_type: str = "overview",
+) -> dict:
+    """キャスト競合分析レポート生成"""
+    client = _get_client()
+
+    # トップチッパー情報
+    tippers_text = "\n".join(
+        f"  {i+1}. {t['name']}: {t['tokens']:,}tk"
+        for i, t in enumerate(data.get("top_tippers", []))
+    ) or "  データなし"
+
+    # ピーク時間帯
+    day_names = ["日", "月", "火", "水", "木", "金", "土"]
+    peak_text = "\n".join(
+        f"  {day_names[p['day']]}曜 {p['hour']}時台: {p['tokens']:.0f}tk/時"
+        for p in data.get("peak_times", [])
+    ) or "  データなし"
+
+    prompt = f"""以下の配信データから、このキャストの特徴と成功要因を分析してください。
+
+キャスト: {data['cast_name']}
+配信時間: {data['total_hours']:.1f}時間（{data['total_sessions']}セッション）
+総チップ: {data['total_tips']:,}tk
+ユニークチッパー: {data['unique_tippers']}名
+平均ピーク視聴者: {data['avg_peak_viewers']:.0f}名
+
+トップチッパー:
+{tippers_text}
+
+チップ集中時間帯:
+{peak_text}
+
+以下の5項目で分析してください。各項目2-3行で簡潔に:
+
+## 1. 収益パターン
+パブ重視 / チケチャ回転 / ハイブリッドのどれか推定
+
+## 2. 顧客構成の特徴
+太客依存度、新規率、常連比率
+
+## 3. 配信スタイルの推定
+トークン取得パターンから推測される配信スタイル
+
+## 4. 強み・弱み
+数値から読み取れる特徴的な点
+
+## 5. 改善提案
+売上向上のための具体的アドバイス（2-3項目）
+"""
+
+    response = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    text = response.content[0].text
+    tokens_used = response.usage.input_tokens + response.usage.output_tokens
+    cost = (response.usage.input_tokens * 3 + response.usage.output_tokens * 15) / 1_000_000
+
+    return {
+        "text": text,
+        "model": "claude-sonnet",
+        "tokens_used": tokens_used,
+        "cost_usd": round(cost, 6),
+        "cast_name": data["cast_name"],
+        "analysis_type": analysis_type,
+    }
+
+
 async def generate_daily_report(
     cast_name: str,
     recent_messages: list[dict],

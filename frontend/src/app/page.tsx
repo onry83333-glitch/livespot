@@ -5,11 +5,13 @@ import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { tokensToJPY } from '@/lib/utils';
+import { api } from '@/lib/api';
 
 interface Account {
   id: string;
   account_name: string;
   is_active: boolean;
+  cast_usernames?: string[];
 }
 
 interface WhaleUser {
@@ -32,6 +34,20 @@ interface Stats {
   recentDM: { user_name: string; status: string; campaign: string; queued_at: string }[];
 }
 
+interface ChurnRiskUser {
+  user_name: string;
+  segment: string;
+  consecutive_absences: number;
+  total_tokens: number;
+}
+
+function getSegmentBadgeClasses(segment: string): string {
+  if (segment === 'S1') return 'bg-amber-500/15 text-amber-400 border border-amber-500/20';
+  if (segment === 'S2' || segment === 'S3') return 'bg-purple-500/15 text-purple-400 border border-purple-500/20';
+  if (segment === 'S4' || segment === 'S5') return 'bg-sky-500/15 text-sky-400 border border-sky-500/20';
+  return 'bg-slate-500/15 text-slate-400 border border-slate-500/20';
+}
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const supabaseRef = useRef(createClient());
@@ -49,12 +65,16 @@ export default function DashboardPage() {
   const [newAccountName, setNewAccountName] = useState('');
   const [addingAccount, setAddingAccount] = useState(false);
 
+  // Churn risk alert
+  const [churnRiskUsers, setChurnRiskUsers] = useState<ChurnRiskUser[]>([]);
+  const churnFetchedRef = useRef<string | null>(null); // Tracks which account we've fetched churn for
+
   const sb = supabaseRef.current;
 
   // アカウント一覧取得
   const loadAccounts = useCallback(async () => {
-    const { data } = await sb.from('accounts').select('id, account_name, is_active').order('created_at');
-    const list = data || [];
+    const { data } = await sb.from('accounts').select('id, account_name, is_active, cast_usernames').order('created_at');
+    const list = (data || []) as Account[];
     setAccounts(list);
     if (list.length > 0 && !selectedAccount) {
       setSelectedAccount(list[0].id);
@@ -77,10 +97,11 @@ export default function DashboardPage() {
         .eq('account_id', accountId)
         .order('total_coins', { ascending: false })
         .limit(15),
-      // 30日売上: coin_transactions
+      // 30日売上: coin_transactions (tip/giftのみ)
       sb.from('coin_transactions')
         .select('tokens')
         .eq('account_id', accountId)
+        .in('type', ['tip', 'gift'])
         .gte('date', since30d),
       // 1時間メッセージ数: spy_messages
       sb.from('spy_messages')
@@ -116,6 +137,44 @@ export default function DashboardPage() {
     });
   }, [sb]);
 
+  // Churn risk data loading
+  const loadChurnRisk = useCallback(async (accountId: string, accts: Account[]) => {
+    // Prevent re-fetching for the same account
+    if (churnFetchedRef.current === accountId) return;
+    churnFetchedRef.current = accountId;
+
+    const acct = accts.find(a => a.id === accountId);
+    const castNames = acct?.cast_usernames || [];
+    if (castNames.length === 0) return;
+
+    try {
+      // Aggregate across all casts
+      const allUsers: ChurnRiskUser[] = [];
+      const seenUsers = new Set<string>();
+
+      for (const castName of castNames) {
+        try {
+          const data = await api<ChurnRiskUser[]>(
+            `/api/dm/churn-risk?account_id=${accountId}&cast_name=${encodeURIComponent(castName)}`
+          );
+          for (const u of data) {
+            if (!seenUsers.has(u.user_name)) {
+              seenUsers.add(u.user_name);
+              allUsers.push(u);
+            }
+          }
+        } catch {
+          // If any single cast fails, continue with others
+        }
+      }
+
+      setChurnRiskUsers(allUsers);
+    } catch {
+      // Silently hide if API error/404
+      setChurnRiskUsers([]);
+    }
+  }, []);
+
   // 初回ロード
   useEffect(() => {
     if (!user) return;
@@ -124,6 +183,7 @@ export default function DashboardPage() {
       const list = await loadAccounts();
       if (list.length > 0) {
         await loadStats(list[0].id);
+        loadChurnRisk(list[0].id, list);
       }
       setLoading(false);
     })();
@@ -133,8 +193,10 @@ export default function DashboardPage() {
   useEffect(() => {
     if (selectedAccount) {
       loadStats(selectedAccount);
+      churnFetchedRef.current = null; // Reset to allow re-fetch for new account
+      loadChurnRisk(selectedAccount, accounts);
     }
-  }, [selectedAccount, loadStats]);
+  }, [selectedAccount, loadStats]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // アカウント追加
   const handleAddAccount = async () => {
@@ -226,27 +288,35 @@ export default function DashboardPage() {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="glass-card p-8 max-w-md w-full text-center anim-fade-up">
-          <div className="text-4xl mb-4">🌐</div>
-          <h2 className="text-xl font-bold mb-2">アカウントを追加</h2>
+          <div className="text-4xl mb-4">{'\uD83C\uDF10'}</div>
+          <h2 className="text-xl font-bold mb-2">{'\u30A2\u30AB\u30A6\u30F3\u30C8\u3092\u8FFD\u52A0'}</h2>
           <p className="text-sm mb-6" style={{ color: 'var(--text-secondary)' }}>
-            Stripchatアカウントを登録して、ダッシュボードを有効化しましょう。
+            {`Stripchat\u30A2\u30AB\u30A6\u30F3\u30C8\u3092\u767B\u9332\u3057\u3066\u3001\u30C0\u30C3\u30B7\u30E5\u30DC\u30FC\u30C9\u3092\u6709\u52B9\u5316\u3057\u307E\u3057\u3087\u3046\u3002`}
           </p>
           <div className="flex gap-2">
             <input
               className="input-glass flex-1"
-              placeholder="アカウント名（例: サクラ事務所）"
+              placeholder={'\u30A2\u30AB\u30A6\u30F3\u30C8\u540D\uFF08\u4F8B: \u30B5\u30AF\u30E9\u4E8B\u52D9\u6240\uFF09'}
               value={newAccountName}
               onChange={e => setNewAccountName(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleAddAccount()}
             />
             <button onClick={handleAddAccount} disabled={addingAccount} className="btn-primary text-sm disabled:opacity-50">
-              {addingAccount ? '作成中...' : '追加'}
+              {addingAccount ? '\u4F5C\u6210\u4E2D...' : '\u8FFD\u52A0'}
             </button>
           </div>
         </div>
       </div>
     );
   }
+
+  // Build churn DM URL
+  const churnDmUrl = churnRiskUsers.length > 0
+    ? `/dm?preset=churn&users=${churnRiskUsers.map(u => u.user_name).join(',')}`
+    : '/dm';
+
+  const displayedChurnUsers = churnRiskUsers.slice(0, 5);
+  const remainingChurnCount = churnRiskUsers.length - 5;
 
   return (
     <div className="space-y-6 max-w-[1400px]">
@@ -263,18 +333,18 @@ export default function DashboardPage() {
               <option key={a.id} value={a.id}>{a.account_name}</option>
             ))}
           </select>
-          <button onClick={() => setShowAddForm(!showAddForm)} className="btn-ghost text-xs py-2">+ 追加</button>
+          <button onClick={() => setShowAddForm(!showAddForm)} className="btn-ghost text-xs py-2">+ {'\u8FFD\u52A0'}</button>
         </div>
         <div className="flex items-center gap-3">
           {stats && stats.spyMessages1h > 0 && (
             <div className="anim-pulse-glow px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-2"
               style={{ background: 'rgba(244,63,94,0.15)', color: 'var(--accent-pink)', border: '1px solid rgba(244,63,94,0.2)' }}>
-              ⚡ 直近1時間: {stats.spyMessages1h}件のチャット
+              {'\u26A1'} {'\u76F4\u8FD11\u6642\u9593'}: {stats.spyMessages1h}{'\u4EF6\u306E\u30C1\u30E3\u30C3\u30C8'}
             </div>
           )}
           <div className="badge-live flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 anim-live"></span>
-            サーバー状態: 最適化済み
+            {'\u30B5\u30FC\u30D0\u30FC\u72B6\u614B: \u6700\u9069\u5316\u6E08\u307F'}
           </div>
         </div>
       </div>
@@ -284,15 +354,15 @@ export default function DashboardPage() {
         <div className="glass-card p-4 flex gap-3 items-center anim-fade">
           <input
             className="input-glass flex-1 text-sm"
-            placeholder="新しいアカウント名"
+            placeholder={'\u65B0\u3057\u3044\u30A2\u30AB\u30A6\u30F3\u30C8\u540D'}
             value={newAccountName}
             onChange={e => setNewAccountName(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleAddAccount()}
           />
           <button onClick={handleAddAccount} disabled={addingAccount} className="btn-primary text-xs disabled:opacity-50">
-            {addingAccount ? '作成中...' : '作成'}
+            {addingAccount ? '\u4F5C\u6210\u4E2D...' : '\u4F5C\u6210'}
           </button>
-          <button onClick={() => setShowAddForm(false)} className="btn-ghost text-xs">キャンセル</button>
+          <button onClick={() => setShowAddForm(false)} className="btn-ghost text-xs">{'\u30AD\u30E3\u30F3\u30BB\u30EB'}</button>
         </div>
       )}
 
@@ -300,10 +370,10 @@ export default function DashboardPage() {
       {dataEmpty && stats && (
         <div className="glass-card p-6 text-center anim-fade-up">
           <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
-            このアカウントにはまだデータがありません。デモデータを挿入して画面を確認できます。
+            {'\u3053\u306E\u30A2\u30AB\u30A6\u30F3\u30C8\u306B\u306F\u307E\u3060\u30C7\u30FC\u30BF\u304C\u3042\u308A\u307E\u305B\u3093\u3002\u30C7\u30E2\u30C7\u30FC\u30BF\u3092\u633F\u5165\u3057\u3066\u753B\u9762\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002'}
           </p>
           <button onClick={handleInsertDemo} disabled={demoLoading} className="btn-primary text-sm disabled:opacity-50">
-            {demoLoading ? '挿入中...' : '🧪 デモデータを挿入（paid_users + coin_transactions）'}
+            {demoLoading ? '\u633F\u5165\u4E2D...' : '\uD83E\uDDEA \u30C7\u30E2\u30C7\u30FC\u30BF\u3092\u633F\u5165\uFF08paid_users + coin_transactions\uFF09'}
           </button>
           {demoError && (
             <p className="mt-3 text-xs" style={{ color: 'var(--accent-pink)' }}>{demoError}</p>
@@ -317,50 +387,50 @@ export default function DashboardPage() {
         <div className="col-span-2 glass-card p-6">
           <div className="flex items-center justify-between mb-5">
             <div>
-              <h2 className="text-xl font-bold">アクティブ・アカウント</h2>
+              <h2 className="text-xl font-bold">{'\u30A2\u30AF\u30C6\u30A3\u30D6\u30FB\u30A2\u30AB\u30A6\u30F3\u30C8'}</h2>
               <p className="text-sm mt-0.5" style={{ color: 'var(--text-secondary)' }}>
-                {accounts.find(a => a.id === selectedAccount)?.account_name} のリアルタイムデータ
+                {accounts.find(a => a.id === selectedAccount)?.account_name} {'\u306E\u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u30C7\u30FC\u30BF'}
               </p>
             </div>
             <Link href="/spy" className="badge-live flex items-center gap-1.5 text-sm hover:opacity-80 transition-opacity">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 anim-live"></span>
-              SPYログを見る →
+              {'SPY\u30ED\u30B0\u3092\u898B\u308B \u2192'}
             </Link>
           </div>
 
           <div className="grid grid-cols-4 gap-4 mb-5">
             <div className="glass-panel p-4 rounded-xl">
               <p className="text-2xl font-bold tracking-tight">
-                {stats ? tokensToJPY(stats.totalRevenue30d) : '—'}
+                {stats ? tokensToJPY(stats.totalRevenue30d) : '\u2014'}
               </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>30日売上</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'30\u65E5\u58F2\u4E0A'}</p>
             </div>
             <div className="glass-panel p-4 rounded-xl">
               <p className="text-2xl font-bold tracking-tight">
-                {stats ? stats.txCount30d.toLocaleString() : '—'}
+                {stats ? stats.txCount30d.toLocaleString() : '\u2014'}
               </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>取引数 (30日)</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'\u53D6\u5F15\u6570 (30\u65E5)'}</p>
             </div>
             <div className="glass-panel p-4 rounded-xl">
               <p className="text-2xl font-bold tracking-tight">
-                {stats ? stats.spyMessages1h.toLocaleString() : '—'}
+                {stats ? stats.spyMessages1h.toLocaleString() : '\u2014'}
               </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>チャット (1h)</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'\u30C1\u30E3\u30C3\u30C8 (1h)'}</p>
             </div>
             <div className="glass-panel p-4 rounded-xl">
               <p className="text-2xl font-bold tracking-tight">
-                {stats ? stats.dmSent7d.toLocaleString() : '—'}
+                {stats ? stats.dmSent7d.toLocaleString() : '\u2014'}
               </p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>DM送信 (7日)</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'DM\u9001\u4FE1 (7\u65E5)'}</p>
             </div>
           </div>
 
           <div className="glass-panel px-4 py-3 rounded-xl flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-lg">🛡</span>
+              <span className="text-lg">{'\uD83D\uDEE1'}</span>
               <div>
-                <p className="text-sm font-medium">BAN保護機能</p>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>高度なプロキシと動作監視が有効です</p>
+                <p className="text-sm font-medium">{'BAN\u4FDD\u8B77\u6A5F\u80FD'}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{'\u9AD8\u5EA6\u306A\u30D7\u30ED\u30AD\u30B7\u3068\u52D5\u4F5C\u76E3\u8996\u304C\u6709\u52B9\u3067\u3059'}</p>
               </div>
             </div>
             <div className="w-11 h-6 rounded-full bg-emerald-500 relative cursor-pointer">
@@ -372,9 +442,9 @@ export default function DashboardPage() {
         {/* Whale Ranking */}
         <div className="glass-card p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-base font-bold">🐋 ホエールランキング</h3>
+            <h3 className="text-base font-bold">{'\uD83D\uDC0B \u30DB\u30A8\u30FC\u30EB\u30E9\u30F3\u30AD\u30F3\u30B0'}</h3>
             <p className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-              累計コイン
+              {'\u7D2F\u8A08\u30B3\u30A4\u30F3'}
             </p>
           </div>
           <div className="space-y-0 overflow-auto max-h-[280px]">
@@ -394,34 +464,79 @@ export default function DashboardPage() {
                 </div>
               ))
             ) : (
-              <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>データなし</p>
+              <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>{'\u30C7\u30FC\u30BF\u306A\u3057'}</p>
             )}
           </div>
         </div>
       </div>
+
+      {/* Churn Risk Alert - shown BETWEEN KPI cards and quick actions */}
+      {churnRiskUsers.length > 0 && (
+        <div className="glass-card p-5 anim-fade-up"
+          style={{
+            background: 'rgba(239,68,68,0.06)',
+            borderLeft: '3px solid rgb(239,68,68)',
+            border: '1px solid rgba(239,68,68,0.15)',
+            borderLeftWidth: '3px',
+            borderLeftColor: 'rgb(239,68,68)',
+          }}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-bold flex items-center gap-2">
+              {'\u26A0\uFE0F \u96E2\u8131\u30EA\u30B9\u30AF: '}{churnRiskUsers.length}{'\u540D'}
+            </h3>
+            <Link href={churnDmUrl}
+              className="text-xs font-medium px-3 py-1.5 rounded-lg transition-all hover:bg-rose-500/15"
+              style={{ color: 'var(--accent-pink)' }}>
+              {'DM\u9001\u4FE1 \u2192'}
+            </Link>
+          </div>
+          <div className="space-y-2">
+            {displayedChurnUsers.map(u => (
+              <div key={u.user_name} className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs"
+                style={{ background: 'rgba(15,23,42,0.3)' }}>
+                <span className="font-medium flex-1 truncate">{u.user_name}</span>
+                <span className={`px-2 py-0.5 rounded-full font-medium ${getSegmentBadgeClasses(u.segment)}`}>
+                  {u.segment}
+                </span>
+                <span style={{ color: 'var(--text-muted)' }}>
+                  {u.consecutive_absences}{'\u65E5\u9023\u7D9A\u4E0D\u5728'}
+                </span>
+                <span className="text-emerald-400 font-semibold">
+                  {tokensToJPY(u.total_tokens)}
+                </span>
+              </div>
+            ))}
+            {remainingChurnCount > 0 && (
+              <p className="text-[10px] text-center pt-1" style={{ color: 'var(--text-muted)' }}>
+                {'\u4ED6'}{remainingChurnCount}{'\u540D'}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Bottom row: Quick Links + DM History */}
       <div className="grid grid-cols-5 gap-5 anim-fade-up delay-2">
         {/* Quick Links */}
         <div className="col-span-2 glass-card p-6">
           <h3 className="text-base font-bold flex items-center gap-2 mb-4">
-            🔮 クイックアクション
+            {'\uD83D\uDD2E \u30AF\u30A4\u30C3\u30AF\u30A2\u30AF\u30B7\u30E7\u30F3'}
           </h3>
           <div className="space-y-3">
             <Link href="/spy" className="glass-panel p-4 rounded-xl border-l-2 block hover:bg-white/[0.03] transition-colors"
               style={{ borderLeftColor: 'var(--accent-primary)' }}>
-              <p className="text-xs font-semibold" style={{ color: 'var(--accent-primary)' }}>🔍 リアルタイム運営</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>SPYログでチャットをリアルタイム監視</p>
+              <p className="text-xs font-semibold" style={{ color: 'var(--accent-primary)' }}>{'\uD83D\uDD0D \u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u904B\u55B6'}</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'SPY\u30ED\u30B0\u3067\u30C1\u30E3\u30C3\u30C8\u3092\u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u76E3\u8996'}</p>
             </Link>
             <Link href="/dm" className="glass-panel p-4 rounded-xl border-l-2 block hover:bg-white/[0.03] transition-colors"
               style={{ borderLeftColor: 'var(--accent-pink)' }}>
-              <p className="text-xs font-semibold" style={{ color: 'var(--accent-pink)' }}>💬 DM一斉送信</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>ターゲットにDMを一括送信</p>
+              <p className="text-xs font-semibold" style={{ color: 'var(--accent-pink)' }}>{'\uD83D\uDCAC DM\u4E00\u6589\u9001\u4FE1'}</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'\u30BF\u30FC\u30B2\u30C3\u30C8\u306BDM\u3092\u4E00\u62EC\u9001\u4FE1'}</p>
             </Link>
             <Link href="/analytics" className="glass-panel p-4 rounded-xl border-l-2 block hover:bg-white/[0.03] transition-colors"
               style={{ borderLeftColor: 'var(--accent-green)' }}>
-              <p className="text-xs font-semibold" style={{ color: 'var(--accent-green)' }}>📊 分析&スコアリング</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>売上トレンド・ARPU・LTVを分析</p>
+              <p className="text-xs font-semibold" style={{ color: 'var(--accent-green)' }}>{'\uD83D\uDCCA \u5206\u6790&\u30B9\u30B3\u30A2\u30EA\u30F3\u30B0'}</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'\u58F2\u4E0A\u30C8\u30EC\u30F3\u30C9\u30FBARPU\u30FALTV\u3092\u5206\u6790'}</p>
             </Link>
           </div>
         </div>
@@ -430,10 +545,10 @@ export default function DashboardPage() {
         <div className="col-span-3 glass-card p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-base font-bold flex items-center gap-2">
-              📋 直近DM送信履歴
+              {'\uD83D\uDCCB \u76F4\u8FD1DM\u9001\u4FE1\u5C65\u6B74'}
             </h3>
             <Link href="/dm" className="btn-ghost text-xs">
-              DM画面へ →
+              {'DM\u753B\u9762\u3078 \u2192'}
             </Link>
           </div>
 
@@ -443,10 +558,10 @@ export default function DashboardPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-left" style={{ color: 'var(--text-muted)' }}>
-                      <th className="pb-3 font-medium text-xs">ユーザー</th>
-                      <th className="pb-3 font-medium text-xs">キャンペーン</th>
-                      <th className="pb-3 font-medium text-xs">ステータス</th>
-                      <th className="pb-3 font-medium text-xs">日時</th>
+                      <th className="pb-3 font-medium text-xs">{'\u30E6\u30FC\u30B6\u30FC'}</th>
+                      <th className="pb-3 font-medium text-xs">{'\u30AD\u30E3\u30F3\u30DA\u30FC\u30F3'}</th>
+                      <th className="pb-3 font-medium text-xs">{'\u30B9\u30C6\u30FC\u30BF\u30B9'}</th>
+                      <th className="pb-3 font-medium text-xs">{'\u65E5\u6642'}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -454,7 +569,7 @@ export default function DashboardPage() {
                       <tr key={i} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
                         <td className="py-2.5 font-medium truncate max-w-[160px]">{dm.user_name}</td>
                         <td className="py-2.5 text-xs truncate max-w-[180px]" style={{ color: 'var(--text-secondary)' }}>
-                          {dm.campaign || '—'}
+                          {dm.campaign || '\u2014'}
                         </td>
                         <td className="py-2.5">
                           <span className={`text-xs px-2 py-1 rounded-full ${
@@ -475,23 +590,23 @@ export default function DashboardPage() {
 
               <div className="flex items-center justify-between mt-4 pt-4 border-t" style={{ borderColor: 'var(--border-glass)' }}>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>30日売上合計</p>
-                  <p className="text-xl font-bold">{stats ? tokensToJPY(stats.totalRevenue30d) : '—'}</p>
+                  <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>{'30\u65E5\u58F2\u4E0A\u5408\u8A08'}</p>
+                  <p className="text-xl font-bold">{stats ? tokensToJPY(stats.totalRevenue30d) : '\u2014'}</p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>7日DM送信数</p>
+                  <p className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>{'7\u65E5DM\u9001\u4FE1\u6570'}</p>
                   <p className="text-xl font-bold text-emerald-400">{stats ? stats.dmSent7d : 0}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    ホエール数: {stats?.whales.length || 0}名
+                    {'\u30DB\u30A8\u30FC\u30EB\u6570: '}{stats?.whales.length || 0}{'\u540D'}
                   </p>
                 </div>
               </div>
             </>
           ) : (
             <p className="text-xs text-center py-12" style={{ color: 'var(--text-muted)' }}>
-              DM送信履歴がありません。DM画面から送信してみましょう。
+              {'DM\u9001\u4FE1\u5C65\u6B74\u304C\u3042\u308A\u307E\u305B\u3093\u3002DM\u753B\u9762\u304B\u3089\u9001\u4FE1\u3057\u3066\u307F\u307E\u3057\u3087\u3046\u3002'}
             </p>
           )}
         </div>

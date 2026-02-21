@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from routers import auth, dm, spy, sync, analytics, ai, scripts, reports, feed, stt
+from routers import auth, dm, spy, sync, analytics, ai, scripts, reports, feed, stt, competitive
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,12 +23,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
-origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
-origins = [o.strip() for o in origins]
+# CORS（開発環境: ワイルドカード許可）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,6 +43,7 @@ app.include_router(scripts.router, prefix="/api/scripts", tags=["scripts"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(feed.router, prefix="/api/feed", tags=["feed"])
 app.include_router(stt.router, prefix="/api/stt", tags=["stt"])
+app.include_router(competitive.router, prefix="/api/competitive", tags=["Competitive Analysis"])
 
 @app.get("/health")
 async def health():

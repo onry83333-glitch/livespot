@@ -3,7 +3,7 @@
  * background.js から importScripts('config.js') で読み込み
  */
 const CONFIG = {
-  API_BASE_URL: 'http://localhost:8000',
+  API_BASE_URL: 'https://pseudofinally-glaiked-john.ngrok-free.dev',
   SUPABASE_URL: 'https://ujgbhkllfeacbgpdbjto.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_kt56F7VPKZyFIoja-UGHeQ_YVMEQdAZ',
   POLL_INTERVAL: 3000,

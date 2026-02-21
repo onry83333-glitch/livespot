@@ -56,6 +56,20 @@ export function getUserLeagueColor(level: number | null | undefined): string {
   return '#FF0000';
 }
 
+/** ユーザー名からハッシュベースの一貫した色を生成（方式Bフォールバック）
+ * 同じユーザー名は常に同じ色。user_colorもuser_levelも取得できない場合に使用。
+ */
+export function getUserHashColor(userName: string | null | undefined): string {
+  if (!userName) return '#9CA3AF';
+  let hash = 0;
+  for (let i = 0; i < userName.length; i++) {
+    hash = userName.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  // 彩度と明度を固定し、色相をハッシュで決定（暗い背景で読みやすい色）
+  const hue = ((hash % 360) + 360) % 360;
+  return `hsl(${hue}, 65%, 65%)`;
+}
+
 /** Message type to display */
 export function msgTypeLabel(type: string): string {
   const map: Record<string, string> = {

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from config import get_supabase_admin
 from routers.auth import get_current_user
-from models.schemas import SpyMessageCreate, SessionCreate, SessionUpdate, VIPAlert, ViewerStatsCreate, ViewerStatsBatchCreate
+from models.schemas import SpyMessageCreate, SessionCreate, SessionUpdate, VIPAlert, ViewerStatsCreate, ViewerStatsBatchCreate, CastTagsUpdate
 from services.vip_checker import check_vip, classify_comment
 
 router = APIRouter()
@@ -68,6 +68,12 @@ async def receive_message(body: SpyMessageCreate, user=Depends(get_current_user)
         "is_vip": is_vip,
         "metadata": metadata,
     }
+    if body.user_color:
+        row["user_color"] = body.user_color
+    if body.user_league:
+        row["user_league"] = body.user_league
+    if body.user_level is not None:
+        row["user_level"] = body.user_level
 
     # session_id/session_title: カラムが存在する場合のみ付与
     # (マイグレーション 003 適用後に有効)
@@ -112,6 +118,9 @@ async def receive_messages_batch(messages: list[SpyMessageCreate], user=Depends(
         "is_vip": False,
         "metadata": m.metadata,
         **({"session_id": m.session_id} if m.session_id else {}),
+        **({"user_color": m.user_color} if m.user_color else {}),
+        **({"user_league": m.user_league} if m.user_league else {}),
+        **({"user_level": m.user_level} if m.user_level is not None else {}),
     } for m in messages]
 
     result = sb.table("spy_messages").insert(rows).execute()
@@ -258,6 +267,46 @@ async def get_pickup_comments(
 
 
 # ============================================================
+# Cast Tags (genre / benchmark / category / notes)
+# ============================================================
+@router.patch("/casts/{cast_id}/tags")
+async def update_cast_tags(cast_id: int, body: CastTagsUpdate, user=Depends(get_current_user)):
+    """Update tags (genre, benchmark, category, notes) for a cast."""
+    sb = get_supabase_admin()
+    update_data: dict = {}
+    if body.genre is not None:
+        update_data["genre"] = body.genre or None
+    if body.benchmark is not None:
+        update_data["benchmark"] = body.benchmark or None
+    if body.category is not None:
+        update_data["category"] = body.category or None
+    if body.notes is not None:
+        update_data["notes"] = body.notes or None
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="更新データがありません")
+
+    update_data["updated_at"] = datetime.utcnow().isoformat()
+
+    # Try spy_casts first (BIGSERIAL id), then registered_casts
+    try:
+        result = sb.table("spy_casts").update(update_data).eq("id", cast_id).execute()
+        if result.data:
+            return result.data[0]
+    except Exception:
+        pass
+
+    try:
+        result = sb.table("registered_casts").update(update_data).eq("id", cast_id).execute()
+        if result.data:
+            return result.data[0]
+    except Exception:
+        pass
+
+    raise HTTPException(status_code=404, detail="Cast not found")
+
+
+# ============================================================
 # Sessions
 # ============================================================
 @router.post("/sessions")
@@ -349,6 +398,12 @@ async def create_viewer_stat(body: ViewerStatsCreate, user=Depends(get_current_u
         "coin_users": body.coin_users,
         "others": body.others,
     }
+    if body.ultimate_count is not None:
+        row["ultimate_count"] = body.ultimate_count
+    if body.coin_holders is not None:
+        row["coin_holders"] = body.coin_holders
+    if body.others_count is not None:
+        row["others_count"] = body.others_count
     if body.recorded_at:
         row["recorded_at"] = body.recorded_at.isoformat()
 
@@ -371,6 +426,9 @@ async def create_viewer_stats_batch(body: ViewerStatsBatchCreate, user=Depends(g
         "total": s.get("total"),
         "coin_users": s.get("coin_users"),
         "others": s.get("others"),
+        **({"ultimate_count": s["ultimate_count"]} if s.get("ultimate_count") is not None else {}),
+        **({"coin_holders": s["coin_holders"]} if s.get("coin_holders") is not None else {}),
+        **({"others_count": s["others_count"]} if s.get("others_count") is not None else {}),
         **({"recorded_at": s["recorded_at"]} if s.get("recorded_at") else {}),
     } for s in body.stats]
 

@@ -66,7 +66,7 @@ export default function CastComparePage() {
           .from('spy_messages')
           .select('cast_name')
           .eq('account_id', accountId)
-          .not('cast_name', 'is', null);
+          .filter('cast_name', 'not.is', null);
 
         if (fetchErr) throw new Error(fetchErr.message);
         if (data) {
@@ -127,7 +127,7 @@ export default function CastComparePage() {
         const msgs = data || [];
 
         const totalMessages = msgs.length;
-        const totalTips = msgs.reduce((s, m) => s + (m.tokens || 0), 0);
+        const totalTips = msgs.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').reduce((s, m) => s + (m.tokens || 0), 0);
         const tipMessages = msgs.filter(m => m.msg_type === 'tip' || m.msg_type === 'gift').length;
         const uniqueUsers = new Set(msgs.filter(m => m.user_name).map(m => m.user_name)).size;
 

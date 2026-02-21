@@ -242,7 +242,7 @@ export default function AnalyticsPage() {
       const { data: levelData } = await sb.from('spy_messages')
         .select('user_name, user_level')
         .eq('account_id', selectedAccount)
-        .not('user_level', 'is', null)
+        .filter('user_level', 'not.is', null)
         .order('message_time', { ascending: false })
         .limit(2000);
 

@@ -96,6 +96,13 @@ class DMLogResponse(BaseModel):
 # ============================================================
 # SPY
 # ============================================================
+class CastTagsUpdate(BaseModel):
+    genre: Optional[str] = None
+    benchmark: Optional[str] = None
+    category: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class SpyMessageCreate(BaseModel):
     account_id: str
     cast_name: str
@@ -107,6 +114,9 @@ class SpyMessageCreate(BaseModel):
     metadata: dict = {}
     session_id: Optional[str] = None
     session_title: Optional[str] = None
+    user_color: Optional[str] = None
+    user_league: Optional[str] = None
+    user_level: Optional[int] = None
 
 class SpyMessageResponse(BaseModel):
     id: int
@@ -153,13 +163,16 @@ class ViewerStatsCreate(BaseModel):
     total: Optional[int] = None
     coin_users: Optional[int] = None
     others: Optional[int] = None
+    ultimate_count: Optional[int] = None
+    coin_holders: Optional[int] = None
+    others_count: Optional[int] = None
     recorded_at: Optional[datetime] = None
 
 
 class ViewerStatsBatchCreate(BaseModel):
     account_id: str
     cast_name: str
-    stats: list[dict]  # [{ total, coin_users, others, recorded_at }]
+    stats: list[dict]  # [{ total, coin_users, others, ultimate_count, coin_holders, others_count, recorded_at }]
 
 
 # ============================================================

@@ -26,12 +26,21 @@ interface ComputedSession {
   account_id: string;
   cast_name: string;
   title: string | null;
+  broadcast_title: string | null;
   started_at: string;
   ended_at: string;
   total_messages: number;
   total_tips: number;
   total_coins: number;
   unique_users: number;
+}
+
+/** sessions テーブルから取得した配信タイトル */
+interface SessionRecord {
+  session_id: string;
+  cast_name: string | null;
+  broadcast_title: string | null;
+  started_at: string;
 }
 
 interface UserStat {
@@ -48,6 +57,7 @@ function buildComputedSession(
   accountId: string,
   castName: string,
   msgs: { message_time: string; msg_type: string; user_name: string | null; tokens: number }[],
+  broadcastTitle?: string | null,
 ): ComputedSession {
   const started_at = msgs[0].message_time;
   const ended_at = msgs[msgs.length - 1].message_time;
@@ -58,6 +68,7 @@ function buildComputedSession(
     account_id: accountId,
     cast_name: castName,
     title: null,
+    broadcast_title: broadcastTitle ?? null,
     started_at,
     ended_at,
     total_messages: msgs.length,
@@ -132,6 +143,13 @@ export default function SessionsPage() {
 
     (async () => {
       try {
+        // sessions テーブルから broadcast_title を取得（並行）
+        const sessionRecordsPromise = supabase.from('sessions')
+          .select('session_id, cast_name, broadcast_title, started_at')
+          .eq('account_id', selectedAccount)
+          .gte('started_at', since)
+          .order('started_at', { ascending: false });
+
         const allMsgs: MsgRow[] = [];
         let offset = 0;
 
@@ -151,13 +169,34 @@ export default function SessionsPage() {
           offset += BATCH;
         }
 
-        console.log('[Sessions] Total messages fetched:', allMsgs.length);
+        // sessions テーブルのbroadcast_titleをキャスト名+時間帯でマッチング用に準備
+        const { data: sessionRecords } = await sessionRecordsPromise;
+        const sessionTitles = (sessionRecords ?? []) as SessionRecord[];
+
+        console.log('[Sessions] Total messages fetched:', allMsgs.length, 'session records:', sessionTitles.length);
 
         if (allMsgs.length === 0) {
           setSessions([]);
           setLoading(false);
           return;
         }
+
+        // broadcast_title マッチング: キャスト名+時間帯で最も近いsessionsレコードを探す
+        const findBroadcastTitle = (cn: string, startedAt: string): string | null => {
+          const startMs = new Date(startedAt).getTime();
+          let best: string | null = null;
+          let bestDiff = Infinity;
+          for (const sr of sessionTitles) {
+            if (sr.cast_name !== cn || !sr.broadcast_title) continue;
+            const diff = Math.abs(new Date(sr.started_at).getTime() - startMs);
+            // 30分以内のセッションレコードをマッチ
+            if (diff < 30 * 60 * 1000 && diff < bestDiff) {
+              bestDiff = diff;
+              best = sr.broadcast_title;
+            }
+          }
+          return best;
+        };
 
         // cast_name 別にグループ化
         const byCast = new Map<string, MsgRow[]>();
@@ -176,13 +215,19 @@ export default function SessionsPage() {
               const gap = new Date(msgs[i].message_time).getTime()
                         - new Date(msgs[i - 1].message_time).getTime();
               if (gap > 5 * 60 * 1000) {
-                if (group.length > 0) computed.push(buildComputedSession(selectedAccount, cast, group));
+                if (group.length > 0) {
+                  const bt = findBroadcastTitle(cast, group[0].message_time);
+                  computed.push(buildComputedSession(selectedAccount, cast, group, bt));
+                }
                 group = [];
               }
             }
             group.push(msgs[i]);
           }
-          if (group.length > 0) computed.push(buildComputedSession(selectedAccount, cast, group));
+          if (group.length > 0) {
+            const bt = findBroadcastTitle(cast, group[0].message_time);
+            computed.push(buildComputedSession(selectedAccount, cast, group, bt));
+          }
         });
 
         computed.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
@@ -257,15 +302,17 @@ export default function SessionsPage() {
     for (const m of detailMessages) {
       if (!m.user_name) continue;
       if (excludeCast && isCastMsg(m)) continue;
+      const isTipOrGift = m.msg_type === 'tip' || m.msg_type === 'gift';
+      const tipTokens = isTipOrGift ? m.tokens : 0;
       const existing = map.get(m.user_name);
       if (existing) {
         existing.msg_count++;
-        existing.tip_total += m.tokens;
+        existing.tip_total += tipTokens;
       } else {
         map.set(m.user_name, {
           user_name: m.user_name,
           msg_count: 1,
-          tip_total: m.tokens,
+          tip_total: tipTokens,
           user_level: (m as unknown as Record<string, unknown>).user_level as number | null ?? null,
         });
       }
@@ -320,7 +367,7 @@ export default function SessionsPage() {
 
       // --- Compute stats ---
       const uniqueUsers = new Set(msgs.filter(m => m.user_name).map(m => m.user_name));
-      const tipMsgs = msgs.filter(m => m.tokens > 0);
+      const tipMsgs = msgs.filter(m => (m.msg_type === 'tip' || m.msg_type === 'gift') && m.tokens > 0);
       const totalCoins = tipMsgs.reduce((s, m) => s + m.tokens, 0);
       const totalJPY = Math.round(totalCoins * coinRate);
 
@@ -556,6 +603,13 @@ export default function SessionsPage() {
                     <h3 className="text-sm font-bold">
                       {s.title || `${s.cast_name} — ${fmtTime(s.started_at)}`}
                     </h3>
+                    {s.broadcast_title && (
+                      <span className="text-[11px] px-2 py-0.5 rounded-md truncate max-w-xs"
+                        style={{ background: 'rgba(168,85,247,0.1)', color: 'var(--accent-purple)' }}
+                        title={s.broadcast_title}>
+                        {s.broadcast_title}
+                      </span>
+                    )}
                   </div>
                   <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                     {isExpanded ? '▲ 閉じる' : '▼ 詳細'}

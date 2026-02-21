@@ -13,7 +13,7 @@ import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 /* ============================================================
    Types
    ============================================================ */
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'sales' | 'realtime';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots';
 
 interface CastStatsData {
   total_messages: number;
@@ -38,6 +38,7 @@ interface SessionItem {
   tip_count: number;
   total_coins: number;
   unique_users: number;
+  broadcast_title?: string | null;
 }
 
 interface RetentionUser {
@@ -94,6 +95,15 @@ interface DmCvrItem {
   avg_tokens_per_payer: number;
   first_sent: string;
   last_sent: string;
+}
+
+interface ScreenshotItem {
+  id: string;
+  cast_name: string;
+  session_id: string | null;
+  filename: string;
+  storage_path: string | null;
+  captured_at: string;
 }
 
 interface AcquisitionUser {
@@ -159,6 +169,7 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'analytics', icon: '📈', label: '分析' },
   { key: 'sales',     icon: '💰', label: '売上' },
   { key: 'realtime',  icon: '👁', label: 'リアルタイム' },
+  { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
 ];
 
 /* ============================================================
@@ -260,6 +271,7 @@ function CastDetailInner() {
 
   // New paying users detection
   const [newPayingUsers, setNewPayingUsers] = useState<{ user_name: string; total_coins: number; tx_count: number; is_completely_new: boolean }[]>([]);
+  const [newPayingExpanded, setNewPayingExpanded] = useState(false);
 
   // Alert system
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
@@ -294,6 +306,10 @@ function CastDetailInner() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState<string | null>(null);
   const [searchMissesOpen, setSearchMissesOpen] = useState(false);
+
+  // Screenshots
+  const [screenshots, setScreenshots] = useState<ScreenshotItem[]>([]);
+  const [screenshotsLoading, setScreenshotsLoading] = useState(false);
 
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
@@ -427,6 +443,7 @@ function CastDetailInner() {
     sb.from('coin_transactions')
       .select('date')
       .eq('account_id', accountId)
+      .eq('cast_name', castName)
       .order('date', { ascending: false })
       .limit(1)
       .single()
@@ -436,7 +453,7 @@ function CastDetailInner() {
           setDaysSinceSync(diff);
         }
       });
-  }, [accountId, sb]);
+  }, [accountId, castName, sb]);
 
   // ============================================================
   // Realtime: paid_users color cache
@@ -483,9 +500,28 @@ function CastDetailInner() {
         .in('msg_type', ['tip', 'gift'])
         .gte('message_time', lastStart)
         .lt('message_time', thisMonday.toISOString()),
-    ]).then(([thisRes, lastRes]) => {
-      setThisWeekCoins((thisRes.data || []).reduce((s, r) => s + (r.tokens || 0), 0));
-      setLastWeekCoins((lastRes.data || []).reduce((s, r) => s + (r.tokens || 0), 0));
+      sb.from('coin_transactions')
+        .select('tokens')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .in('type', ['tip', 'gift'])
+        .gte('date', thisStart)
+        .limit(10000),
+      sb.from('coin_transactions')
+        .select('tokens')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .in('type', ['tip', 'gift'])
+        .gte('date', lastStart)
+        .lt('date', thisMonday.toISOString())
+        .limit(10000),
+    ]).then(([thisSpyRes, lastSpyRes, thisTxRes, lastTxRes]) => {
+      const thisSpy = (thisSpyRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
+      const lastSpy = (lastSpyRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
+      const thisTx = (thisTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
+      const lastTx = (lastTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
+      setThisWeekCoins(Math.max(thisSpy, thisTx));
+      setLastWeekCoins(Math.max(lastSpy, lastTx));
     });
 
     // 新規課金ユーザー検出（直近24時間）
@@ -504,11 +540,39 @@ function CastDetailInner() {
   // ============================================================
   useEffect(() => {
     if (!accountId || (activeTab !== 'overview' && activeTab !== 'sessions')) return;
-    sb.rpc('get_cast_sessions', {
-      p_account_id: accountId,
-      p_cast_name: castName,
-      p_since: registeredAt ? new Date(registeredAt).toISOString().split('T')[0] : '2026-01-01',
-    }).then(({ data }) => setSessions((data || []) as SessionItem[]));
+    const since = registeredAt ? new Date(registeredAt).toISOString().split('T')[0] : '2026-01-01';
+    Promise.all([
+      sb.rpc('get_cast_sessions', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_since: since,
+      }),
+      sb.from('sessions')
+        .select('started_at, broadcast_title')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .gte('started_at', since)
+        .filter('broadcast_title', 'not.is', null)
+        .order('started_at', { ascending: false }),
+    ]).then(([rpcResult, titleResult]) => {
+      const rpcSessions = (rpcResult.data || []) as SessionItem[];
+      const titleRecords = (titleResult.data || []) as { started_at: string; broadcast_title: string }[];
+      // broadcast_title をマッチング: 最も近い開始時刻のセッションレコード(30分以内)
+      for (const sess of rpcSessions) {
+        const sessMs = new Date(sess.session_start).getTime();
+        let best: string | null = null;
+        let bestDiff = Infinity;
+        for (const tr of titleRecords) {
+          const diff = Math.abs(new Date(tr.started_at).getTime() - sessMs);
+          if (diff < 30 * 60 * 1000 && diff < bestDiff) {
+            bestDiff = diff;
+            best = tr.broadcast_title;
+          }
+        }
+        sess.broadcast_title = best;
+      }
+      setSessions(rpcSessions);
+    });
   }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // Session expand: load logs
@@ -558,7 +622,7 @@ function CastDetailInner() {
       .channel('dm-cast-status')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log' }, async () => {
         const { data: items } = await sb.from('dm_send_log')
-          .select('*').eq('campaign', dmBatchId).order('created_at', { ascending: false });
+          .select('*').eq('campaign', dmBatchId).eq('cast_name', castName).order('created_at', { ascending: false });
         const logs = items || [];
         const counts = { total: logs.length, queued: 0, sending: 0, success: 0, error: 0 };
         logs.forEach((l: { status: string }) => { if (l.status in counts) (counts as Record<string, number>)[l.status]++; });
@@ -814,6 +878,7 @@ function CastDetailInner() {
       .select('user_name, tokens, message_time, message')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
+      .in('msg_type', ['tip', 'gift'])
       .gt('tokens', 0)
       .order('message_time', { ascending: false })
       .limit(5)
@@ -958,14 +1023,18 @@ function CastDetailInner() {
       .select('tokens')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .gte('date', thisWeekStart);
+      .in('type', ['tip', 'gift'])
+      .gte('date', thisWeekStart)
+      .limit(10000);
 
     let lastWeekTxQuery = sb.from('coin_transactions')
       .select('tokens')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
+      .in('type', ['tip', 'gift'])
       .gte('date', lastWeekStart)
-      .lt('date', thisMonday.toISOString());
+      .lt('date', thisMonday.toISOString())
+      .limit(10000);
 
     let syncQuery = sb.from('coin_transactions')
       .select('date')
@@ -975,14 +1044,13 @@ function CastDetailInner() {
       .limit(1);
     if (regFilter) syncQuery = syncQuery.gte('date', regFilter);
 
-    // paid_users: cast_name絞り込み
-    const paidUsersQuery = sb.from('paid_users')
-      .select('user_name, total_coins, last_payment_date')
-      .eq('account_id', accountId)
-      .eq('cast_name', castName)
-      .gt('total_coins', 0)
-      .order('total_coins', { ascending: false })
-      .limit(100);
+    // paid_users: coin_transactionsからcast_name別に集計（RPC）— 全期間
+    const paidUsersQuery = sb.rpc('get_cast_paid_users', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_limit: 100,
+      p_since: null,
+    });
 
     Promise.all([
       recentTxQuery,
@@ -1015,6 +1083,23 @@ function CastDetailInner() {
     });
   }, [accountId, castName, activeTab, sb]);
 
+  // ============================================================
+  // Screenshots
+  // ============================================================
+  useEffect(() => {
+    if (!accountId || activeTab !== 'screenshots') return;
+    setScreenshotsLoading(true);
+    sb.from('screenshots')
+      .select('id, cast_name, session_id, filename, storage_path, captured_at')
+      .eq('cast_name', castName)
+      .order('captured_at', { ascending: false })
+      .limit(100)
+      .then(({ data, error }) => {
+        if (!error && data) setScreenshots(data as ScreenshotItem[]);
+        setScreenshotsLoading(false);
+      });
+  }, [accountId, castName, activeTab, sb]);
+
   // Retention stats
   const retentionCounts = useMemo(() => {
     const counts = { active: 0, at_risk: 0, churned: 0, new: 0 };
@@ -1040,6 +1125,33 @@ function CastDetailInner() {
     setDmMessage('{username}さん、お久しぶりです！また配信遊びに来てくれたら嬉しいです！');
     setTab('dm');
   }, [setTab]);
+
+  // Reassign transactions by session
+  const [reassigning, setReassigning] = useState(false);
+  const [reassignResult, setReassignResult] = useState<{ updated: number; session: number; fallback: number } | null>(null);
+
+  const handleReassignTransactions = useCallback(async () => {
+    if (!accountId || reassigning) return;
+    setReassigning(true);
+    setReassignResult(null);
+    try {
+      const { data, error } = await sb.rpc('reassign_coin_transactions_by_session', {
+        p_account_id: accountId,
+      });
+      if (error) throw error;
+      const result = Array.isArray(data) ? data[0] : data;
+      setReassignResult({
+        updated: result?.updated_count || 0,
+        session: result?.session_matched || 0,
+        fallback: result?.fallback_matched || 0,
+      });
+    } catch (err: unknown) {
+      console.error('Reassign failed:', err);
+      setReassignResult({ updated: -1, session: 0, fallback: 0 });
+    } finally {
+      setReassigning(false);
+    }
+  }, [accountId, reassigning, sb]);
 
   // Weekly change %
   const weeklyChange = lastWeekCoins > 0 ? ((thisWeekCoins - lastWeekCoins) / lastWeekCoins * 100) : 0;
@@ -1166,36 +1278,62 @@ function CastDetailInner() {
                 </div>
 
                 {/* New paying users */}
-                {newPayingUsers.length > 0 && (
-                  <div className="glass-card p-4">
-                    <h3 className="text-sm font-bold mb-3">🆕 新規課金ユーザー（直近24時間）</h3>
-                    <div className="space-y-1.5">
-                      {newPayingUsers.map(u => (
-                        <div key={u.user_name} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
-                          <div className="flex items-center gap-2 min-w-0">
-                            {u.is_completely_new && (
-                              <span className="text-[9px] px-1.5 py-0.5 rounded font-bold"
-                                style={{ background: 'rgba(34,197,94,0.15)', color: 'var(--accent-green)' }}>完全新規</span>
-                            )}
-                            <span className="font-semibold truncate">{u.user_name}</span>
-                            {u.tx_count > 1 && (
-                              <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>×{u.tx_count}回</span>
-                            )}
+                {newPayingUsers.length > 0 && (() => {
+                  const MAX_COLLAPSED = 5;
+                  const MAX_EXPANDED = 20;
+                  const visibleUsers = newPayingExpanded
+                    ? newPayingUsers.slice(0, MAX_EXPANDED)
+                    : newPayingUsers.slice(0, MAX_COLLAPSED);
+                  const hasMore = newPayingUsers.length > MAX_COLLAPSED;
+                  return (
+                    <div className="glass-card p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-bold">新規課金ユーザー（24h）</h3>
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          {newPayingUsers.length}名 / {formatTokens(newPayingUsers.reduce((s, u) => s + u.total_coins, 0))}
+                          {' '}
+                          <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(newPayingUsers.reduce((s, u) => s + u.total_coins, 0), coinRate)}</span>
+                        </span>
+                      </div>
+                      <div className="space-y-0.5">
+                        {visibleUsers.map(u => (
+                          <div key={u.user_name} className="flex items-center justify-between text-[11px] px-2 py-1 rounded"
+                            style={{ background: 'rgba(255,255,255,0.02)' }}>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {u.is_completely_new && (
+                                <span className="text-[8px] px-1 py-0.5 rounded font-bold"
+                                  style={{ background: 'rgba(34,197,94,0.15)', color: 'var(--accent-green)' }}>NEW</span>
+                              )}
+                              <span className="font-semibold truncate">{u.user_name}</span>
+                              {u.tx_count > 1 && (
+                                <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>×{u.tx_count}</span>
+                              )}
+                            </div>
+                            <span className="font-bold flex-shrink-0 ml-2 text-[10px]">
+                              <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.total_coins)}</span>
+                              {' '}
+                              <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.total_coins, coinRate)}</span>
+                            </span>
                           </div>
-                          <span className="font-bold flex-shrink-0 ml-2" style={{ color: 'var(--accent-amber)' }}>
-                            {formatTokens(u.total_coins)}
-                          </span>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
+                      {hasMore && (
+                        <button
+                          onClick={() => setNewPayingExpanded(!newPayingExpanded)}
+                          className="w-full mt-2 text-[10px] py-1 rounded hover:opacity-80 transition-opacity"
+                          style={{ color: 'var(--accent-primary)', background: 'rgba(56,189,248,0.05)' }}
+                        >
+                          {newPayingExpanded
+                            ? '閉じる'
+                            : `もっと見る（残り${Math.min(newPayingUsers.length - MAX_COLLAPSED, MAX_EXPANDED - MAX_COLLAPSED)}名）`}
+                          {!newPayingExpanded && newPayingUsers.length > MAX_EXPANDED && (
+                            <span style={{ color: 'var(--text-muted)' }}> / 全{newPayingUsers.length}名</span>
+                          )}
+                        </button>
+                      )}
                     </div>
-                    <div className="mt-2 flex items-center justify-between text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                      <span>合計: {newPayingUsers.length}名</span>
-                      <span style={{ color: 'var(--accent-amber)' }}>
-                        {formatTokens(newPayingUsers.reduce((s, u) => s + u.total_coins, 0))}
-                      </span>
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* Recent sessions */}
                 <div className="glass-card p-4">
@@ -1207,7 +1345,14 @@ function CastDetailInner() {
                       {sessions.slice(0, 5).map(s => (
                         <div key={s.session_start} className="glass-panel p-3 flex items-center justify-between">
                           <div>
-                            <p className="text-xs font-semibold">{s.session_date}</p>
+                            <p className="text-xs font-semibold">
+                              {s.session_date}
+                              {s.broadcast_title && (
+                                <span className="ml-2 text-[10px] font-normal" style={{ color: 'var(--accent-purple)' }}>
+                                  {s.broadcast_title}
+                                </span>
+                              )}
+                            </p>
                             <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                               {formatJST(s.session_start).split(' ')[1]?.slice(0, 5)} - {formatJST(s.session_end).split(' ')[1]?.slice(0, 5)} / {s.message_count} msg / {s.unique_users} users
                             </p>
@@ -1239,7 +1384,8 @@ function CastDetailInner() {
                           <span className="truncate font-medium" style={{ color: getUserColorFromCoins(f.total_tokens || 0) }}>{f.user_name}</span>
                         </div>
                         <div className="flex-shrink-0 text-right">
-                          <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{f.total_tokens.toLocaleString()} tk</span>
+                          <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{formatTokens(f.total_tokens)}</span>
+                          <p className="text-[9px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(f.total_tokens, coinRate)}</p>
                           <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{f.msg_count} msg</p>
                         </div>
                       </div>
@@ -1268,6 +1414,12 @@ function CastDetailInner() {
                         <div>
                           <p className="text-xs font-semibold">
                             {s.session_date} {formatJST(s.session_start).split(' ')[1]?.slice(0, 5)}〜{formatJST(s.session_end).split(' ')[1]?.slice(0, 5)}
+                            {s.broadcast_title && (
+                              <span className="ml-2 text-[11px] font-normal px-2 py-0.5 rounded-md"
+                                style={{ background: 'rgba(168,85,247,0.1)', color: 'var(--accent-purple)' }}>
+                                {s.broadcast_title}
+                              </span>
+                            )}
                           </p>
                           <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                             {s.message_count} msg / {s.unique_users} users
@@ -1295,7 +1447,7 @@ function CastDetailInner() {
                             {/* Session summary */}
                             <div className="px-5 py-3 flex gap-4 text-[10px]" style={{ background: 'rgba(15,23,42,0.4)', color: 'var(--text-muted)' }}>
                               <span>チップ数: <b className="text-slate-300">{s.tip_count}</b></span>
-                              <span>コイン: <b style={{ color: 'var(--accent-amber)' }}>{formatTokens(s.total_coins)}</b></span>
+                              <span>コイン: <b style={{ color: 'var(--accent-amber)' }}>{formatTokens(s.total_coins)}</b> <b style={{ color: 'var(--accent-green)' }}>{tokensToJPY(s.total_coins, coinRate)}</b></span>
                               <span>ユーザー: <b style={{ color: 'var(--accent-purple, #a855f7)' }}>{s.unique_users}</b></span>
                             </div>
                           </>
@@ -1880,8 +2032,10 @@ function CastDetailInner() {
                                 <td className="text-right px-3 py-2 tabular-nums" style={{ color: 'var(--accent-amber)' }}>
                                   {c.success_count > 0 ? `${Math.round(c.tipped_count / c.success_count * 100)}%` : '--'}
                                 </td>
-                                <td className="text-right px-3 py-2 font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                  {formatTokens(c.tip_amount)}
+                                <td className="text-right px-3 py-2 font-bold tabular-nums">
+                                  <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(c.tip_amount)}</span>
+                                  <br />
+                                  <span className="text-[9px] font-normal" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(c.tip_amount, coinRate)}</span>
                                 </td>
                               </tr>
                             ))}
@@ -2323,8 +2477,10 @@ function CastDetailInner() {
                         <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                           リアルタイムチャット監視からのtip/giftデータ。このキャスト固有。
                         </p>
-                        <p className="text-xs mt-1 font-bold" style={{ color: 'var(--accent-amber)' }}>
-                          {formatTokens(stats?.total_coins || 0)}
+                        <p className="text-xs mt-1 font-bold">
+                          <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(stats?.total_coins || 0)}</span>
+                          {' '}
+                          <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(stats?.total_coins || 0, coinRate)}</span>
                         </p>
                       </div>
                       <div className="glass-panel p-3 rounded-xl">
@@ -2340,6 +2496,27 @@ function CastDetailInner() {
                         </p>
                       </div>
                     </div>
+                    <div className="mt-3 flex items-center gap-3">
+                      <button
+                        onClick={handleReassignTransactions}
+                        disabled={reassigning}
+                        className="btn-ghost px-4 py-2 text-[11px] rounded-lg"
+                        style={{ borderColor: 'rgba(168,139,250,0.3)', color: 'var(--accent-purple, #a855f7)' }}
+                      >
+                        {reassigning ? '再振り分け中...' : 'トランザクション再振り分け'}
+                      </button>
+                      {reassignResult && reassignResult.updated >= 0 && (
+                        <span className="text-[11px]" style={{ color: 'var(--accent-green)' }}>
+                          {reassignResult.updated}件更新 (配信中: {reassignResult.session}, オフライン: {reassignResult.fallback})
+                        </span>
+                      )}
+                      {reassignResult && reassignResult.updated < 0 && (
+                        <span className="text-[11px]" style={{ color: 'var(--accent-pink)' }}>エラーが発生しました</span>
+                      )}
+                    </div>
+                    <p className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                      配信セッションの時間帯に基づいてcast_nameを再割り当てします
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -2610,6 +2787,63 @@ function CastDetailInner() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ============ SCREENSHOTS ============ */}
+          {activeTab === 'screenshots' && (
+            <div className="space-y-4">
+              <div className="glass-card p-4">
+                <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                  スクリーンショット履歴
+                  <span className="text-[10px] px-2 py-0.5 rounded-lg"
+                    style={{ background: 'rgba(56,189,248,0.08)', color: 'var(--accent-primary)' }}>
+                    {screenshots.length} 件
+                  </span>
+                </h3>
+                {screenshotsLoading ? (
+                  <div className="text-center py-8 text-xs" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>
+                ) : screenshots.length === 0 ? (
+                  <div className="text-center py-8 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    スクリーンショットデータなし。SPY監視中に5分間隔で自動キャプチャされます。
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {screenshots.map((ss) => {
+                      const publicUrl = ss.storage_path
+                        ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${ss.storage_path}`
+                        : null;
+                      return (
+                        <div key={ss.id} className="glass-panel rounded-xl overflow-hidden">
+                          {publicUrl ? (
+                            <a href={publicUrl} target="_blank" rel="noopener noreferrer">
+                              <img
+                                src={publicUrl}
+                                alt={ss.filename}
+                                className="w-full aspect-video object-cover hover:opacity-80 transition-opacity"
+                                loading="lazy"
+                              />
+                            </a>
+                          ) : (
+                            <div className="w-full aspect-video flex items-center justify-center text-[10px]"
+                              style={{ background: 'rgba(15,23,42,0.6)', color: 'var(--text-muted)' }}>
+                              Storage未設定
+                            </div>
+                          )}
+                          <div className="p-2">
+                            <p className="text-[10px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                              {ss.filename}
+                            </p>
+                            <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                              {formatJST(ss.captured_at)}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </>

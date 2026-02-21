@@ -9,18 +9,24 @@ interface UseRealtimeSpyOptions {
   enabled?: boolean;
 }
 
+const MAX_MESSAGES = 2000;
+const INITIAL_LOAD_LIMIT = 1000;
+
 export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptions) {
   const [allMessages, setAllMessages] = useState<SpyMessage[]>([]);
   const [castNames, setCastNames] = useState<string[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const supabaseRef = useRef(createClient());
+  // 既知のメッセージIDセット（重複防止）
+  const knownIdsRef = useRef(new Set<number>());
 
-  // キャスト一覧を取得（spy_messagesのdistinct cast_name）
+  // キャスト一覧を取得（spy_messagesのdistinct cast_name — 直近のみ）
   const loadCastNames = useCallback(async () => {
     const { data, error } = await supabaseRef.current
       .from('spy_messages')
       .select('cast_name')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(2000);
 
     if (error) {
       return;
@@ -31,19 +37,46 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
     }
   }, []);
 
-  // 初回ロード: 直近200件を取得（全キャスト）
+  // DBからメッセージを取得（既存データとマージ）
   const loadMessages = useCallback(async () => {
     const { data, error } = await supabaseRef.current
       .from('spy_messages')
       .select('*')
       .order('message_time', { ascending: false })
-      .limit(200);
+      .limit(INITIAL_LOAD_LIMIT);
 
     if (error) {
       return;
     }
     if (data) {
-      setAllMessages(data.reverse()); // 古い順に並べる
+      const sorted = data.reverse(); // 古い順に並べる
+
+      // 既知IDセットを更新
+      const newIds = new Set<number>();
+      sorted.forEach(m => newIds.add(m.id));
+
+      setAllMessages(prev => {
+        // 既存のRealtimeメッセージとDBデータをマージ
+        // DBにない（まだ反映されていない）Realtimeメッセージを保持
+        const realtimeOnly = prev.filter(m => !newIds.has(m.id));
+        const merged = [...sorted, ...realtimeOnly];
+        // IDで重複排除
+        const seen = new Set<number>();
+        const deduped = merged.filter(m => {
+          if (seen.has(m.id)) return false;
+          seen.add(m.id);
+          return true;
+        });
+        // message_timeでソート
+        deduped.sort((a, b) =>
+          new Date(a.message_time).getTime() - new Date(b.message_time).getTime()
+        );
+        // 上限適用
+        const result = deduped.slice(-MAX_MESSAGES);
+        // knownIdsを更新
+        knownIdsRef.current = new Set(result.map(m => m.id));
+        return result;
+      });
     }
   }, []);
 
@@ -88,7 +121,11 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
         (payload) => {
           const msg = payload.new as SpyMessage;
 
-          setAllMessages(prev => [...prev, msg].slice(-500));
+          // 重複防止: 既にDBロードで取得済みのメッセージはスキップ
+          if (knownIdsRef.current.has(msg.id)) return;
+          knownIdsRef.current.add(msg.id);
+
+          setAllMessages(prev => [...prev, msg].slice(-MAX_MESSAGES));
 
           // キャスト一覧にない新しいキャストなら追加
           setCastNames(prev =>
@@ -96,11 +133,31 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
           );
         }
       )
-      .subscribe((status) => {
-        setIsConnected(status === 'SUBSCRIBED');
+      .subscribe((status, err) => {
+        if (status === 'SUBSCRIBED') {
+          setIsConnected(true);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          setIsConnected(false);
+        } else if (status === 'CLOSED') {
+          setIsConnected(false);
+        }
       });
 
+    // Realtime再接続時にDBから再取得（件数リセット防止）
+    // Supabase Realtimeは自動再接続するが、その間のメッセージを補完する
+    const reconnectInterval = setInterval(() => {
+      const state = channel.state;
+      if (state === 'joined') {
+        // 接続中は何もしない
+      } else if (state === 'errored' || state === 'closed') {
+        // エラー or 切断 → DBから再取得してメッセージを補完
+        loadMessages();
+        loadCastNames();
+      }
+    }, 30000);
+
     return () => {
+      clearInterval(reconnectInterval);
       supabaseRef.current.removeChannel(channel);
       setIsConnected(false);
     };
@@ -126,8 +183,12 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
       return error.message;
     }
 
-    // ローカルステートからも削除
-    setAllMessages(prev => prev.filter(m => m.cast_name !== targetCastName));
+    // ローカルステートからも削除 + knownIdsも更新
+    setAllMessages(prev => {
+      const remaining = prev.filter(m => m.cast_name !== targetCastName);
+      knownIdsRef.current = new Set(remaining.map(m => m.id));
+      return remaining;
+    });
     setCastNames(prev => prev.filter(n => n !== targetCastName));
     return null;
   }, []);

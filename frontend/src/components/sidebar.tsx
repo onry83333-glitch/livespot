@@ -30,8 +30,9 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    title: '設定',
+    title: '管理',
     items: [
+      { href: '/admin/command-center', icon: '🎛️', label: 'コマンドセンター' },
       { href: '/settings',   icon: '⚙️', label: '管理&セキュリティ' },
     ],
   },
@@ -81,7 +82,7 @@ function SidebarInner() {
       .eq('cast_name', activeCastName)
       .eq('is_active', true)
       .limit(1)
-      .single()
+      .maybeSingle()
       .then(({ data }) => {
         setCastDisplayName(data?.display_name || null);
       });
@@ -96,7 +97,7 @@ function SidebarInner() {
       .eq('cast_name', activeSpyCastName)
       .eq('is_active', true)
       .limit(1)
-      .single()
+      .maybeSingle()
       .then(({ data }) => {
         setSpyCastDisplayName(data?.display_name || null);
       });

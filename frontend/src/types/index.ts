@@ -66,6 +66,8 @@ export interface SpyMessage {
   tokens: number;
   is_vip: boolean;
   user_color: string | null;
+  user_league: string | null;
+  user_level: number | null;
   metadata: Record<string, unknown>;
   session_id?: string | null;
   session_title?: string | null;
@@ -187,6 +189,13 @@ export interface RegisteredCast {
   stripchat_url: string | null;
   is_active: boolean;
   notes: string | null;
+  genre: string | null;
+  benchmark: string | null;
+  category: string | null;
+  cast_type_id: string | null;
+  last_seen_online: string | null;
+  is_extinct: boolean;
+  extinct_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -203,9 +212,15 @@ export interface SpyCast {
   category: string | null;
   format_tag: string | null;
   notes: string | null;
+  genre: string | null;
+  benchmark: string | null;
+  cast_type_id: string | null;
   is_active: boolean;
   auto_monitor: boolean;
   screenshot_interval: number | null;
+  last_seen_online: string | null;
+  is_extinct: boolean;
+  extinct_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -223,6 +238,36 @@ export interface UserSegment {
   total_coins: number;
   avg_coins: number;
   users: { user_name: string; total_coins: number; last_payment_date: string | null }[];
+}
+
+// ============================================================
+// Cast Types (型カタログ)
+// ============================================================
+export interface CastType {
+  id: string;
+  account_id: string;
+  type_name: string;
+  benchmark_cast: string;
+  description: string | null;
+  genre: string | null;
+  category: string | null;
+  streaming_style: string | null;
+  revenue_pattern: string | null;
+  avg_session_revenue_min: number | null;
+  avg_session_revenue_max: number | null;
+  ticket_ratio: number | null;
+  avg_ticket_price: number | null;
+  avg_ticket_attendees: number | null;
+  customer_quality: string | null;
+  streaming_frequency: string | null;
+  expected_lifespan_months: number | null;
+  survival_rate_30d: number | null;
+  product_route: string | null;
+  consistency_checklist: { item: string; checked: boolean }[];
+  hypothesis_1year: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 // ============================================================

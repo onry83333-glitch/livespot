@@ -42,6 +42,7 @@ app/
   reports/page.tsx    # /reports — AIレポート
   feed/page.tsx       # /feed — フィード
   settings/page.tsx   # /settings — セキュリティ・レート制限設定
+  admin/command-center/page.tsx  # /admin/command-center — Wisteria コマンドセンター（4タブ: コマンド/戦略/オペレーション/アセット）
 components/
   auth-provider.tsx   # AuthContext (user, session, loading, signOut) + リダイレクト制御
   app-shell.tsx       # publicページ判定、サイドバー表示/非表示、ローディングスピナー
@@ -118,6 +119,10 @@ migrations/
   015_user_acquisition_dashboard.sql  # get_user_acquisition_dashboard RPC
   016_dashboard_improvements.sql  # dashboard v2 (p_max_coins) + search_user_detail
   017_search_users_bulk.sql   # search_users_bulk RPC（完全一致 + 該当なし対応）
+  020_check_data_integrity.sql  # check_data_integrity RPC（16項目データ整合性チェック）
+  021_fix_dm_send_log_cast_name.sql  # dm_send_log cast_name NULL修正（2,309行バックフィル）
+  022_dedup_coin_transactions.sql  # coin_transactions重複削除 + ユニークインデックス
+  023_pipeline_status.sql     # pipeline_status テーブル + 自動検出RPC（update_pipeline_auto_status）
 ```
 
 ---
@@ -151,6 +156,7 @@ migrations/
 | broadcast_scripts | id (UUID) | 配信台本 |
 | ai_reports | id (UUID) | AI生成レポート |
 | audio_recordings | id (UUID) | 音声録音 |
+| pipeline_status | id (SERIAL) | パイプライン稼働状態（10プロセス、自動検出RPC連携） |
 
 ### spy_messages カラム
 ```
@@ -204,6 +210,9 @@ created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
 | detect_new_paying_users | (account_id, cast_name, since) | 新規課金ユーザー検出 |
 | get_user_acquisition_dashboard | (account_id, cast_name, days, min_coins, max_coins) | ユーザー獲得ダッシュボード（DM効果+セグメント） |
 | search_users_bulk | (account_id, cast_name, user_names[]) | 複数ユーザー一括検索（完全一致+該当なし対応） |
+| check_data_integrity | (p_valid_since) | 16項目データ整合性チェック（JSONB返却） |
+| update_pipeline_auto_status | () | SPY/コイン同期/DM最新タイムスタンプから pipeline_status 自動更新 |
+| update_pipeline_timestamp | () | pipeline_status updated_at 自動更新トリガー関数 |
 
 ### ヘルパー関数（001_initial_schema.sql）
 | 関数 | 説明 |
@@ -335,6 +344,7 @@ AuthProvider (onAuthStateChange監視)
 | /reports | app/reports/page.tsx | 実装済み（AIレポート） |
 | /feed | app/feed/page.tsx | 実装済み（フィード） |
 | /settings | app/settings/page.tsx | 実装済み（セキュリティ・設定） |
+| /admin/command-center | app/admin/command-center/page.tsx | 実装済み（Wisteria 4タブ、pipeline_status連携、60sポーリング） |
 
 ---
 

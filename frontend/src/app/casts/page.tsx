@@ -16,20 +16,18 @@ interface CastStats {
   last_activity: string | null;
 }
 
-interface PaidUserStats {
+interface WeeklyCoinStats {
   cast_name: string;
-  total_coins: number;
-  user_count: number;
+  this_week: number;
+  last_week: number;
 }
 
 interface CastWithStats extends RegisteredCast {
   total_messages: number;
-  total_coins: number;      // paid_users基準
-  unique_users: number;      // paid_users基準
+  this_week_coins: number;
+  last_week_coins: number;
   last_activity: string | null;
   tip_count: number;
-  spy_coins: number;         // spy_messages基準（参考）
-  spy_users: number;         // spy_messages基準（参考）
 }
 
 export default function CastsPage() {
@@ -38,7 +36,7 @@ export default function CastsPage() {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [registeredCasts, setRegisteredCasts] = useState<RegisteredCast[]>([]);
   const [castStats, setCastStats] = useState<CastStats[]>([]);
-  const [paidStats, setPaidStats] = useState<PaidUserStats[]>([]);
+  const [weeklyStats, setWeeklyStats] = useState<WeeklyCoinStats[]>([]);
   const [loading, setLoading] = useState(true);
   const [coinRate] = useState(7.7);
 
@@ -54,6 +52,14 @@ export default function CastsPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editNotes, setEditNotes] = useState('');
+  const [editGenre, setEditGenre] = useState('');
+  const [editBenchmark, setEditBenchmark] = useState('');
+  const [editCategory, setEditCategory] = useState('');
+
+  // Tag presets
+  const GENRE_PRESETS = ['女性単体', '絡み配信', 'カップル', 'レズ', '3P+', '男性単体'];
+  const BENCHMARK_PRESETS = ['新人', '中堅', 'ランカー', 'ベテラン'];
+  const CATEGORY_PRESETS = ['人妻', '女子大生', 'ギャル', 'お姉さん', '清楚系', '熟女', 'コスプレ', 'その他'];
 
   // アカウント一覧を取得
   useEffect(() => {
@@ -98,56 +104,64 @@ export default function CastsPage() {
         });
         setCastStats((stats || []) as CastStats[]);
 
-        // paid_usersから売上データ（総コイン、ユーザー数）
-        const { data: paidRows } = await supabase
-          .from('paid_users')
-          .select('cast_name, total_coins')
+        // coin_transactionsから今週・前週のコイン集計
+        const now = new Date();
+        const day = now.getDay(); // 0=日, 1=月, ...
+        const diffToMon = day === 0 ? 6 : day - 1;
+        const thisWeekStart = new Date(now);
+        thisWeekStart.setDate(now.getDate() - diffToMon);
+        thisWeekStart.setHours(0, 0, 0, 0);
+        const lastWeekStart = new Date(thisWeekStart);
+        lastWeekStart.setDate(thisWeekStart.getDate() - 7);
+
+        const { data: coinRows } = await supabase
+          .from('coin_transactions')
+          .select('cast_name, tokens, date')
           .eq('account_id', selectedAccount)
           .in('cast_name', castNames)
-          .gt('total_coins', 0);
+          .gte('date', lastWeekStart.toISOString());
 
-        // cast_name別に集計
-        const paidMap = new Map<string, { total_coins: number; user_count: number }>();
-        (paidRows || []).forEach((row: { cast_name: string; total_coins: number }) => {
-          const prev = paidMap.get(row.cast_name) || { total_coins: 0, user_count: 0 };
-          paidMap.set(row.cast_name, {
-            total_coins: prev.total_coins + (row.total_coins || 0),
-            user_count: prev.user_count + 1,
-          });
+        const weeklyMap = new Map<string, { this_week: number; last_week: number }>();
+        (coinRows || []).forEach((row: { cast_name: string; tokens: number; date: string }) => {
+          const prev = weeklyMap.get(row.cast_name) || { this_week: 0, last_week: 0 };
+          const rowDate = new Date(row.date);
+          if (rowDate >= thisWeekStart) {
+            prev.this_week += row.tokens || 0;
+          } else {
+            prev.last_week += row.tokens || 0;
+          }
+          weeklyMap.set(row.cast_name, prev);
         });
-        const paidArr: PaidUserStats[] = Array.from(paidMap.entries()).map(([cast_name, v]) => ({
+        const weeklyArr: WeeklyCoinStats[] = Array.from(weeklyMap.entries()).map(([cast_name, v]) => ({
           cast_name, ...v,
         }));
-        setPaidStats(paidArr);
+        setWeeklyStats(weeklyArr);
 
         setLoading(false);
       });
   }, [selectedAccount]);
 
-  // registered_casts + SPY stats + paid_users stats を結合
+  // registered_casts + SPY stats + weekly coin stats を結合
   const castsWithStats = useMemo((): CastWithStats[] => {
     return registeredCasts.map(cast => {
       const spy = castStats.find(s => s.cast_name === cast.cast_name);
-      const paid = paidStats.find(s => s.cast_name === cast.cast_name);
+      const weekly = weeklyStats.find(s => s.cast_name === cast.cast_name);
       return {
         ...cast,
         total_messages: spy?.total_messages || 0,
-        total_coins: paid?.total_coins || 0,        // paid_users基準
-        unique_users: paid?.user_count || 0,          // paid_users基準
+        this_week_coins: weekly?.this_week || 0,
+        last_week_coins: weekly?.last_week || 0,
         last_activity: spy?.last_activity || null,
         tip_count: spy?.total_tips || 0,
-        spy_coins: spy?.total_coins || 0,
-        spy_users: spy?.unique_users || 0,
       };
     });
-  }, [registeredCasts, castStats, paidStats]);
+  }, [registeredCasts, castStats, weeklyStats]);
 
   // 全体統計
   const totals = useMemo(() => ({
     casts: castsWithStats.length,
-    messages: castsWithStats.reduce((s, c) => s + c.total_messages, 0),
-    coins: castsWithStats.reduce((s, c) => s + c.total_coins, 0),
-    users: castsWithStats.reduce((s, c) => s + c.unique_users, 0),
+    thisWeekCoins: castsWithStats.reduce((s, c) => s + c.this_week_coins, 0),
+    lastWeekCoins: castsWithStats.reduce((s, c) => s + c.last_week_coins, 0),
   }), [castsWithStats]);
 
   // キャスト登録
@@ -192,6 +206,9 @@ export default function CastsPage() {
       .update({
         display_name: editDisplayName.trim() || null,
         notes: editNotes.trim() || null,
+        genre: editGenre || null,
+        benchmark: editBenchmark || null,
+        category: editCategory || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', castId);
@@ -199,12 +216,12 @@ export default function CastsPage() {
     if (error) return;
     setRegisteredCasts(prev =>
       prev.map(c => c.id === castId
-        ? { ...c, display_name: editDisplayName.trim() || null, notes: editNotes.trim() || null }
+        ? { ...c, display_name: editDisplayName.trim() || null, notes: editNotes.trim() || null, genre: editGenre || null, benchmark: editBenchmark || null, category: editCategory || null }
         : c
       )
     );
     setEditingId(null);
-  }, [editDisplayName, editNotes]);
+  }, [editDisplayName, editNotes, editGenre, editBenchmark, editCategory]);
 
   // キャスト非活性化
   const handleDeactivate = useCallback(async (castId: number, castName: string) => {
@@ -282,24 +299,35 @@ export default function CastsPage() {
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="glass-card p-4 text-center">
-          <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>{totals.casts}</p>
-          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>登録キャスト数</p>
-        </div>
-        <div className="glass-card p-4 text-center">
-          <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(totals.coins)}</p>
-          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>総コイン（名簿）</p>
-        </div>
-        <div className="glass-card p-4 text-center">
-          <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(totals.coins, coinRate)}</p>
-          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>推定売上</p>
-        </div>
-        <div className="glass-card p-4 text-center">
-          <p className="text-2xl font-bold" style={{ color: 'var(--accent-purple, #a855f7)' }}>{totals.users}</p>
-          <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>ユニークユーザー</p>
-        </div>
-      </div>
+      {(() => {
+        const weekDiff = totals.lastWeekCoins > 0
+          ? ((totals.thisWeekCoins - totals.lastWeekCoins) / totals.lastWeekCoins * 100)
+          : totals.thisWeekCoins > 0 ? 100 : 0;
+        return (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="glass-card p-4 text-center">
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>{totals.casts}</p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>登録キャスト数</p>
+            </div>
+            <div className="glass-card p-4 text-center">
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(totals.thisWeekCoins)}</p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週のコイン</p>
+            </div>
+            <div className="glass-card p-4 text-center">
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(totals.thisWeekCoins, coinRate)}</p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週の推定売上</p>
+            </div>
+            <div className="glass-card p-4 text-center">
+              <p className="text-2xl font-bold" style={{
+                color: weekDiff > 0 ? 'var(--accent-green)' : weekDiff < 0 ? 'var(--accent-pink)' : 'var(--text-secondary)'
+              }}>
+                {weekDiff > 0 ? '▲' : weekDiff < 0 ? '▼' : '→'}{Math.abs(weekDiff).toFixed(0)}%
+              </p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比</p>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Cast List */}
       <div className="glass-card overflow-hidden">
@@ -318,92 +346,127 @@ export default function CastsPage() {
               <tr className="text-[10px] uppercase tracking-wider"
                 style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border-glass)' }}>
                 <th className="text-left px-5 py-3 font-semibold">キャスト</th>
-                <th className="text-right px-4 py-3 font-semibold">メッセージ</th>
-                <th className="text-right px-4 py-3 font-semibold">チップ数</th>
-                <th className="text-right px-4 py-3 font-semibold">総コイン</th>
-                <th className="text-right px-4 py-3 font-semibold">推定売上</th>
-                <th className="text-right px-4 py-3 font-semibold">ユーザー</th>
+                <th className="text-left px-3 py-3 font-semibold">タグ</th>
+                <th className="text-right px-4 py-3 font-semibold">今週コイン</th>
+                <th className="text-right px-4 py-3 font-semibold">今週売上</th>
+                <th className="text-right px-4 py-3 font-semibold">前週コイン</th>
+                <th className="text-right px-4 py-3 font-semibold">前週比</th>
                 <th className="text-right px-4 py-3 font-semibold">最終活動</th>
                 <th className="text-center px-3 py-3 font-semibold">操作</th>
               </tr>
             </thead>
             <tbody>
-              {castsWithStats.map((cast, i) => (
-                <tr key={cast.id}
-                  className="text-xs hover:bg-white/[0.02] transition-colors"
-                  style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                  <td className="px-5 py-3">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-bold w-6 text-center" style={{
-                        color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
-                      }}>{i + 1}</span>
+              {castsWithStats.map((cast, i) => {
+                const diff = cast.last_week_coins > 0
+                  ? ((cast.this_week_coins - cast.last_week_coins) / cast.last_week_coins * 100)
+                  : cast.this_week_coins > 0 ? 100 : 0;
+                return (
+                  <tr key={cast.id}
+                    className="text-xs hover:bg-white/[0.02] transition-colors"
+                    style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold w-6 text-center" style={{
+                          color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
+                        }}>{i + 1}</span>
+                        {editingId === cast.id ? (
+                          <div className="flex-1 min-w-0">
+                            <span className="font-semibold">{cast.cast_name}</span>
+                            <input type="text" value={editDisplayName} onChange={e => setEditDisplayName(e.target.value)}
+                              className="input-glass text-[11px] w-full mt-1 py-1 px-2" placeholder="表示名" />
+                            <input type="text" value={editNotes} onChange={e => setEditNotes(e.target.value)}
+                              className="input-glass text-[11px] w-full mt-1 py-1 px-2" placeholder="メモ" />
+                          </div>
+                        ) : (
+                          <Link href={`/casts/${encodeURIComponent(cast.cast_name)}`}
+                            className="min-w-0 hover:opacity-80 transition-opacity">
+                            <span className="font-semibold" style={{ color: 'var(--accent-primary)' }}>{cast.cast_name}</span>
+                            {cast.display_name && (
+                              <span className="ml-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                ({cast.display_name})
+                              </span>
+                            )}
+                            {cast.notes && (
+                              <p className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>
+                                {cast.notes}
+                              </p>
+                            )}
+                          </Link>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
                       {editingId === cast.id ? (
-                        <div className="flex-1 min-w-0">
-                          <span className="font-semibold">{cast.cast_name}</span>
-                          <input type="text" value={editDisplayName} onChange={e => setEditDisplayName(e.target.value)}
-                            className="input-glass text-[11px] w-full mt-1 py-1 px-2" placeholder="表示名" />
-                          <input type="text" value={editNotes} onChange={e => setEditNotes(e.target.value)}
-                            className="input-glass text-[11px] w-full mt-1 py-1 px-2" placeholder="メモ" />
+                        <div className="flex flex-col gap-1">
+                          <select value={editGenre} onChange={e => setEditGenre(e.target.value)}
+                            className="text-[10px] px-1.5 py-0.5 rounded border outline-none"
+                            style={{ background: 'rgba(15,23,42,0.6)', borderColor: 'var(--border-glass)', color: 'var(--text-primary)' }}>
+                            <option value="">ジャンル</option>
+                            {GENRE_PRESETS.map(g => <option key={g} value={g}>{g}</option>)}
+                          </select>
+                          <select value={editBenchmark} onChange={e => setEditBenchmark(e.target.value)}
+                            className="text-[10px] px-1.5 py-0.5 rounded border outline-none"
+                            style={{ background: 'rgba(15,23,42,0.6)', borderColor: 'var(--border-glass)', color: 'var(--text-primary)' }}>
+                            <option value="">ベンチマーク</option>
+                            {BENCHMARK_PRESETS.map(b => <option key={b} value={b}>{b}</option>)}
+                          </select>
+                          <select value={editCategory} onChange={e => setEditCategory(e.target.value)}
+                            className="text-[10px] px-1.5 py-0.5 rounded border outline-none"
+                            style={{ background: 'rgba(15,23,42,0.6)', borderColor: 'var(--border-glass)', color: 'var(--text-primary)' }}>
+                            <option value="">カテゴリ</option>
+                            {CATEGORY_PRESETS.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
                         </div>
                       ) : (
-                        <Link href={`/casts/${encodeURIComponent(cast.cast_name)}`}
-                          className="min-w-0 hover:opacity-80 transition-opacity">
-                          <span className="font-semibold" style={{ color: 'var(--accent-primary)' }}>{cast.cast_name}</span>
-                          {cast.display_name && (
-                            <span className="ml-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                              ({cast.display_name})
-                            </span>
-                          )}
-                          {cast.notes && (
-                            <p className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>
-                              {cast.notes}
-                            </p>
-                          )}
-                        </Link>
+                        <div className="flex flex-wrap gap-0.5">
+                          {cast.genre && <span className="text-[8px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap" style={{ color: '#38bdf8', background: 'rgba(56,189,248,0.12)' }}>{cast.genre}</span>}
+                          {cast.benchmark && <span className="text-[8px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap" style={{ color: '#22c55e', background: 'rgba(34,197,94,0.12)' }}>{cast.benchmark}</span>}
+                          {cast.category && <span className="text-[8px] px-1.5 py-0.5 rounded font-semibold whitespace-nowrap" style={{ color: '#a78bfa', background: 'rgba(167,139,250,0.12)' }}>{cast.category}</span>}
+                          {!cast.genre && !cast.benchmark && !cast.category && <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>-</span>}
+                        </div>
                       )}
-                    </div>
-                  </td>
-                  <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                    {cast.total_messages.toLocaleString()}
-                  </td>
-                  <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                    {cast.tip_count.toLocaleString()}
-                  </td>
-                  <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                    {formatTokens(cast.total_coins)}
-                  </td>
-                  <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--accent-green)' }}>
-                    {tokensToJPY(cast.total_coins, coinRate)}
-                  </td>
-                  <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--accent-purple, #a855f7)' }}>
-                    {cast.unique_users}
-                  </td>
-                  <td className="text-right px-4 py-3" style={{ color: 'var(--text-muted)' }}>
-                    {cast.last_activity ? timeAgo(cast.last_activity) : '--'}
-                  </td>
-                  <td className="text-center px-3 py-3">
-                    {editingId === cast.id ? (
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => handleSaveEdit(cast.id)}
-                          className="text-[10px] px-2 py-1 rounded-lg hover:bg-emerald-500/10 transition-all"
-                          style={{ color: 'var(--accent-green)' }}>保存</button>
-                        <button onClick={() => setEditingId(null)}
-                          className="text-[10px] px-2 py-1 rounded-lg hover:bg-white/5 transition-all"
-                          style={{ color: 'var(--text-muted)' }}>取消</button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-center gap-1">
-                        <button onClick={() => { setEditingId(cast.id); setEditDisplayName(cast.display_name || ''); setEditNotes(cast.notes || ''); }}
-                          className="p-1.5 rounded-lg hover:bg-white/5 transition-all text-[11px]"
-                          style={{ color: 'var(--accent-primary)' }}>編集</button>
-                        <button onClick={() => handleDeactivate(cast.id, cast.cast_name)}
-                          className="p-1.5 rounded-lg hover:bg-rose-500/10 transition-all text-[11px]"
-                          style={{ color: 'var(--accent-pink)' }}>削除</button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                      {formatTokens(cast.this_week_coins)}
+                    </td>
+                    <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--accent-green)' }}>
+                      {tokensToJPY(cast.this_week_coins, coinRate)}
+                    </td>
+                    <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--text-secondary)' }}>
+                      {formatTokens(cast.last_week_coins)}
+                    </td>
+                    <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{
+                      color: diff > 0 ? 'var(--accent-green)' : diff < 0 ? 'var(--accent-pink)' : 'var(--text-muted)'
+                    }}>
+                      {diff > 0 ? '▲' : diff < 0 ? '▼' : '→'}{Math.abs(diff).toFixed(0)}%
+                    </td>
+                    <td className="text-right px-4 py-3" style={{ color: 'var(--text-muted)' }}>
+                      {cast.last_activity ? timeAgo(cast.last_activity) : '--'}
+                    </td>
+                    <td className="text-center px-3 py-3">
+                      {editingId === cast.id ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => handleSaveEdit(cast.id)}
+                            className="text-[10px] px-2 py-1 rounded-lg hover:bg-emerald-500/10 transition-all"
+                            style={{ color: 'var(--accent-green)' }}>保存</button>
+                          <button onClick={() => setEditingId(null)}
+                            className="text-[10px] px-2 py-1 rounded-lg hover:bg-white/5 transition-all"
+                            style={{ color: 'var(--text-muted)' }}>取消</button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={() => { setEditingId(cast.id); setEditDisplayName(cast.display_name || ''); setEditNotes(cast.notes || ''); setEditGenre(cast.genre || ''); setEditBenchmark(cast.benchmark || ''); setEditCategory(cast.category || ''); }}
+                            className="p-1.5 rounded-lg hover:bg-white/5 transition-all text-[11px]"
+                            style={{ color: 'var(--accent-primary)' }}>編集</button>
+                          <button onClick={() => handleDeactivate(cast.id, cast.cast_name)}
+                            className="p-1.5 rounded-lg hover:bg-rose-500/10 transition-all text-[11px]"
+                            style={{ color: 'var(--accent-pink)' }}>削除</button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

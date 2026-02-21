@@ -4,7 +4,7 @@
  * 状態は chrome.storage.local に永続化し、ポップアップ再開時に復元
  */
 
-const DEFAULT_API_URL = 'http://localhost:8000';
+const DEFAULT_API_URL = 'https://pseudofinally-glaiked-john.ngrok-free.dev';
 const SUPABASE_URL = 'https://ujgbhkllfeacbgpdbjto.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_kt56F7VPKZyFIoja-UGHeQ_YVMEQdAZ';
 
@@ -29,6 +29,7 @@ const apiUrlInputLogin = $('apiUrlInputLogin');
 const saveSettingsBtn = $('saveSettingsBtn');
 const saveSettingsBtnLogin = $('saveSettingsBtnLogin');
 const logoutBtn = $('logoutBtn');
+const coinSyncCastSelect = $('coinSyncCastSelect');
 
 // ============================================================
 // Supabase Auth via REST API
@@ -194,6 +195,50 @@ async function loadAccounts() {
   }
 }
 
+async function loadCastsForSync() {
+  const data = await chrome.storage.local.get(['access_token', 'account_id']);
+  if (!data.access_token || !data.account_id) {
+    coinSyncCastSelect.innerHTML = '<option value="">アカウント未選択</option>';
+    return;
+  }
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${data.account_id}&is_active=eq.true&select=cast_name,display_name`,
+      {
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${data.access_token}`,
+        },
+      }
+    );
+    if (!res.ok) {
+      coinSyncCastSelect.innerHTML = '<option value="">取得失敗</option>';
+      return;
+    }
+    const casts = await res.json();
+    coinSyncCastSelect.innerHTML = '<option value="">キャストを選択</option>';
+    casts.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.cast_name;
+      opt.textContent = c.display_name || c.cast_name;
+      coinSyncCastSelect.appendChild(opt);
+    });
+    // 保存済み選択を復元
+    const saved = await chrome.storage.local.get(['last_sync_cast_name']);
+    if (saved.last_sync_cast_name) {
+      coinSyncCastSelect.value = saved.last_sync_cast_name;
+    }
+    // キャスト1件のみなら自動選択
+    if (casts.length === 1) {
+      coinSyncCastSelect.value = casts[0].cast_name;
+      await chrome.storage.local.set({ last_sync_cast_name: casts[0].cast_name });
+    }
+  } catch (e) {
+    console.error('[LSP] キャスト取得エラー:', e.message);
+    coinSyncCastSelect.innerHTML = '<option value="">エラー</option>';
+  }
+}
+
 function loadDMQueueCount() {
   chrome.runtime.sendMessage({ type: 'GET_DM_QUEUE' }, (response) => {
     if (chrome.runtime.lastError) return;
@@ -336,6 +381,7 @@ async function init() {
 
     showDashboard();
     loadAccounts();
+    loadCastsForSync();
     loadDMQueueCount();
     loadSpyMsgCount();
 
@@ -465,6 +511,16 @@ accountSelect.addEventListener('change', () => {
     chrome.storage.local.set({ account_id: id });
     chrome.runtime.sendMessage({ type: 'SET_ACCOUNT', account_id: id });
     loadDMQueueCount();
+    loadCastsForSync();
+  }
+});
+
+// --- Coin Sync Cast Selection ---
+coinSyncCastSelect.addEventListener('change', () => {
+  const castName = coinSyncCastSelect.value;
+  if (castName) {
+    chrome.storage.local.set({ last_sync_cast_name: castName });
+    console.log('[LSP] 同期先キャスト選択:', castName);
   }
 });
 
@@ -523,6 +579,18 @@ $('sttToggleBtn').addEventListener('click', async () => {
 $('coinSyncBtn').addEventListener('click', async () => {
   const btn = $('coinSyncBtn');
   const statusEl = $('coinSyncStatus');
+
+  // キャスト未選択チェック
+  const selectedCast = coinSyncCastSelect.value;
+  if (!selectedCast) {
+    statusEl.innerHTML = '<span style="color:#f43f5e;">キャストを選択してください</span>';
+    statusEl.classList.remove('hidden');
+    return;
+  }
+
+  // 選択を保存してから同期実行
+  await chrome.storage.local.set({ last_sync_cast_name: selectedCast });
+
   btn.disabled = true;
   btn.textContent = '同期中...';
   statusEl.innerHTML = '<span style="color:#f59e0b;">● 取得中...</span>';

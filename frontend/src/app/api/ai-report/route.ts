@@ -144,7 +144,7 @@ async function generateSessionReport(token: string, sessionId: string) {
   const uniqueUsers = new Set(msgs.map(m => m.user_name).filter(Boolean)).size;
 
   // 3. チップ集計
-  const tipMsgs = msgs.filter(m => m.tokens && m.tokens > 0);
+  const tipMsgs = msgs.filter(m => (m.msg_type === 'tip' || m.msg_type === 'gift') && m.tokens && m.tokens > 0);
   const totalTokens = tipMsgs.reduce((s, m) => s + (m.tokens || 0), 0);
 
   // トップチッパー

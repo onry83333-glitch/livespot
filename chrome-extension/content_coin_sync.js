@@ -391,7 +391,7 @@ function parseTransaction(tx) {
     id: txId,
     userName: userName,
     userId: userInfo.id ?? tx.userId ?? tx.user_id ?? 0,
-    tokens: tx.tokens ?? 0,
+    tokens: Math.max(0, tx.tokens ?? 0),
     amount: tx.amount ?? 0,
     type: tx.type || tx.transaction_type || tx.transactionType || tx.category || '',
     date: tx.date || tx.created_at || tx.createdAt || tx.timestamp || '',
