@@ -105,6 +105,7 @@ interface ScreenshotItem {
   filename: string;
   storage_path: string | null;
   captured_at: string;
+  signedUrl?: string | null;
 }
 
 interface AcquisitionUser {
@@ -1082,15 +1083,36 @@ function CastDetailInner() {
   useEffect(() => {
     if (!accountId || activeTab !== 'screenshots') return;
     setScreenshotsLoading(true);
-    sb.from('screenshots')
-      .select('id, cast_name, session_id, filename, storage_path, captured_at')
-      .eq('cast_name', castName)
-      .order('captured_at', { ascending: false })
-      .limit(100)
-      .then(({ data, error }) => {
-        if (!error && data) setScreenshots(data as ScreenshotItem[]);
+    (async () => {
+      const { data, error } = await sb.from('screenshots')
+        .select('id, cast_name, session_id, filename, storage_path, captured_at')
+        .eq('cast_name', castName)
+        .order('captured_at', { ascending: false })
+        .limit(100);
+
+      if (error || !data) {
         setScreenshotsLoading(false);
-      });
+        return;
+      }
+
+      // storage_path から signed URL を一括生成（privateバケット対応）
+      const withUrls = await Promise.all(
+        (data as ScreenshotItem[]).map(async (ss) => {
+          if (!ss.storage_path) return ss;
+          // storage_path = "screenshots/castName/filename" — バケット名を除いたパスが必要
+          const pathInBucket = ss.storage_path.startsWith('screenshots/')
+            ? ss.storage_path.slice('screenshots/'.length)
+            : ss.storage_path;
+          const { data: signedData } = await sb.storage
+            .from('screenshots')
+            .createSignedUrl(pathInBucket, 3600); // 1時間有効
+          return { ...ss, signedUrl: signedData?.signedUrl || null };
+        })
+      );
+
+      setScreenshots(withUrls);
+      setScreenshotsLoading(false);
+    })();
   }, [accountId, castName, activeTab, sb]);
 
   // Retention stats
@@ -2858,15 +2880,13 @@ function CastDetailInner() {
                 ) : (
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                     {screenshots.map((ss) => {
-                      const publicUrl = ss.storage_path
-                        ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${ss.storage_path}`
-                        : null;
+                      const imageUrl = ss.signedUrl || null;
                       return (
                         <div key={ss.id} className="glass-panel rounded-xl overflow-hidden">
-                          {publicUrl ? (
-                            <a href={publicUrl} target="_blank" rel="noopener noreferrer">
+                          {imageUrl ? (
+                            <a href={imageUrl} target="_blank" rel="noopener noreferrer">
                               <img
-                                src={publicUrl}
+                                src={imageUrl}
                                 alt={ss.filename}
                                 className="w-full aspect-video object-cover hover:opacity-80 transition-opacity"
                                 loading="lazy"
