@@ -60,6 +60,9 @@ export default function CastsPage() {
   const [formSaving, setFormSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  // Live status
+  const [liveCastSet, setLiveCastSet] = useState<Set<string>>(new Set());
+
   // 編集モード
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDisplayName, setEditDisplayName] = useState('');
@@ -143,6 +146,23 @@ export default function CastsPage() {
           cast_name, ...v,
         }));
         setWeeklyStats(weeklyArr);
+
+        // Live status: check spy_messages recency per cast
+        const { data: spyRows } = await supabase
+          .from('spy_messages')
+          .select('cast_name, created_at')
+          .eq('account_id', selectedAccount)
+          .order('created_at', { ascending: false })
+          .limit(200);
+
+        const liveSet = new Set<string>();
+        (spyRows || []).forEach((m: { cast_name: string; created_at: string }) => {
+          if (m.cast_name) {
+            const minutesAgo = (Date.now() - new Date(m.created_at).getTime()) / 60000;
+            if (minutesAgo < 10) liveSet.add(m.cast_name);
+          }
+        });
+        setLiveCastSet(liveSet);
 
         setLoading(false);
       });
@@ -390,6 +410,12 @@ export default function CastsPage() {
                           <Link href={`/casts/${encodeURIComponent(cast.cast_name)}`}
                             className="min-w-0 hover:opacity-80 transition-opacity">
                             <span className="font-semibold" style={{ color: 'var(--accent-primary)' }}>{cast.cast_name}</span>
+                            {liveCastSet.has(cast.cast_name) && (
+                              <span className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold"
+                                style={{ background: 'rgba(244,63,94,0.15)', color: 'var(--accent-pink)' }}>
+                                LIVE
+                              </span>
+                            )}
                             {cast.display_name && (
                               <span className="ml-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
                                 ({cast.display_name})
@@ -436,13 +462,13 @@ export default function CastsPage() {
                       )}
                     </td>
                     <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                      {formatTokens(cast.this_week_coins)} tk
+                      {formatTokens(cast.this_week_coins)}
                     </td>
                     <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--accent-green)' }}>
                       {tokensToJPY(cast.this_week_coins, coinRate)}
                     </td>
                     <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                      {formatTokens(cast.last_week_coins)} tk
+                      {formatTokens(cast.last_week_coins)}
                     </td>
                     <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{
                       color: diff > 0 ? 'var(--accent-green)' : diff < 0 ? 'var(--accent-pink)' : 'var(--text-muted)'

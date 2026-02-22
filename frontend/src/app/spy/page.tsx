@@ -229,6 +229,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
   const [deletingCast, setDeletingCast] = useState<string | null>(null);
   const [registeredCastNames, setRegisteredCastNames] = useState<Set<string>>(new Set());
   const [spyCastNames, setSpyCastNames] = useState<Set<string>>(new Set());
+  const [castMonitorStatus, setCastMonitorStatus] = useState<Map<string, Date>>(new Map());
   const [castTagsMap, setCastTagsMap] = useState<Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }>>({});
   const { messages, allMessages, castNames, isConnected, insertDemoData, deleteCastMessages } = useRealtimeSpy({
     castName: selectedCast,
@@ -266,6 +267,23 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
               casts.forEach(c => { tagsMap[c.cast_name] = { genre: c.genre, benchmark: c.benchmark, category: c.category }; });
               setCastTagsMap(prev => ({ ...prev, ...tagsMap }));
             }
+          });
+
+        // Cast monitoring status: latest message per cast
+        whisperSbRef.current
+          .from('spy_messages')
+          .select('cast_name, created_at')
+          .eq('account_id', data.id)
+          .order('created_at', { ascending: false })
+          .limit(200)
+          .then(({ data: monitorData }) => {
+            const statusMap = new Map<string, Date>();
+            (monitorData || []).forEach((m: { cast_name: string; created_at: string }) => {
+              if (m.cast_name && !statusMap.has(m.cast_name)) {
+                statusMap.set(m.cast_name, new Date(m.created_at));
+              }
+            });
+            setCastMonitorStatus(statusMap);
           });
       }
     });
@@ -537,6 +555,31 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
           </div>
         </div>
       </div>
+
+      {/* Cast Monitoring Status */}
+      {castMonitorStatus.size > 0 && (
+        <div className="flex flex-wrap gap-2 flex-shrink-0">
+          {Array.from(castMonitorStatus.entries()).map(([name, lastTime]) => {
+            const minutesAgo = (Date.now() - lastTime.getTime()) / 60000;
+            const statusKey = minutesAgo < 5 ? 'live' : minutesAgo < 30 ? 'idle' : 'offline';
+            const colors = {
+              live: { bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.2)', text: '#22c55e', dot: 'bg-emerald-400 anim-live' },
+              idle: { bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.2)', text: '#f59e0b', dot: 'bg-amber-400' },
+              offline: { bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.2)', text: '#ef4444', dot: 'bg-red-400' },
+            }[statusKey];
+            return (
+              <div key={name} className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-2"
+                style={{ background: colors.bg, border: `1px solid ${colors.border}` }}>
+                <span className={`w-2 h-2 rounded-full ${colors.dot}`} />
+                <span style={{ color: colors.text }}>{name}</span>
+                <span style={{ color: 'var(--text-muted)' }} className="text-[10px]">
+                  {minutesAgo < 1 ? 'たった今' : `${Math.floor(minutesAgo)}分前`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Main Content */}
       <div className="flex-1 flex gap-3 overflow-hidden min-h-0">

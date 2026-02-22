@@ -33,6 +33,27 @@ export default function SettingsPage() {
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // === Chrome Extension Status ===
+  const [extensionStatus, setExtensionStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
+
+  useEffect(() => {
+    const check = async () => {
+      const { data } = await sb.from('spy_messages')
+        .select('created_at')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (data && data.length > 0) {
+        const lastTime = new Date(data[0].created_at);
+        const minutesAgo = (Date.now() - lastTime.getTime()) / 60000;
+        setExtensionStatus(minutesAgo < 30 ? 'connected' : 'disconnected');
+      } else {
+        setExtensionStatus('disconnected');
+      }
+    };
+    check();
+  }, [sb]);
+
   // === Security (existing mock) ===
   const [banProtection, setBanProtection] = useState(true);
   const [burstMode, setBurstMode] = useState(false);
@@ -110,6 +131,27 @@ export default function SettingsPage() {
           <h1 className="text-xl font-bold">Settings</h1>
           <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
             アカウント設定・セキュリティ管理
+          </p>
+        </div>
+      </div>
+
+      {/* Chrome Extension Status */}
+      <div className="glass-card p-3 flex items-center gap-3">
+        <span className={`w-2.5 h-2.5 rounded-full ${
+          extensionStatus === 'connected' ? 'bg-emerald-500 anim-live' :
+          extensionStatus === 'disconnected' ? 'bg-rose-500' :
+          'bg-slate-500 animate-pulse'
+        }`} />
+        <div>
+          <p className="text-xs font-medium">
+            Chrome拡張: {extensionStatus === 'connected' ? '接続中' : extensionStatus === 'disconnected' ? '未接続' : '確認中...'}
+          </p>
+          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            {extensionStatus === 'connected'
+              ? 'SPYデータを受信中'
+              : extensionStatus === 'disconnected'
+                ? 'データ受信なし — Chrome拡張が稼働中か確認してください'
+                : '接続状態を確認しています...'}
           </p>
         </div>
       </div>
