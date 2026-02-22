@@ -265,6 +265,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === 'whisper-poll') {
     pollWhispers();
   }
+
+  // セッション同期（1時間ごと）
+  if (alarm.name === 'sessionSync') {
+    exportSessionCookie().catch(e => {
+      console.warn('[LS-BG] SessionSync: エクスポート失敗:', e.message);
+    });
+  }
 });
 
 // STTタブの古いエントリをクリーンアップ（60秒以上チャンクなし）
@@ -2573,6 +2580,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       // スクリーンショットタイマー開始
       startScreenshotCapture();
+      // SPY開始時にもセッション同期
+      exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync(SPY start):', e.message));
       // SPY開始時にaccountIdが未設定なら警告
       if (!accountId) {
         console.warn('[LS-BG] 注意: SPY有効化されたがaccountId未設定 メッセージはバッファされflush時に付与');
@@ -4786,6 +4795,113 @@ async function uploadScreenshot(castName, dataUrl) {
 }
 
 // ============================================================
+// Session Cookie Export — Stripchatセッション情報をSupabaseに同期
+// ============================================================
+
+/**
+ * Stripchatセッションクッキーと認証情報をSupabaseにエクスポート
+ * DM API送信で使用するセッション情報を保存
+ */
+async function exportSessionCookie() {
+  if (!accessToken || !accountId) {
+    console.log('[LS-BG] SessionExport: accessToken or accountId missing, skipping');
+    return;
+  }
+
+  try {
+    // 1. Stripchat sessionId クッキー取得
+    const sessionCookie = await chrome.cookies.get({
+      url: 'https://stripchat.com',
+      name: 'stripchat_com_sessionId'
+    });
+    if (!sessionCookie || !sessionCookie.value) {
+      console.warn('[LS-BG] SessionExport: sessionId cookie not found');
+      return;
+    }
+
+    // 2. userId クッキー取得
+    const userIdCookie = await chrome.cookies.get({
+      url: 'https://stripchat.com',
+      name: 'stripchat_com_userId'
+    });
+    const stripchatUserId = userIdCookie?.value || null;
+
+    // 3. 全Stripchatクッキーを取得してJSON化
+    const allCookies = await chrome.cookies.getAll({ domain: '.stripchat.com' });
+    const cookiesJson = {};
+    for (const c of allCookies) {
+      cookiesJson[c.name] = c.value;
+    }
+
+    // 4. csrfToken取得を試行（/api/front/v2/config から）
+    let csrfToken = null;
+    let csrfTimestamp = null;
+    let frontVersion = '11.5.57';
+    try {
+      const configRes = await fetch('https://ja.stripchat.com/api/front/v2/config', {
+        headers: {
+          'Accept': 'application/json',
+          'Cookie': `stripchat_com_sessionId=${sessionCookie.value}`,
+        },
+      });
+      if (configRes.ok) {
+        const configData = await configRes.json();
+        csrfToken = configData?.csrfToken || configData?.config?.csrfToken || null;
+        csrfTimestamp = configData?.csrfTimestamp || configData?.config?.csrfTimestamp || null;
+        frontVersion = configData?.frontVersion || configData?.config?.frontVersion || frontVersion;
+        console.log('[LS-BG] SessionExport: config取得成功, csrf:', !!csrfToken, 'frontVersion:', frontVersion);
+      }
+    } catch (e) {
+      console.warn('[LS-BG] SessionExport: config取得失敗:', e.message);
+    }
+
+    // 5. Supabaseにupsert
+    const expiresAt = sessionCookie.expirationDate
+      ? new Date(sessionCookie.expirationDate * 1000).toISOString()
+      : null;
+
+    const body = {
+      account_id: accountId,
+      session_cookie: sessionCookie.value,
+      csrf_token: csrfToken,
+      csrf_timestamp: csrfTimestamp,
+      stripchat_user_id: stripchatUserId,
+      front_version: frontVersion,
+      cookies_json: cookiesJson,
+      is_valid: true,
+      last_validated_at: new Date().toISOString(),
+      exported_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    };
+
+    const upsertRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?on_conflict=account_id`,
+      {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify(body),
+      }
+    );
+
+    if (upsertRes.ok) {
+      console.log('[LS-BG] SessionExport: セッション同期完了',
+        `userId=${stripchatUserId}, csrf=${!!csrfToken}, expires=${expiresAt || 'unknown'}`);
+    } else {
+      const errText = await upsertRes.text().catch(() => '');
+      console.warn('[LS-BG] SessionExport: upsert失敗:', upsertRes.status, errText);
+    }
+  } catch (err) {
+    console.error('[LS-BG] SessionExport: エラー:', err.message);
+  }
+}
+
+// ============================================================
 // Lifecycle
 // ============================================================
 console.log('[LS-BG] === Service Worker起動 ===');
@@ -4804,6 +4920,9 @@ restoreBuffers().then(() => {
       initAutoPatrol(); // SPY自動巡回の初期化
       initSpyRotation(); // 他社SPYローテーション初期化
       if (spyEnabled) startScreenshotCapture(); // SW再起動時にSPY有効ならスクショ再開
+      // セッション同期: 1時間ごと + 即時1回
+      chrome.alarms.create('sessionSync', { periodInMinutes: 60 });
+      exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync初回:', e.message));
       console.log('[LS-BG] 初期化完了 DM/Whisperポーリング開始');
       // SW再起動時: currentSessionIdが復元されていたらsessionsレコード存在チェック
       if (currentSessionId) {
