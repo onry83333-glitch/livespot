@@ -31,6 +31,7 @@ export interface StripchatSession {
   csrf_timestamp: string | null;
   stripchat_user_id: string | null;
   front_version: string | null;
+  jwt_token: string | null;
   is_valid: boolean;
   last_validated_at: string;
   exported_at: string;
@@ -76,6 +77,16 @@ export interface DMEffectiveness {
   reconverted_count: number;
   conversion_rate: number;
   reconverted_tokens: number;
+}
+
+export interface DMFunnel {
+  campaign: string;
+  dm_sent_count: number;
+  visited_count: number;
+  visit_rate: number;
+  paid_count: number;
+  conversion_rate: number;
+  total_tokens: number;
 }
 
 export interface DMScenario {
@@ -143,6 +154,21 @@ export interface Session {
   total_coins: number;
   unique_users: number;
   created_at: string;
+}
+
+export interface SpyViewer {
+  id: number;
+  account_id: string;
+  cast_name: string;
+  session_id: string | null;
+  user_name: string;
+  user_id_stripchat: string | null;
+  league: string | null;
+  level: number | null;
+  is_fan_club: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+  visit_count: number;
 }
 
 export interface VIPAlert {

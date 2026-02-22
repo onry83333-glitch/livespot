@@ -6,6 +6,7 @@ import { useAuth } from '@/components/auth-provider';
 
 import { createClient } from '@/lib/supabase/client';
 import { tokensToJPY } from '@/lib/utils';
+import type { DMFunnel } from '@/types';
 
 /* ============================================================
    Constants
@@ -190,6 +191,9 @@ export default function DmPage() {
   const [campaignStats, setCampaignStats] = useState<{ campaign: string; total: number; success: number; error: number; rate: number }[]>([]);
   const [campaignStatsLoading, setCampaignStatsLoading] = useState(false);
 
+  // === DMファネル state ===
+  const [funnelData, setFunnelData] = useState<DMFunnel[]>([]);
+
   // === API offline state ===
   const [apiOffline, setApiOffline] = useState(false);
 
@@ -256,6 +260,21 @@ export default function DmPage() {
         setCampaignStatsLoading(false);
       });
   }, [selectedAccount, sb]);
+
+  // === DMファネル分析データ取得 ===
+  useEffect(() => {
+    if (!selectedAccount) return;
+    const acct = accounts.find(a => a.id === selectedAccount);
+    const castName = acct?.cast_usernames?.[0] || null;
+    const fetchFunnel = async () => {
+      const { data } = await sb.rpc('get_dm_funnel', {
+        p_account_id: selectedAccount,
+        p_cast_name: castName,
+      });
+      if (data) setFunnelData(data);
+    };
+    fetchFunnel();
+  }, [selectedAccount, accounts, sb]);
 
   // === URL preset handling (Task 3) ===
   useEffect(() => {
@@ -961,6 +980,45 @@ export default function DmPage() {
               </div>
             )}
           </div>
+
+          {/* DMファネル分析 */}
+          {funnelData.length > 0 && (
+            <div className="glass-card p-4">
+              <h3 className="text-sm font-medium text-sky-300 mb-3">DMファネル分析</h3>
+              <div className="space-y-2">
+                {funnelData.map((f) => (
+                  <div key={f.campaign} className="glass-panel p-3">
+                    <div className="text-xs text-slate-400 mb-2">{f.campaign || '(キャンペーン名なし)'}</div>
+                    <div className="flex items-center gap-2 text-sm">
+                      {/* DM送信 */}
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-slate-200">{f.dm_sent_count}</div>
+                        <div className="text-[10px] text-slate-500">DM送信</div>
+                      </div>
+                      <div className="text-slate-600">&rarr;</div>
+                      {/* 来訪 */}
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-sky-400">{f.visited_count}</div>
+                        <div className="text-[10px] text-slate-500">来訪 ({f.visit_rate}%)</div>
+                      </div>
+                      <div className="text-slate-600">&rarr;</div>
+                      {/* 課金 */}
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-green-400">{f.paid_count}</div>
+                        <div className="text-[10px] text-slate-500">課金 ({f.conversion_rate}%)</div>
+                      </div>
+                      <div className="text-slate-600">&rarr;</div>
+                      {/* トークン */}
+                      <div className="text-center">
+                        <div className="text-lg font-bold text-amber-400">{f.total_tokens.toLocaleString()}</div>
+                        <div className="text-[10px] text-slate-500">tk</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
