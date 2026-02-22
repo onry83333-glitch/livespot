@@ -648,7 +648,8 @@ function CastDetailInner() {
       });
       if (rpcErr) throw rpcErr;
       // プラン上限チェック — 警告表示のみ（送信は継続）
-      if (data?.error && !data?.batch_id) { setDmError(`${data.error} (使用済み: ${data.used}/${data.limit})`); setDmSending(false); return; }
+      if (data?.error && !data?.batch_id) { setDmError(`⚠ ${data.error} (使用済み: ${data.used}/${data.limit})`); }
+      if (!data?.batch_id) { setDmSending(false); return; }
 
       const originalBid = data?.batch_id;
       const count = data?.count || usernames.length;
@@ -845,14 +846,26 @@ function CastDetailInner() {
     // 各RPCを独立して呼び出し（1つ失敗しても他に影響しない）
     sb.rpc('get_user_retention_status', { p_account_id: accountId, p_cast_name: castName })
       .then(({ data, error }) => {
-        if (error) console.warn('[analytics] retention RPC error:', error.message);
-        else setRetentionUsers((data || []) as RetentionUser[]);
+        if (error) { console.warn('[analytics] retention RPC error:', error.message); return; }
+        try {
+          const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+          setRetentionUsers((Array.isArray(parsed) ? parsed : []) as RetentionUser[]);
+        } catch (e) {
+          console.error('[analytics] retention JSONB parse error:', e);
+          setRetentionUsers([]);
+        }
       });
 
     sb.rpc('get_dm_campaign_effectiveness', { p_account_id: accountId, p_cast_name: castName, p_window_days: 7 })
       .then(({ data, error }) => {
-        if (error) console.warn('[analytics] campaign RPC error:', error.message);
-        else setCampaignEffects((data || []) as CampaignEffect[]);
+        if (error) { console.warn('[analytics] campaign RPC error:', error.message); return; }
+        try {
+          const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+          setCampaignEffects((Array.isArray(parsed) ? parsed : []) as CampaignEffect[]);
+        } catch (e) {
+          console.error('[analytics] campaign JSONB parse error:', e);
+          setCampaignEffects([]);
+        }
       });
 
     sb.rpc('get_user_segments', { p_account_id: accountId, p_cast_name: castName })
@@ -860,10 +873,16 @@ function CastDetailInner() {
         if (error) {
           console.error('[analytics] segments RPC error:', error.message);
         } else {
-          // RETURNS JSONB → data は JSONB値そのもの（配列）
-          const parsed = Array.isArray(data) ? data : [];
-          console.log('[analytics] segments loaded:', parsed.length, 'segments');
-          setSegments(parsed as UserSegment[]);
+          try {
+            // RETURNS JSONB → data は JSONB値そのもの（配列）またはJSON文字列
+            const raw = typeof data === 'string' ? JSON.parse(data) : data;
+            const parsed = Array.isArray(raw) ? raw : [];
+            console.log('[analytics] segments loaded:', parsed.length, 'segments');
+            setSegments(parsed as UserSegment[]);
+          } catch (e) {
+            console.error('[analytics] segments JSONB parse error:', e);
+            setSegments([]);
+          }
         }
         setSegmentsLoading(false);
         setAnalyticsLoading(false);
@@ -2003,80 +2022,80 @@ function CastDetailInner() {
                     )}
                   </div>
 
-                  {/* Retention status badges */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="glass-card p-4 text-center">
-                      <p className="text-2xl font-bold" style={{ color: '#22c55e' }}>{retentionCounts.active}</p>
-                      <p className="text-[10px] mt-1">🟢 アクティブ</p>
-                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>7日以内にチップ</p>
-                    </div>
-                    <div className="glass-card p-4 text-center">
-                      <p className="text-2xl font-bold" style={{ color: '#f59e0b' }}>{retentionCounts.at_risk}</p>
-                      <p className="text-[10px] mt-1">🟡 離脱危機</p>
-                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>7〜14日</p>
-                    </div>
-                    <div className="glass-card p-4 text-center">
-                      <p className="text-2xl font-bold" style={{ color: '#f43f5e' }}>{retentionCounts.churned}</p>
-                      <p className="text-[10px] mt-1">🔴 離脱</p>
-                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>14日以上</p>
-                    </div>
-                    <div className="glass-card p-4 text-center">
-                      <p className="text-2xl font-bold" style={{ color: '#38bdf8' }}>{retentionCounts.new}</p>
-                      <p className="text-[10px] mt-1">🆕 新規</p>
-                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>初チップ7日以内</p>
-                    </div>
-                  </div>
-
-                  {/* At-risk users */}
-                  <div className="glass-card p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-bold">🟡 離脱危機ファン</h3>
-                      {retentionUsers.filter(u => u.status === 'at_risk').length > 0 && (
-                        <button onClick={() => sendRetentionDm(
-                          retentionUsers.filter(u => u.status === 'at_risk').map(u => u.user_name),
-                          '復帰DM'
-                        )} className="btn-primary text-[10px] py-1 px-3">全員に復帰DM</button>
-                      )}
-                    </div>
-                    {retentionUsers.filter(u => u.status === 'at_risk').length === 0 ? (
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>離脱危機ファンなし</p>
-                    ) : (
-                      <div className="overflow-auto">
-                        <table className="w-full text-[11px]">
-                          <thead>
-                            <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border-glass)' }}>
-                              <th className="text-left px-3 py-2 font-semibold">ユーザー名</th>
-                              <th className="text-right px-3 py-2 font-semibold">最終チップ</th>
-                              <th className="text-right px-3 py-2 font-semibold">合計チップ</th>
-                              <th className="text-right px-3 py-2 font-semibold">最終訪問</th>
-                              <th className="text-center px-3 py-2 font-semibold">アクション</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {retentionUsers.filter(u => u.status === 'at_risk').map(u => (
-                              <tr key={u.user_name} style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                                <td className="px-3 py-2 font-semibold">{u.user_name}</td>
-                                <td className="text-right px-3 py-2" style={{ color: 'var(--accent-amber)' }}>
-                                  {u.last_tip ? timeAgo(u.last_tip) : '--'}
-                                </td>
-                                <td className="text-right px-3 py-2 tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                  {u.total_tokens.toLocaleString()} tk
-                                </td>
-                                <td className="text-right px-3 py-2" style={{ color: 'var(--text-muted)' }}>
-                                  {timeAgo(u.last_seen)}
-                                </td>
-                                <td className="text-center px-3 py-2">
-                                  <button onClick={() => sendRetentionDm([u.user_name], '復帰DM')}
-                                    className="text-[10px] px-2 py-1 rounded-lg hover:bg-sky-500/10 transition-all"
-                                    style={{ color: 'var(--accent-primary)' }}>復帰DM</button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                  {/* Retention status badges — データがある場合のみ表示 */}
+                  {retentionUsers.length > 0 && (
+                    <>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="glass-card p-4 text-center">
+                          <p className="text-2xl font-bold" style={{ color: '#22c55e' }}>{retentionCounts.active}</p>
+                          <p className="text-[10px] mt-1">🟢 アクティブ</p>
+                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>7日以内にチップ</p>
+                        </div>
+                        <div className="glass-card p-4 text-center">
+                          <p className="text-2xl font-bold" style={{ color: '#f59e0b' }}>{retentionCounts.at_risk}</p>
+                          <p className="text-[10px] mt-1">🟡 離脱危機</p>
+                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>7〜14日</p>
+                        </div>
+                        <div className="glass-card p-4 text-center">
+                          <p className="text-2xl font-bold" style={{ color: '#f43f5e' }}>{retentionCounts.churned}</p>
+                          <p className="text-[10px] mt-1">🔴 離脱</p>
+                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>14日以上</p>
+                        </div>
+                        <div className="glass-card p-4 text-center">
+                          <p className="text-2xl font-bold" style={{ color: '#38bdf8' }}>{retentionCounts.new}</p>
+                          <p className="text-[10px] mt-1">🆕 新規</p>
+                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>初チップ7日以内</p>
+                        </div>
                       </div>
-                    )}
-                  </div>
+
+                      {/* At-risk users */}
+                      {retentionUsers.filter(u => u.status === 'at_risk').length > 0 && (
+                        <div className="glass-card p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-bold">🟡 離脱危機ファン</h3>
+                            <button onClick={() => sendRetentionDm(
+                              retentionUsers.filter(u => u.status === 'at_risk').map(u => u.user_name),
+                              '復帰DM'
+                            )} className="btn-primary text-[10px] py-1 px-3">全員に復帰DM</button>
+                          </div>
+                          <div className="overflow-auto">
+                            <table className="w-full text-[11px]">
+                              <thead>
+                                <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border-glass)' }}>
+                                  <th className="text-left px-3 py-2 font-semibold">ユーザー名</th>
+                                  <th className="text-right px-3 py-2 font-semibold">最終チップ</th>
+                                  <th className="text-right px-3 py-2 font-semibold">合計チップ</th>
+                                  <th className="text-right px-3 py-2 font-semibold">最終訪問</th>
+                                  <th className="text-center px-3 py-2 font-semibold">アクション</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {retentionUsers.filter(u => u.status === 'at_risk').map(u => (
+                                  <tr key={u.user_name} style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                    <td className="px-3 py-2 font-semibold">{u.user_name}</td>
+                                    <td className="text-right px-3 py-2" style={{ color: 'var(--accent-amber)' }}>
+                                      {u.last_tip ? timeAgo(u.last_tip) : '--'}
+                                    </td>
+                                    <td className="text-right px-3 py-2 tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                      {u.total_tokens.toLocaleString()} tk
+                                    </td>
+                                    <td className="text-right px-3 py-2" style={{ color: 'var(--text-muted)' }}>
+                                      {timeAgo(u.last_seen)}
+                                    </td>
+                                    <td className="text-center px-3 py-2">
+                                      <button onClick={() => sendRetentionDm([u.user_name], '復帰DM')}
+                                        className="text-[10px] px-2 py-1 rounded-lg hover:bg-sky-500/10 transition-all"
+                                        style={{ color: 'var(--accent-primary)' }}>復帰DM</button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
 
                   {/* Campaign effectiveness */}
                   <div className="glass-card p-4">
