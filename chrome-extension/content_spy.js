@@ -8,6 +8,20 @@
   'use strict';
 
   const LOG = '[LS-SPY]';
+
+  // JWT capture relay: MAIN world → content script → background.js
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return;
+    if (event.data?.type === 'LS_JWT_CAPTURED') {
+      chrome.runtime.sendMessage({
+        type: 'JWT_CAPTURED',
+        jwt: event.data.jwt,
+        source: event.data.source,
+        timestamp: event.data.timestamp,
+      });
+    }
+  });
+
   let observer = null;
   let enabled = false;
   let castName = '';

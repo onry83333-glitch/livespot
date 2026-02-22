@@ -266,6 +266,23 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     pollWhispers();
   }
 
+  // Viewer member list polling（1分ごと、SPY有効時のみ）
+  if (alarm.name === 'viewerMembers') {
+    if (spyEnabled) {
+      // 全登録キャスト（自社+SPY）のviewer memberリストを取得
+      const castNames = [...registeredCastNames];
+      (async () => {
+        for (const cn of castNames) {
+          await fetchViewerMembers(cn);
+          // レート制限: 各キャスト間に2秒待機
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      })().catch(e => {
+        console.warn('[LS-BG] viewerMembers alarm error:', e.message);
+      });
+    }
+  }
+
   // セッション同期（1時間ごと）
   if (alarm.name === 'sessionSync') {
     exportSessionCookie().catch(e => {
@@ -2580,6 +2597,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       // スクリーンショットタイマー開始
       startScreenshotCapture();
+      // Viewer member list ポーリング開始（1分ごと）
+      chrome.alarms.create('viewerMembers', { periodInMinutes: 1 });
       // SPY開始時にもセッション同期
       exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync(SPY start):', e.message));
       // SPY開始時にaccountIdが未設定なら警告
@@ -2608,6 +2627,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       // スクリーンショットタイマー停止
       stopScreenshotCapture();
+      // Viewer member list ポーリング停止
+      chrome.alarms.clear('viewerMembers');
 
       // 配信終了 → 5分後にコイン同期を自動実行
       console.log('[LS-BG] AutoCoinSync: 配信終了検出 → 5分後に同期予約');
@@ -2713,6 +2734,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     });
     return true;
+  }
+
+  // --- JWT captured from content_jwt_capture.js ---
+  if (msg.type === 'JWT_CAPTURED') {
+    handleJwtCaptured(msg);
+    sendResponse({ ok: true });
+    return false;
   }
 
   // --- Popup: Set active account ---
@@ -4221,6 +4249,8 @@ async function runAutoPatrol() {
 
         // スクリーンショットタイマー開始
         startScreenshotCapture();
+        // Viewer member list ポーリング開始（1分ごと）
+        chrome.alarms.create('viewerMembers', { periodInMinutes: 1 });
 
         // 全Stripchatタブにも通知
         chrome.tabs.query(
@@ -4795,6 +4825,175 @@ async function uploadScreenshot(castName, dataUrl) {
 }
 
 // ============================================================
+// JWT Captured Handler — content_jwt_capture.js → content_spy.js → here
+// ============================================================
+
+/**
+ * JWT取得ハンドラ: MAIN world content_jwt_capture.js → content_spy.js → ここ
+ * stripchat_sessions.jwt_token に保存
+ */
+async function handleJwtCaptured(message) {
+  const { jwt } = message;
+  if (!jwt || !accountId || !accessToken) {
+    console.log('[LS-BG] JWT received but no auth context');
+    return;
+  }
+
+  try {
+    // UPSERT: jwt_token カラムを更新
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: CONFIG.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`,
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({
+          jwt_token: jwt,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    if (res.ok) {
+      console.log('[LS-BG] JWT saved to stripchat_sessions');
+    } else {
+      console.warn('[LS-BG] JWT save failed:', res.status);
+    }
+  } catch (err) {
+    console.warn('[LS-BG] JWT save error:', err.message);
+  }
+}
+
+// ============================================================
+// Viewer Member List Polling (spy_viewers)
+// ============================================================
+let viewerMemberLastPoll = 0;
+const VIEWER_MEMBER_INTERVAL = 60000; // 60秒
+
+/**
+ * fetchViewerMembers(castName)
+ * Stripchat viewer member list APIを呼び出し、spy_viewersにUPSERT
+ */
+async function fetchViewerMembers(castName) {
+  if (!accessToken || !accountId) return;
+
+  try {
+    // 1. JWT取得（stripchat_sessions から）
+    const sessRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}&is_valid=eq.true&select=jwt_token,session_cookie,cookies_json`,
+      {
+        headers: {
+          apikey: CONFIG.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!sessRes.ok) return;
+    const sessions = await sessRes.json();
+    if (!sessions.length) return;
+    const sess = sessions[0];
+
+    // 2. Viewer member list API 呼び出し
+    const headers = {
+      Accept: 'application/json',
+    };
+
+    // JWT認証（あれば）
+    if (sess.jwt_token) {
+      headers['Authorization'] = `Bearer ${sess.jwt_token}`;
+    }
+
+    // Cookie認証（フォールバック）
+    if (sess.cookies_json && Object.keys(sess.cookies_json).length > 0) {
+      headers['Cookie'] = Object.entries(sess.cookies_json)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('; ');
+    } else if (sess.session_cookie) {
+      headers['Cookie'] = `stripchat_com_sessionId=${sess.session_cookie}`;
+    }
+
+    const membersRes = await fetch(
+      `https://stripchat.com/api/front/models/username/${encodeURIComponent(castName)}/groupShow/members`,
+      { headers }
+    );
+
+    if (!membersRes.ok) {
+      if (membersRes.status === 401 || membersRes.status === 403) {
+        console.warn('[LS-BG] Viewer members: JWT expired or unauthorized for', castName);
+        // JWT無効化
+        if (sess.jwt_token) {
+          await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: CONFIG.SUPABASE_ANON_KEY,
+                Authorization: `Bearer ${accessToken}`,
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify({ jwt_token: null, updated_at: new Date().toISOString() }),
+            }
+          );
+        }
+      }
+      return;
+    }
+
+    const data = await membersRes.json();
+    const members = data?.members || data || [];
+    if (!Array.isArray(members) || members.length === 0) return;
+
+    // 3. spy_viewers に UPSERT（バッチ）
+    const now = new Date().toISOString();
+    const rows = members.map(m => ({
+      account_id: accountId,
+      cast_name: castName,
+      session_id: currentSessionId || null,
+      user_name: m.username || m.userName || m.name || 'unknown',
+      user_id_stripchat: m.id ? String(m.id) : (m.userId ? String(m.userId) : null),
+      league: m.league || m.userLeague || null,
+      level: m.level || m.userLevel || null,
+      is_fan_club: m.isFanClub || m.fanClub || false,
+      first_seen_at: now,
+      last_seen_at: now,
+      visit_count: 1,
+    }));
+
+    // Supabase UPSERT (ON CONFLICT更新)
+    const upsertRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: CONFIG.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`,
+          Prefer: 'return=minimal,resolution=merge-duplicates',
+        },
+        body: JSON.stringify(rows.map(r => ({
+          ...r,
+          last_seen_at: now,
+        }))),
+      }
+    );
+
+    if (upsertRes.ok) {
+      console.log(`[LS-BG] spy_viewers: ${rows.length} members saved for ${castName}`);
+    } else {
+      const errText = await upsertRes.text().catch(() => '');
+      console.warn('[LS-BG] spy_viewers upsert failed:', upsertRes.status, errText.slice(0, 200));
+    }
+  } catch (err) {
+    console.warn('[LS-BG] fetchViewerMembers error:', err.message);
+  }
+}
+
+// ============================================================
 // Session Cookie Export — Stripchatセッション情報をSupabaseに同期
 // ============================================================
 
@@ -4919,7 +5118,10 @@ restoreBuffers().then(() => {
       loadRegisteredCasts();
       initAutoPatrol(); // SPY自動巡回の初期化
       initSpyRotation(); // 他社SPYローテーション初期化
-      if (spyEnabled) startScreenshotCapture(); // SW再起動時にSPY有効ならスクショ再開
+      if (spyEnabled) {
+        startScreenshotCapture(); // SW再起動時にSPY有効ならスクショ再開
+        chrome.alarms.create('viewerMembers', { periodInMinutes: 1 }); // Viewer memberポーリング再開
+      }
       // セッション同期: 1時間ごと + 即時1回
       chrome.alarms.create('sessionSync', { periodInMinutes: 60 });
       exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync初回:', e.message));

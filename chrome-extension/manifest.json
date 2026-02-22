@@ -31,6 +31,12 @@
       "js": ["content_stt.js"],
       "run_at": "document_idle",
       "world": "MAIN"
+    },
+    {
+      "matches": ["*://stripchat.com/*", "*://*.stripchat.com/*"],
+      "js": ["content_jwt_capture.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ],
   "action": {
