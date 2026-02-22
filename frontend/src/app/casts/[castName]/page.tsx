@@ -282,7 +282,7 @@ function CastDetailInner() {
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
 
   // H5: Segment legend
-  const [showSegmentLegend, setShowSegmentLegend] = useState(false);
+  const [showSegmentLegend, setShowSegmentLegend] = useState(true);
 
   // M3: Segment user list expand
   const [segmentUserExpanded, setSegmentUserExpanded] = useState<Set<string>>(new Set());
@@ -320,6 +320,12 @@ function CastDetailInner() {
   const [acqSortKey, setAcqSortKey] = useState<'total_coins' | 'tx_count' | 'last_payment_date' | 'user_name'>('total_coins');
   const [acqSortAsc, setAcqSortAsc] = useState(false);
   const acqDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Ticket chat candidates accordion
+  const [showTicketUsers, setShowTicketUsers] = useState(false);
+
+  // Acquisition table: show more
+  const [acqShowAll, setAcqShowAll] = useState(false);
 
   // Target search
   const [searchQuery, setSearchQuery] = useState('');
@@ -2122,7 +2128,7 @@ function CastDetailInner() {
                                         📩 {seg.user_count}名にDM送信
                                       </button>
                                     </div>
-                                    <div className="max-h-60 overflow-auto space-y-0.5">
+                                    <div className={`overflow-auto space-y-0.5 ${isUserExpanded ? 'max-h-96' : 'max-h-60'}`}>
                                       {visibleUsers.map((u, i) => (
                                         <div key={u.user_name} className="flex items-center justify-between text-[11px] px-2 py-1 rounded hover:bg-white/[0.03]">
                                           <div className="flex items-center gap-2 min-w-0">
@@ -2559,17 +2565,35 @@ function CastDetailInner() {
                           </div>
                         </div>
 
-                        {/* Ticket chat candidates */}
+                        {/* Ticket chat candidates (accordion) */}
                         {acqSummary.ticketCandidates.length > 0 && (
                           <div className="glass-panel rounded-xl p-3 mb-4" style={{ borderLeft: '3px solid var(--accent-amber)' }}>
-                            <p className="text-[11px] font-bold mb-1" style={{ color: 'var(--accent-amber)' }}>
-                              🎫 チケットチャット初回の可能性が高いユーザー: {acqSummary.ticketCandidates.length}名
-                            </p>
-                            <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
-                              {acqSummary.ticketCandidates.map(u =>
-                                `${u.user_name} (${u.total_coins.toLocaleString()}tk/${u.tx_count}回)`
-                              ).join(', ')}
-                            </p>
+                            <button
+                              onClick={() => setShowTicketUsers(!showTicketUsers)}
+                              className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity"
+                            >
+                              <span className="text-sm">{showTicketUsers ? '▼' : '▶'}</span>
+                              <span className="text-[11px] font-bold" style={{ color: 'var(--accent-amber)' }}>
+                                🎫 チケットチャット初回の可能性: {acqSummary.ticketCandidates.length}名
+                              </span>
+                            </button>
+                            {showTicketUsers && (
+                              <div className="max-h-40 overflow-y-auto mt-2 space-y-0.5">
+                                {acqSummary.ticketCandidates.map(u => (
+                                  <div key={u.user_name} className="flex items-center justify-between text-[10px] px-2 py-1 rounded hover:bg-white/[0.03]">
+                                    <span className="truncate font-medium" style={{ color: getUserColorFromCoins(u.total_coins) }}>
+                                      {u.user_name}
+                                    </span>
+                                    <div className="flex items-center gap-2 flex-shrink-0">
+                                      <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
+                                        {u.total_coins.toLocaleString()} tk
+                                      </span>
+                                      <span style={{ color: 'var(--text-muted)' }}>{u.tx_count}回</span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -2606,7 +2630,7 @@ function CastDetailInner() {
                                     条件に合致するユーザーなし
                                   </td>
                                 </tr>
-                              ) : acqFiltered.map(u => {
+                              ) : (acqShowAll ? acqFiltered : acqFiltered.slice(0, 30)).map(u => {
                                 const isTicketCandidate = u.total_coins >= 150 && u.total_coins <= 300 && u.tx_count <= 3;
                                 const rowBg = u.converted_after_dm
                                   ? 'rgba(245,158,11,0.06)'
@@ -2662,9 +2686,29 @@ function CastDetailInner() {
                           </table>
                         </div>
                         {acqFiltered.length > 0 && (
-                          <p className="text-[10px] text-right mt-1" style={{ color: 'var(--text-muted)' }}>
-                            {acqFiltered.length}件表示（全{acqUsers.length}件中）
-                          </p>
+                          <div className="flex items-center justify-between mt-1">
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                              {acqShowAll ? acqFiltered.length : Math.min(acqFiltered.length, 30)}件表示（全{acqUsers.length}件中）
+                            </p>
+                            {!acqShowAll && acqFiltered.length > 30 && (
+                              <button
+                                onClick={() => setAcqShowAll(true)}
+                                className="text-[10px] px-3 py-1 rounded-lg hover:bg-white/[0.03] transition-all"
+                                style={{ color: 'var(--accent-primary)' }}
+                              >
+                                + 残り{acqFiltered.length - 30}名を表示
+                              </button>
+                            )}
+                            {acqShowAll && acqFiltered.length > 30 && (
+                              <button
+                                onClick={() => setAcqShowAll(false)}
+                                className="text-[10px] px-3 py-1 rounded-lg hover:bg-white/[0.03] transition-all"
+                                style={{ color: 'var(--text-muted)' }}
+                              >
+                                折りたたむ
+                              </button>
+                            )}
+                          </div>
                         )}
                       </>
                     )}
