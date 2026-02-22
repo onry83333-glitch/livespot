@@ -499,25 +499,15 @@ export default function DmPage() {
 
       // API送信モード: サーバーサイドでバッチ処理
       if (apiSessionValid) {
-        try {
-          const { data: { session } } = await sb.auth.getSession();
-          if (session?.access_token) {
-            // バックグラウンドでAPI送信を開始（レスポンスを待たない）
-            fetch('/api/dm/batch', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${session.access_token}`,
-              },
-              body: JSON.stringify({
-                account_id: selectedAccount,
-                limit: 50,
-              }),
-            }).catch(e => console.warn('API batch send failed:', e));
-          }
-        } catch (e) {
-          console.warn('API batch trigger failed, extension will pick up:', e);
-        }
+        fetch('/api/dm/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            account_id: selectedAccount,
+            limit: 50,
+          }),
+        }).catch(e => console.warn('API batch send failed, extension will pick up:', e));
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));

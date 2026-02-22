@@ -1,46 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase/server';
 import { StripchatAPI } from '@/lib/stripchat-api';
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
-// ============================================================
-// 認証ヘルパー
-// ============================================================
-async function authenticate(req: NextRequest) {
-  const authHeader = req.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return { error: '認証が必要です', status: 401 };
-  }
-  const token = authHeader.slice(7);
-
-  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  if (!userRes.ok) {
-    return { error: '認証トークンが無効です', status: 401 };
-  }
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-  });
-
-  return { supabase, token };
-}
 
 // ============================================================
 // POST /api/dm/send — 単発DM送信
 // ============================================================
 export async function POST(req: NextRequest) {
-  const auth = await authenticate(req);
-  if ('error' in auth) {
-    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const supabase = createServerSupabase();
+
+  // 認証チェック: cookie-based session
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return NextResponse.json({ error: '認証が必要です', detail: authError?.message }, { status: 401 });
   }
-  const { supabase } = auth;
 
   let body: {
     target_username: string;
@@ -123,7 +95,6 @@ export async function POST(req: NextRequest) {
   const result = await api.sendDM(targetUserId, message, target_username);
 
   if (result.success) {
-    // 成功: dm_send_log 更新
     if (dm_log_id) {
       await supabase
         .from('dm_send_log')
@@ -155,7 +126,6 @@ export async function POST(req: NextRequest) {
       .eq('id', dm_log_id);
   }
 
-  // セッション無効化（セッション期限切れの場合）
   if (result.sessionExpired) {
     await supabase
       .from('stripchat_sessions')
@@ -172,7 +142,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // csrfToken 取得失敗の場合
   if (result.error === 'csrfToken取得失敗') {
     return NextResponse.json(
       {

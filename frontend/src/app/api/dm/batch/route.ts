@@ -1,34 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
-
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+import { createServerSupabase } from '@/lib/supabase/server';
+import { StripchatAPI } from '@/lib/stripchat-api';
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export async function POST(req: NextRequest) {
-  // 認証
-  const authHeader = req.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
-  }
-  const token = authHeader.slice(7);
+  const supabase = createServerSupabase();
 
-  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  if (!userRes.ok) {
-    return NextResponse.json({ error: '認証トークンが無効です' }, { status: 401 });
+  // 認証チェック: cookie-based session
+  const { data: { user }, error: authError } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return NextResponse.json({ error: '認証が必要です', detail: authError?.message }, { status: 401 });
   }
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-  });
 
   let body: { account_id: string; limit?: number };
   try {
@@ -42,10 +27,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'account_id is required' }, { status: 400 });
   }
 
-  // 有効なセッション確認
+  // 有効なセッション取得
   const { data: session } = await supabase
     .from('stripchat_sessions')
-    .select('id, is_valid')
+    .select('*')
     .eq('account_id', account_id)
     .eq('is_valid', true)
     .maybeSingle();
@@ -80,15 +65,22 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // バッチ処理
+  // StripchatAPI インスタンス
+  const api = new StripchatAPI({
+    id: session.id,
+    session_cookie: session.session_cookie,
+    csrf_token: session.csrf_token,
+    csrf_timestamp: session.csrf_timestamp,
+    stripchat_user_id: session.stripchat_user_id,
+    front_version: session.front_version,
+    cookies_json: session.cookies_json || {},
+    jwt_token: session.jwt_token,
+  });
+
+  // バッチ処理（/api/dm/send を呼ばず直接処理）
   let successCount = 0;
   let errorCount = 0;
   const errors: Array<{ user_name: string; error: string }> = [];
-
-  // 内部URL構築（自身の /api/dm/send を呼ぶ）
-  const origin = req.headers.get('origin') || req.headers.get('host') || '';
-  const protocol = origin.startsWith('localhost') ? 'http' : 'https';
-  const baseUrl = origin.startsWith('http') ? origin : `${protocol}://${origin}`;
 
   for (const task of tasks) {
     // status を sending に更新
@@ -98,47 +90,56 @@ export async function POST(req: NextRequest) {
       .eq('id', task.id);
 
     try {
-      const sendRes = await fetch(`${baseUrl}/api/dm/send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          target_username: task.user_name,
-          message: task.message,
-          account_id,
-          dm_log_id: task.id,
-          campaign: task.campaign,
-          cast_name: task.cast_name,
-        }),
-      });
+      // userId 解決
+      const { userId: targetUserId, error: resolveError } =
+        await api.resolveUserId(task.user_name, supabase);
 
-      const sendData = await sendRes.json().catch(() => ({}));
+      if (!targetUserId) {
+        errorCount++;
+        errors.push({ user_name: task.user_name, error: `userId解決失敗: ${resolveError}` });
+        await supabase
+          .from('dm_send_log')
+          .update({ status: 'error', error: `userId解決失敗: ${resolveError}` })
+          .eq('id', task.id);
+        continue;
+      }
 
-      if (sendData.success) {
+      // DM送信
+      const result = await api.sendDM(targetUserId, task.message, task.user_name);
+
+      if (result.success) {
         successCount++;
+        await supabase
+          .from('dm_send_log')
+          .update({
+            status: 'success',
+            sent_via: 'api',
+            sent_at: new Date().toISOString(),
+            error: null,
+          })
+          .eq('id', task.id);
       } else {
         errorCount++;
-        errors.push({
-          user_name: task.user_name,
-          error: sendData.error || 'Unknown error',
-        });
+        errors.push({ user_name: task.user_name, error: result.error || 'Unknown error' });
+        await supabase
+          .from('dm_send_log')
+          .update({ status: 'error', sent_via: 'api', error: result.error })
+          .eq('id', task.id);
 
         // セッション切れならバッチ全体を中断
-        if (sendData.fallback === 'extension' && sendRes.status === 401) {
-          // 残りのタスクのステータスをqueuedに戻す
-          const remainingIds = tasks
-            .slice(tasks.indexOf(task) + 1)
-            .map(t => t.id);
-          if (remainingIds.length > 0) {
-            // 個別に戻す（bulk update）
-            for (const rid of remainingIds) {
-              await supabase
-                .from('dm_send_log')
-                .update({ status: 'queued' })
-                .eq('id', rid);
-            }
+        if (result.sessionExpired) {
+          await supabase
+            .from('stripchat_sessions')
+            .update({ is_valid: false, updated_at: new Date().toISOString() })
+            .eq('id', session.id);
+
+          // 残りをqueuedに戻す
+          const currentIdx = tasks.indexOf(task);
+          for (let i = currentIdx + 1; i < tasks.length; i++) {
+            await supabase
+              .from('dm_send_log')
+              .update({ status: 'queued' })
+              .eq('id', tasks[i].id);
           }
 
           return NextResponse.json({
@@ -154,10 +155,11 @@ export async function POST(req: NextRequest) {
       }
     } catch (err) {
       errorCount++;
-      errors.push({
-        user_name: task.user_name,
-        error: String(err),
-      });
+      errors.push({ user_name: task.user_name, error: String(err) });
+      await supabase
+        .from('dm_send_log')
+        .update({ status: 'error', sent_via: 'api', error: String(err) })
+        .eq('id', task.id);
     }
 
     // レート制限: 3秒間隔
