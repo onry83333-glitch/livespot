@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, timeAgo } from '@/lib/utils';
@@ -25,6 +26,8 @@ export default function UsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'tokens' | 'messages' | 'recent'>('tokens');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 50;
 
   // アカウントID取得
   useEffect(() => {
@@ -95,6 +98,9 @@ export default function UsersPage() {
     })();
   }, [accountId, sb]);
 
+  // ページリセット（フィルター変更時）
+  useEffect(() => { setPage(1); }, [search, sortBy]);
+
   // 検索・ソート
   const filteredUsers = useMemo(() => {
     let list = users;
@@ -108,6 +114,10 @@ export default function UsersPage() {
       return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
     });
   }, [users, search, sortBy]);
+
+  const displayedUsers = useMemo(() => {
+    return filteredUsers.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  }, [filteredUsers, page, PAGE_SIZE]);
 
   if (!user) return null;
 
@@ -197,59 +207,88 @@ export default function UsersPage() {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 anim-fade-up delay-3">
-          {filteredUsers.map(u => (
-            <div
-              key={u.user_name}
-              onClick={() => router.push(`/users/${encodeURIComponent(u.user_name)}`)}
-              className="glass-card-hover p-4 cursor-pointer"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
-                    style={{
-                      background: u.totalTokens >= 1000
-                        ? 'linear-gradient(135deg, #f59e0b, #ef4444)'
-                        : u.totalTokens > 0
-                          ? 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple))'
-                          : 'rgba(100,116,139,0.3)',
-                    }}
-                  >
-                    {u.user_name.charAt(0).toUpperCase()}
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 anim-fade-up delay-3">
+            {displayedUsers.map(u => (
+              <div
+                key={u.user_name}
+                onClick={() => router.push(`/users/${encodeURIComponent(u.user_name)}`)}
+                className="glass-card-hover p-4 cursor-pointer"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+                      style={{
+                        background: u.totalTokens >= 1000
+                          ? 'linear-gradient(135deg, #f59e0b, #ef4444)'
+                          : u.totalTokens > 0
+                            ? 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple))'
+                            : 'rgba(100,116,139,0.3)',
+                      }}
+                    >
+                      {u.user_name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold truncate">{u.user_name}</p>
+                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        {timeAgo(u.lastActivity)}
+                      </p>
+                    </div>
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold truncate">{u.user_name}</p>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                      {timeAgo(u.lastActivity)}
-                    </p>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {u.totalTokens >= 1000 && (
+                      <span className="badge-warning text-[9px]">WHALE</span>
+                    )}
+                    <Link
+                      href={`/dm?user=${encodeURIComponent(u.user_name)}`}
+                      onClick={e => e.stopPropagation()}
+                      className="text-[10px] px-2 py-1 rounded-lg hover:bg-sky-500/10 transition-all"
+                      style={{ color: 'var(--accent-primary)' }}
+                    >
+                      DM
+                    </Link>
                   </div>
                 </div>
-                {u.totalTokens >= 1000 && (
-                  <span className="badge-warning text-[9px] flex-shrink-0">WHALE</span>
-                )}
-              </div>
 
-              <div className="flex items-center gap-4 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-glass)' }}>
-                <div className="text-[11px]">
-                  <span style={{ color: 'var(--text-muted)' }}>MSG </span>
-                  <span className="font-semibold">{u.messageCount.toLocaleString()}</span>
-                </div>
-                <div className="text-[11px]">
-                  <span style={{ color: 'var(--text-muted)' }}>TIP </span>
-                  <span className="font-semibold" style={{ color: u.totalTokens > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
-                    {formatTokens(u.totalTokens)}
-                  </span>
-                </div>
-                <div className="text-[11px] ml-auto">
-                  <span style={{ color: 'var(--accent-green)' }}>
-                    {tokensToJPY(u.totalTokens)}
-                  </span>
+                <div className="flex items-center gap-4 mt-3 pt-3 border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                  <div className="text-[11px]">
+                    <span style={{ color: 'var(--text-muted)' }}>MSG </span>
+                    <span className="font-semibold">{u.messageCount.toLocaleString()}</span>
+                  </div>
+                  <div className="text-[11px]">
+                    <span style={{ color: 'var(--text-muted)' }}>TIP </span>
+                    <span className="font-semibold" style={{ color: u.totalTokens > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
+                      {formatTokens(u.totalTokens)}
+                    </span>
+                  </div>
+                  <div className="text-[11px] ml-auto">
+                    <span style={{ color: 'var(--accent-green)' }}>
+                      {tokensToJPY(u.totalTokens)}
+                    </span>
+                  </div>
                 </div>
               </div>
+            ))}
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between mt-4">
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {filteredUsers.length}件中 {(page - 1) * PAGE_SIZE + 1}-{Math.min(page * PAGE_SIZE, filteredUsers.length)}件
+            </span>
+            <div className="flex gap-2">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}
+                className="btn-ghost text-xs disabled:opacity-30">
+                ← 前へ
+              </button>
+              <button onClick={() => setPage(p => p + 1)} disabled={page * PAGE_SIZE >= filteredUsers.length}
+                className="btn-ghost text-xs disabled:opacity-30">
+                次へ →
+              </button>
             </div>
-          ))}
-        </div>
+          </div>
+        </>
       )}
     </div>
   );

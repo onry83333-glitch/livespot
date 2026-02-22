@@ -281,6 +281,18 @@ function CastDetailInner() {
   const [refreshingSegments, setRefreshingSegments] = useState(false);
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
 
+  // H5: Segment legend
+  const [showSegmentLegend, setShowSegmentLegend] = useState(false);
+
+  // M3: Segment user list expand
+  const [segmentUserExpanded, setSegmentUserExpanded] = useState<Set<string>>(new Set());
+
+  // M18: Segment data load timestamp
+  const [segmentsLoadedAt, setSegmentsLoadedAt] = useState<Date | null>(null);
+
+  // M26: Segment sort
+  const [segmentSortMode, setSegmentSortMode] = useState<'id' | 'users' | 'coins'>('id');
+
   // Coin sync alert
   const [daysSinceSync, setDaysSinceSync] = useState<number | null>(null);
 
@@ -885,6 +897,7 @@ function CastDetailInner() {
           }
         }
         setSegmentsLoading(false);
+        setSegmentsLoadedAt(new Date());
         setAnalyticsLoading(false);
       });
   }, [accountId, castName, activeTab, sb]);
@@ -1179,21 +1192,21 @@ function CastDetailInner() {
     }
   }, [accountId, castName, sb]);
 
-  // Navigate to DM tab with segment targets
+  // Navigate to DM tab with segment targets (H6: segment context in campaign)
   const sendSegmentDm = useCallback((segmentId: string, segmentName: string) => {
     const seg = segments.find(s => s.segment_id === segmentId);
     if (!seg) return;
     const usernames = seg.users.map(u => u.user_name);
     setDmTargets(new Set(usernames));
-    setDmCampaign(`${segmentName}_復帰DM`);
+    setDmCampaign(`retention_${segmentId}_${segmentName}`);
     setDmMessage('{username}さん、お久しぶりです！また配信の方に来てくれたら嬉しいです！');
     setTab('dm');
   }, [segments, setTab]);
 
-  // Navigate to DM tab with pre-filled targets
+  // Navigate to DM tab with pre-filled targets (H6: retention context in campaign)
   const sendRetentionDm = useCallback((usernames: string[], campaign: string) => {
     setDmTargets(new Set(usernames));
-    setDmCampaign(campaign);
+    setDmCampaign(campaign.startsWith('retention_') ? campaign : `retention_${campaign}`);
     setDmMessage('{username}さん、お久しぶりです！また配信遊びに来てくれたら嬉しいです！');
     setTab('dm');
   }, [setTab]);
@@ -1293,6 +1306,7 @@ function CastDetailInner() {
           <span>{daysSinceSync >= 7 ? '🔴' : daysSinceSync >= 5 ? '🟡' : '🔵'}</span>
           <span>
             コイン履歴が <strong>{daysSinceSync}日間</strong> 更新されていません。
+            → Chrome拡張のコイン同期を実行してください
             <a href="https://ja.stripchat.com/earnings/tokens-history"
                target="_blank" rel="noopener" className="underline ml-1">
               Earningsページを開いて同期 →
@@ -1302,7 +1316,15 @@ function CastDetailInner() {
       )}
 
       {loading && activeTab !== 'realtime' ? (
-        <div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>
+        <div className="space-y-3">
+          <div className="h-8 rounded-lg animate-pulse" style={{ background: 'var(--bg-card)' }} />
+          <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+          <div className="grid grid-cols-3 gap-3">
+            <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+            <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+            <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+          </div>
+        </div>
       ) : (
         <>
           {/* ============ OVERVIEW ============ */}
@@ -1809,14 +1831,30 @@ function CastDetailInner() {
           {activeTab === 'analytics' && (
             <div className="space-y-4">
               {analyticsLoading ? (
-                <div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>
+                <div className="space-y-3">
+                  <div className="h-8 rounded-lg animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  </div>
+                </div>
               ) : (
                 <>
                   {/* ============ SEGMENT ANALYSIS ============ */}
                   <div className="glass-card p-4">
                     <div className="flex items-center justify-between mb-3">
                       <div>
-                        <h3 className="text-sm font-bold">📊 ユーザーセグメント分析</h3>
+                        <h3 className="text-sm font-bold flex items-center gap-2">
+                          📊 ユーザーセグメント分析
+                          {/* M18: last update timestamp */}
+                          {segmentsLoadedAt && (
+                            <span className="text-[10px] font-normal" style={{ color: 'var(--text-muted)' }}>
+                              最終読込: {segmentsLoadedAt.toLocaleTimeString('ja-JP', {hour:'2-digit', minute:'2-digit'})}
+                            </span>
+                          )}
+                        </h3>
                         <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
                           コイン累計額 × 最終課金日の2軸で分類（coin_transactions基準）
                         </p>
@@ -1846,7 +1884,11 @@ function CastDetailInner() {
                     </div>
 
                     {segmentsLoading ? (
-                      <div className="text-center py-4 text-xs" style={{ color: 'var(--text-muted)' }}>セグメント分析中...</div>
+                      <div className="space-y-2">
+                        {[0,1,2].map(i => (
+                          <div key={i} className="h-14 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                        ))}
+                      </div>
                     ) : segments.length === 0 ? (
                       <div className="text-center py-4 text-xs" style={{ color: 'var(--text-muted)' }}>
                         セグメントデータなし（コイン同期を先に実行してください）
@@ -1931,9 +1973,97 @@ function CastDetailInner() {
                           </div>
                         )}
 
+                        {/* H5: Segment legend (collapsible) */}
+                        <div className="glass-card p-3 mb-4">
+                          <button
+                            onClick={() => setShowSegmentLegend(!showSegmentLegend)}
+                            className="flex items-center gap-2 text-[11px] font-semibold w-full text-left hover:opacity-80 transition-opacity"
+                            style={{ color: 'var(--text-secondary)' }}
+                          >
+                            <span>{showSegmentLegend ? '▼' : '▶'}</span>
+                            <span>凡例</span>
+                          </button>
+                          {showSegmentLegend && (
+                            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1 text-[10px]">
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(239,68,68,0.06)' }}>
+                                <span className="font-bold w-6">S1</span>
+                                <span>Whale現役 — 高額課金＋最近も応援</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(239,68,68,0.04)' }}>
+                                <span className="font-bold w-6">S2</span>
+                                <span>Whale準現役 — 高額だがやや遠のく</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(239,68,68,0.02)' }}>
+                                <span className="font-bold w-6">S3</span>
+                                <span>Whale休眠 — 以前は高額、今は不在</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(245,158,11,0.06)' }}>
+                                <span className="font-bold w-6">S4</span>
+                                <span>VIP現役 — 中額＋アクティブ</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(245,158,11,0.04)' }}>
+                                <span className="font-bold w-6">S5</span>
+                                <span>VIP準現役 — 中額＋やや遠のく</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(245,158,11,0.02)' }}>
+                                <span className="font-bold w-6">S6</span>
+                                <span>VIP休眠 — 中額＋長期不在</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(56,189,248,0.06)' }}>
+                                <span className="font-bold w-6">S7</span>
+                                <span>ライト現役 — 少額＋アクティブ</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(56,189,248,0.04)' }}>
+                                <span className="font-bold w-6">S8</span>
+                                <span>ライト準現役 — 少額＋やや遠のく</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(56,189,248,0.02)' }}>
+                                <span className="font-bold w-6">S9</span>
+                                <span>ライト休眠 — 少額＋長期不在</span>
+                              </div>
+                              <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(100,116,139,0.06)' }}>
+                                <span className="font-bold w-6">S10</span>
+                                <span>離脱 — 長期間来ていない</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* M26: Segment sort options + M19: color legend */}
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>並び順:</span>
+                            {([
+                              { key: 'id' as const, label: 'ID順' },
+                              { key: 'users' as const, label: 'ユーザー数順' },
+                              { key: 'coins' as const, label: '合計コイン順' },
+                            ]).map(opt => (
+                              <button
+                                key={opt.key}
+                                onClick={() => setSegmentSortMode(opt.key)}
+                                className="text-[10px] px-2 py-1 rounded-lg transition-all"
+                                style={{
+                                  background: segmentSortMode === opt.key ? 'rgba(56,189,248,0.15)' : 'rgba(255,255,255,0.03)',
+                                  color: segmentSortMode === opt.key ? 'var(--accent-primary)' : 'var(--text-secondary)',
+                                  border: `1px solid ${segmentSortMode === opt.key ? 'rgba(56,189,248,0.25)' : 'var(--border-glass)'}`,
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                          <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                            色: <span style={{ color: '#aa00ff' }}>10,000tk+</span> / <span style={{ color: '#ff9100' }}>1,000tk+</span> / <span style={{ color: '#78909c' }}>1,000tk未満</span>
+                          </span>
+                        </div>
+
                         {/* セグメント一覧 */}
                         <div className="space-y-1.5">
-                          {[...segments].sort((a, b) => parseInt(a.segment_id.replace('S','')) - parseInt(b.segment_id.replace('S',''))).map(seg => {
+                          {[...segments].sort((a, b) => {
+                            if (segmentSortMode === 'users') return b.user_count - a.user_count;
+                            if (segmentSortMode === 'coins') return b.total_coins - a.total_coins;
+                            return parseInt(a.segment_id.replace('S','')) - parseInt(b.segment_id.replace('S',''));
+                          }).map(seg => {
                             const isExpanded = expandedSegments.has(seg.segment_id);
                             const grandTotal = segments.reduce((s, x) => s + x.total_coins, 0);
                             const coinPct = grandTotal > 0 ? (seg.total_coins / grandTotal * 100).toFixed(1) : '0';
@@ -1974,11 +2104,16 @@ function CastDetailInner() {
                                 </button>
 
                                 {/* Expanded: user list + DM button */}
-                                {isExpanded && (
+                                {isExpanded && (() => {
+                                  const isUserExpanded = segmentUserExpanded.has(seg.segment_id);
+                                  const displayLimit = isUserExpanded ? 200 : 50;
+                                  const visibleUsers = seg.users.slice(0, displayLimit);
+                                  const remaining = seg.users.length - displayLimit;
+                                  return (
                                   <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-glass)' }}>
                                     <div className="flex items-center justify-between mb-2">
                                       <span className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
-                                        ユーザー一覧（コイン順・上位50名表示）
+                                        ユーザー一覧（コイン順・上位{displayLimit}名表示）
                                       </span>
                                       <button
                                         onClick={() => sendSegmentDm(seg.segment_id, seg.segment_name)}
@@ -1988,7 +2123,7 @@ function CastDetailInner() {
                                       </button>
                                     </div>
                                     <div className="max-h-60 overflow-auto space-y-0.5">
-                                      {seg.users.slice(0, 50).map((u, i) => (
+                                      {visibleUsers.map((u, i) => (
                                         <div key={u.user_name} className="flex items-center justify-between text-[11px] px-2 py-1 rounded hover:bg-white/[0.03]">
                                           <div className="flex items-center gap-2 min-w-0">
                                             <span className="font-bold w-5 text-center text-[10px]" style={{
@@ -2006,14 +2141,42 @@ function CastDetailInner() {
                                           </div>
                                         </div>
                                       ))}
-                                      {seg.users.length > 50 && (
+                                      {/* M3: Expand beyond 50 */}
+                                      {!isUserExpanded && seg.users.length > 50 && (
+                                        <button
+                                          onClick={() => setSegmentUserExpanded(prev => {
+                                            const next = new Set(prev);
+                                            next.add(seg.segment_id);
+                                            return next;
+                                          })}
+                                          className="w-full text-[10px] text-center py-1.5 rounded-lg hover:bg-white/[0.03] transition-colors"
+                                          style={{ color: 'var(--accent-primary)' }}
+                                        >
+                                          もっと表示（残り {seg.users.length - 50}名）
+                                        </button>
+                                      )}
+                                      {isUserExpanded && remaining > 0 && (
                                         <p className="text-[10px] text-center py-1" style={{ color: 'var(--text-muted)' }}>
-                                          ... 他 {seg.users.length - 50}名
+                                          ... 他 {remaining}名
                                         </p>
+                                      )}
+                                      {isUserExpanded && seg.users.length > 50 && (
+                                        <button
+                                          onClick={() => setSegmentUserExpanded(prev => {
+                                            const next = new Set(prev);
+                                            next.delete(seg.segment_id);
+                                            return next;
+                                          })}
+                                          className="w-full text-[10px] text-center py-1 rounded-lg hover:bg-white/[0.03] transition-colors"
+                                          style={{ color: 'var(--text-muted)' }}
+                                        >
+                                          折りたたむ
+                                        </button>
                                       )}
                                     </div>
                                   </div>
-                                )}
+                                  );
+                                })()}
                               </div>
                             );
                           })}
@@ -2515,31 +2678,40 @@ function CastDetailInner() {
           {activeTab === 'sales' && (
             <div className="space-y-4">
               {salesLoading ? (
-                <div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>
+                <div className="space-y-3">
+                  <div className="h-8 rounded-lg animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  <div className="grid grid-cols-4 gap-3">
+                    <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  </div>
+                  <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                </div>
               ) : (
                 <>
-                  {/* Weekly summary cards */}
+                  {/* Weekly summary cards (H7: SPY vs API labels) */}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
                         {tokensToJPY(thisWeekCoins, coinRate)}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-primary)' }}>このキャスト (SPY)</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-primary)' }}>チャット内チップ（SPYログ）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--accent-amber)' }}>
                         {tokensToJPY(salesThisWeek, coinRate)}
                       </p>
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週コイン API</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>このキャスト</p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全課金（コインAPI）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
                         {tokensToJPY(salesLastWeek, coinRate)}
                       </p>
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週コイン API</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>このキャスト</p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週売上</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全課金（コインAPI）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{
@@ -2549,8 +2721,8 @@ function CastDetailInner() {
                           ? `${(salesThisWeek - salesLastWeek) >= 0 ? '↑' : '↓'} ${Math.abs(Math.round((salesThisWeek - salesLastWeek) / salesLastWeek * 100))}%`
                           : '--'}
                       </p>
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比 (API)</p>
-                      <p className="text-[9px]" style={{ color: 'var(--accent-purple, #a855f7)' }}>このキャスト</p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全課金（コインAPI）</p>
                     </div>
                   </div>
 
@@ -2900,7 +3072,14 @@ function CastDetailInner() {
                   </span>
                 </h3>
                 {screenshotsLoading ? (
-                  <div className="text-center py-8 text-xs" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {[0,1,2,3].map(i => (
+                      <div key={i} className="rounded-xl overflow-hidden">
+                        <div className="w-full aspect-video animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                        <div className="h-4 mt-2 rounded animate-pulse w-2/3" style={{ background: 'var(--bg-card)' }} />
+                      </div>
+                    ))}
+                  </div>
                 ) : screenshots.length === 0 ? (
                   <div className="text-center py-8 text-xs" style={{ color: 'var(--text-muted)' }}>
                     スクリーンショットデータなし。SPY監視中に5分間隔で自動キャプチャされます。
@@ -3046,7 +3225,12 @@ function CastDetailInner() {
    ============================================================ */
 export default function CastDetailPage() {
   return (
-    <Suspense fallback={<div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>}>
+    <Suspense fallback={
+      <div className="space-y-3">
+        <div className="h-8 rounded-lg animate-pulse" style={{ background: 'var(--bg-card)' }} />
+        <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+      </div>
+    }>
       <CastDetailInner />
     </Suspense>
   );

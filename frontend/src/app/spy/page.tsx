@@ -201,9 +201,20 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(
-    () => new Set(MSG_TYPE_FILTERS.map(f => f.key))
-  );
+  const [activeFilters, setActiveFilters] = useState<Set<FilterKey>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('spy_msg_filters');
+        if (saved) {
+          const parsed = JSON.parse(saved) as FilterKey[];
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return new Set(parsed);
+          }
+        }
+      } catch { /* ignored */ }
+    }
+    return new Set(MSG_TYPE_FILTERS.map(f => f.key));
+  });
   const [sessionStart] = useState(() => new Date());
   const [elapsedStr, setElapsedStr] = useState('00:00:00');
   const [lastMsgAgo, setLastMsgAgo] = useState('--');
@@ -397,6 +408,13 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
       return next;
     });
   }, []);
+
+  // Persist filter state to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('spy_msg_filters', JSON.stringify(Array.from(activeFilters)));
+    } catch { /* ignored */ }
+  }, [activeFilters]);
 
   const toggleAllFilters = useCallback(() => {
     setActiveFilters(prev => {

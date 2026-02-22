@@ -183,6 +183,13 @@ export default function DmPage() {
   const [enrollmentListExpanded, setEnrollmentListExpanded] = useState(false);
   const [autoGroupExpanded, setAutoGroupExpanded] = useState<Set<string>>(new Set());
 
+  // === キャンペーン効果 state ===
+  const [campaignStats, setCampaignStats] = useState<{ campaign: string; total: number; success: number; error: number; rate: number }[]>([]);
+  const [campaignStatsLoading, setCampaignStatsLoading] = useState(false);
+
+  // === API offline state ===
+  const [apiOffline, setApiOffline] = useState(false);
+
   // === URL preset handled flag ===
   const presetHandledRef = useRef(false);
 
@@ -197,6 +204,41 @@ export default function DmPage() {
       if (list.length > 0) setSelectedAccount(list[0].id);
     });
   }, [user, sb]);
+
+  // === キャンペーン効果測定データ取得 ===
+  useEffect(() => {
+    if (!selectedAccount) return;
+    setCampaignStatsLoading(true);
+    sb.from('dm_send_log')
+      .select('campaign, status')
+      .eq('account_id', selectedAccount)
+      .then(({ data, error: fetchErr }) => {
+        if (fetchErr) {
+          setApiOffline(true);
+          setCampaignStatsLoading(false);
+          return;
+        }
+        const items = data || [];
+        const campMap: Record<string, { total: number; success: number; error: number }> = {};
+        items.forEach(item => {
+          const c = item.campaign || '(なし)';
+          if (!campMap[c]) campMap[c] = { total: 0, success: 0, error: 0 };
+          campMap[c].total++;
+          if (item.status === 'success') campMap[c].success++;
+          if (item.status === 'error') campMap[c].error++;
+        });
+        setCampaignStats(
+          Object.entries(campMap).map(([campaign, v]) => ({
+            campaign,
+            total: v.total,
+            success: v.success,
+            error: v.error,
+            rate: v.total > 0 ? Math.round((v.success / v.total) * 1000) / 10 : 0,
+          }))
+        );
+        setCampaignStatsLoading(false);
+      });
+  }, [selectedAccount, sb]);
 
   // === URL preset handling (Task 3) ===
   useEffect(() => {
@@ -642,6 +684,14 @@ export default function DmPage() {
         ))}
       </div>
 
+      {/* API offline warning */}
+      {apiOffline && (
+        <div className="glass-card p-3 flex items-center gap-2" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
+          <span>&#9888;&#65039;</span>
+          <span className="text-xs">API接続不可 — 手動モードで動作中</span>
+        </div>
+      )}
+
       {/* ============ 一斉送信タブ ============ */}
       {tab === 'bulk' && (
         <div className="space-y-4 anim-fade-up">
@@ -803,6 +853,54 @@ export default function DmPage() {
               )}
             </div>
           )}
+
+          {/* Campaign Effectiveness Panel */}
+          <div className="glass-card p-5">
+            <h3 className="text-sm font-bold mb-4">キャンペーン効果</h3>
+            {campaignStatsLoading && (
+              <div className="h-20 animate-pulse rounded" style={{ background: 'var(--bg-card)' }} />
+            )}
+            {!campaignStatsLoading && campaignStats.length === 0 && (
+              <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>キャンペーンデータなし</p>
+            )}
+            {!campaignStatsLoading && campaignStats.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left" style={{ color: 'var(--text-muted)' }}>
+                      <th className="pb-3 font-medium text-xs">キャンペーン名</th>
+                      <th className="pb-3 font-medium text-xs text-right">送信数</th>
+                      <th className="pb-3 font-medium text-xs text-right">成功</th>
+                      <th className="pb-3 font-medium text-xs text-right">エラー</th>
+                      <th className="pb-3 font-medium text-xs text-right">成功率</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {campaignStats.map((cs, i) => (
+                      <tr key={i} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                        <td className="py-3">
+                          <span className="text-xs font-mono px-2 py-1 rounded bg-white/[0.03] truncate max-w-[200px] inline-block">
+                            {cs.campaign}
+                          </span>
+                        </td>
+                        <td className="py-3 text-right tabular-nums">{cs.total}</td>
+                        <td className="py-3 text-right tabular-nums text-emerald-400">{cs.success}</td>
+                        <td className="py-3 text-right tabular-nums text-rose-400">{cs.error}</td>
+                        <td className="py-3 text-right tabular-nums font-semibold">
+                          <span className={
+                            cs.rate >= 80 ? 'text-emerald-400' :
+                            cs.rate >= 50 ? 'text-amber-400' : 'text-slate-300'
+                          }>
+                            {cs.rate}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1352,6 +1450,11 @@ export default function DmPage() {
       {/* ============ シナリオタブ ============ */}
       {tab === 'scenario' && (
         <div className="space-y-4 anim-fade-up">
+          {/* Scenario explanation */}
+          <p className="text-xs mb-4" style={{ color: 'var(--text-secondary)' }}>
+            シナリオは、ユーザーの行動（チップ、入室など）に応じて自動的にDMを送信するワークフローです。
+          </p>
+
           {/* Header */}
           <div className="glass-card p-5">
             <div className="flex items-center justify-between mb-2">

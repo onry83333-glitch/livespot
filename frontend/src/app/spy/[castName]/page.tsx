@@ -987,21 +987,38 @@ function ScreenshotsTab({ castName, accountId }: { castName: string; accountId: 
   const [screenshots, setScreenshots] = useState<{
     id: string; filename: string; storage_path: string | null;
     captured_at: string; session_id: string | null;
+    signedUrl?: string | null;
   }[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const supabase = createClient();
-    supabase.from('screenshots')
-      .select('*')
-      .eq('account_id', accountId)
-      .eq('cast_name', castName)
-      .order('captured_at', { ascending: false })
-      .limit(100)
-      .then(({ data }) => {
-        if (data) setScreenshots(data);
-        setLoading(false);
-      });
+    (async () => {
+      const { data } = await supabase.from('screenshots')
+        .select('*')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .order('captured_at', { ascending: false })
+        .limit(100);
+
+      if (!data) { setLoading(false); return; }
+
+      // privateバケット → signed URL を生成
+      const withUrls = await Promise.all(
+        data.map(async (ss: { storage_path?: string | null;[k: string]: unknown }) => {
+          if (!ss.storage_path) return ss;
+          const pathInBucket = (ss.storage_path as string).startsWith('screenshots/')
+            ? (ss.storage_path as string).slice('screenshots/'.length)
+            : ss.storage_path;
+          const { data: signedData } = await supabase.storage
+            .from('screenshots')
+            .createSignedUrl(pathInBucket as string, 3600);
+          return { ...ss, signedUrl: signedData?.signedUrl || null };
+        })
+      );
+      setScreenshots(withUrls as typeof screenshots);
+      setLoading(false);
+    })();
   }, [accountId, castName]);
 
   if (loading) return <div className="glass-card p-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>;
@@ -1026,17 +1043,15 @@ function ScreenshotsTab({ castName, accountId }: { castName: string; accountId: 
           {screenshots.map(ss => {
             const capturedDate = new Date(ss.captured_at);
             const dateStr = `${capturedDate.getMonth() + 1}/${capturedDate.getDate()} ${capturedDate.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`;
-            const publicUrl = ss.storage_path
-              ? `${process.env.NEXT_PUBLIC_SUPABASE_URL}/storage/v1/object/public/${ss.storage_path}`
-              : null;
+            const imgUrl = ss.signedUrl || null;
             return (
               <div key={ss.id} className="glass-panel rounded-lg overflow-hidden">
-                {publicUrl ? (
-                  <a href={publicUrl} target="_blank" rel="noopener noreferrer" className="block">
+                {imgUrl ? (
+                  <a href={imgUrl} target="_blank" rel="noopener noreferrer" className="block">
                     <div className="aspect-video bg-slate-900 relative overflow-hidden">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
-                        src={publicUrl}
+                        src={imgUrl}
                         alt={ss.filename}
                         className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
                         loading="lazy"

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
-import { tokensToJPY } from '@/lib/utils';
+import { tokensToJPY, formatCoinDual } from '@/lib/utils';
 
 interface Account {
   id: string;
@@ -58,6 +58,7 @@ export default function DashboardPage() {
   const [dataEmpty, setDataEmpty] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const [demoError, setDemoError] = useState<string | null>(null);
+  const [lastFetchedAt, setLastFetchedAt] = useState<Date | null>(null);
 
   // アカウント追加フォーム
   const [showAddForm, setShowAddForm] = useState(false);
@@ -134,6 +135,7 @@ export default function DashboardPage() {
       whales,
       recentDM: dmRecentRes.data || [],
     });
+    setLastFetchedAt(new Date());
   }, [sb]);
 
   // Churn risk data loading
@@ -305,6 +307,11 @@ export default function DashboardPage() {
           <button onClick={() => setShowAddForm(!showAddForm)} className="btn-ghost text-xs py-2">+ {'\u8FFD\u52A0'}</button>
         </div>
         <div className="flex items-center gap-3">
+          {lastFetchedAt && (
+            <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              {'\u6700\u7D42\u66F4\u65B0: '}{lastFetchedAt.toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
           {stats && stats.spyMessages1h > 0 && (
             <div className="anim-pulse-glow px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-2"
               style={{ background: 'rgba(244,63,94,0.15)', color: 'var(--accent-pink)', border: '1px solid rgba(244,63,94,0.2)' }}>
@@ -312,8 +319,17 @@ export default function DashboardPage() {
             </div>
           )}
           <div className="badge-live flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 anim-live"></span>
-            {'\u30B5\u30FC\u30D0\u30FC\u72B6\u614B: \u6700\u9069\u5316\u6E08\u307F'}
+            {lastFetchedAt ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 anim-live"></span>
+                {'\u7A3C\u50CD\u4E2D \u2014 '}{lastFetchedAt.toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </>
+            ) : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+                {'\u30C7\u30FC\u30BF\u53D6\u5F97\u524D'}
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -372,6 +388,11 @@ export default function DashboardPage() {
               <p className="text-2xl font-bold tracking-tight">
                 {stats ? tokensToJPY(stats.totalRevenue30d) : '\u2014'}
               </p>
+              {stats && stats.totalRevenue30d > 0 && (
+                <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  {stats.totalRevenue30d.toLocaleString()} tk
+                </p>
+              )}
               <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'30\u65E5\u58F2\u4E0A'}</p>
             </div>
             <div className="glass-panel p-4 rounded-xl">
@@ -394,18 +415,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="glass-panel px-4 py-3 rounded-xl flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <span className="text-lg">{'\uD83D\uDEE1'}</span>
-              <div>
-                <p className="text-sm font-medium">{'BAN\u4FDD\u8B77\u6A5F\u80FD'}</p>
-                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{'\u9AD8\u5EA6\u306A\u30D7\u30ED\u30AD\u30B7\u3068\u52D5\u4F5C\u76E3\u8996\u304C\u6709\u52B9\u3067\u3059'}</p>
-              </div>
-            </div>
-            <div className="w-11 h-6 rounded-full bg-emerald-500 relative cursor-pointer">
-              <div className="absolute top-1 right-1 w-4 h-4 rounded-full bg-white"></div>
-            </div>
-          </div>
         </div>
 
         {/* Whale Ranking */}
@@ -427,9 +436,19 @@ export default function DashboardPage() {
                     }`}>
                       #{i + 1}
                     </span>
-                    <span className="text-sm truncate max-w-[140px]">{w.user_name}</span>
+                    <Link href={'/users/' + encodeURIComponent(w.user_name)}
+                      className="text-sm truncate max-w-[120px] hover:text-sky-400 transition-colors">
+                      {w.user_name}
+                    </Link>
+                    <Link href={'/dm?user=' + encodeURIComponent(w.user_name)}
+                      className="text-xs opacity-40 hover:opacity-100 transition-opacity" title={'DM\u9001\u4FE1'}>
+                      {'\uD83D\uDCE7'}
+                    </Link>
                   </div>
-                  <span className="text-sm font-semibold text-emerald-400">{tokensToJPY(w.total_coins)}</span>
+                  <div className="text-right">
+                    <span className="text-sm font-semibold text-emerald-400">{tokensToJPY(w.total_coins)}</span>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{w.total_coins.toLocaleString()} tk</p>
+                  </div>
                 </div>
               ))
             ) : (
@@ -444,10 +463,10 @@ export default function DashboardPage() {
         <div className="glass-card p-5 anim-fade-up"
           style={{
             background: 'rgba(239,68,68,0.06)',
+            borderTop: '1px solid rgba(239,68,68,0.15)',
+            borderRight: '1px solid rgba(239,68,68,0.15)',
+            borderBottom: '1px solid rgba(239,68,68,0.15)',
             borderLeft: '3px solid rgb(239,68,68)',
-            border: '1px solid rgba(239,68,68,0.15)',
-            borderLeftWidth: '3px',
-            borderLeftColor: 'rgb(239,68,68)',
           }}>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold flex items-center gap-2">
@@ -548,7 +567,8 @@ export default function DashboardPage() {
                             'bg-amber-500/10 text-amber-400'
                           }`}>{dm.status}</span>
                         </td>
-                        <td className="py-2.5 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        <td className="py-2.5 text-xs" style={{ color: 'var(--text-muted)' }}
+                          title={new Date(dm.queued_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}>
                           {new Date(dm.queued_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                         </td>
                       </tr>

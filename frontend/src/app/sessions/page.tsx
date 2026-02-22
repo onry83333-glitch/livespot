@@ -586,7 +586,9 @@ export default function SessionsPage() {
         {!loading && sessions.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16 gap-2">
             <p className="text-sm" style={{ color: 'var(--text-muted)' }}>セッションがありません</p>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>CSVインポートまたはChrome拡張でデータを取得してください</p>
+            <p className="text-xs text-center max-w-md" style={{ color: 'var(--text-muted)' }}>
+              セッションはChrome拡張の自動検出で記録されます。Chrome拡張が稼働中か確認してください。
+            </p>
           </div>
         )}
 
@@ -612,9 +614,35 @@ export default function SessionsPage() {
                       </span>
                     )}
                   </div>
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {isExpanded ? '▲ 閉じる' : '▼ 詳細'}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        if (!isExpanded) handleToggle(s.session_id);
+                        setTimeout(() => generateReport(s.session_id, s.account_id), isExpanded ? 0 : 500);
+                      }}
+                      disabled={reportLoading === s.session_id}
+                      className="flex-shrink-0 flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg font-medium transition-all hover:brightness-125 cursor-pointer"
+                      style={{
+                        background: reportMap[s.session_id] ? 'rgba(34,197,94,0.12)' : 'rgba(168,85,247,0.15)',
+                        color: reportMap[s.session_id] ? '#22c55e' : '#a855f7',
+                        border: `1px solid ${reportMap[s.session_id] ? 'rgba(34,197,94,0.2)' : 'rgba(168,85,247,0.2)'}`,
+                      }}
+                    >
+                      {reportLoading === s.session_id ? (
+                        <span className="inline-block w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                      ) : reportMap[s.session_id] ? (
+                        'AIレポート済'
+                      ) : (
+                        'AIレポート'
+                      )}
+                    </button>
+                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                      {isExpanded ? '▲ 閉じる' : '▼ 詳細'}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-2 text-xs mb-3" style={{ color: 'var(--text-muted)' }}>

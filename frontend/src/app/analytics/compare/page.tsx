@@ -279,28 +279,33 @@ export default function CastComparePage() {
             ) : allCasts.length === 0 ? (
               <p className="text-xs" style={{ color: 'var(--text-muted)' }}>キャストデータがありません</p>
             ) : (
-              <div className="flex gap-2 flex-wrap">
-                {allCasts.map((name, i) => {
-                  const isSelected = selectedCasts.includes(name);
-                  const colorIdx = isSelected ? selectedCasts.indexOf(name) : i;
-                  const color = CAST_COLORS[colorIdx % CAST_COLORS.length];
-                  return (
-                    <button
-                      key={name}
-                      onClick={() => toggleCast(name)}
-                      className="text-xs px-3 py-2 rounded-lg transition-all font-medium"
-                      style={{
-                        background: isSelected ? `${color}20` : 'rgba(100,116,139,0.1)',
-                        color: isSelected ? color : 'var(--text-muted)',
-                        border: isSelected ? `1px solid ${color}40` : '1px solid transparent',
-                      }}
-                    >
-                      {isSelected && <span className="mr-1.5">✓</span>}
-                      {name}
-                    </button>
-                  );
-                })}
-              </div>
+              <>
+                <div className="flex gap-2 flex-wrap">
+                  {allCasts.map((name, i) => {
+                    const isSelected = selectedCasts.includes(name);
+                    const colorIdx = isSelected ? selectedCasts.indexOf(name) : i;
+                    const color = CAST_COLORS[colorIdx % CAST_COLORS.length];
+                    return (
+                      <button
+                        key={name}
+                        onClick={() => toggleCast(name)}
+                        className="text-xs px-3 py-2 rounded-lg transition-all font-medium"
+                        style={{
+                          background: isSelected ? `${color}20` : 'rgba(100,116,139,0.1)',
+                          color: isSelected ? color : 'var(--text-muted)',
+                          border: isSelected ? `1px solid ${color}40` : '1px solid transparent',
+                        }}
+                      >
+                        {isSelected && <span className="mr-1.5">✓</span>}
+                        {name}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] mt-1.5" style={{ color: 'var(--text-muted)' }}>
+                  最大4キャストまで選択できます
+                </p>
+              </>
             )}
           </div>
 
@@ -379,12 +384,12 @@ export default function CastComparePage() {
                 <div className="space-y-3">
                   <div className="flex justify-between text-xs">
                     <span style={{ color: 'var(--text-muted)' }}>メッセージ数</span>
-                    <span className="font-bold tabular-nums">{stat.totalMessages.toLocaleString()}</span>
+                    <span className="font-bold tabular-nums">{stat.totalMessages.toLocaleString()}件</span>
                   </div>
                   <div className="flex justify-between text-xs">
                     <span style={{ color: 'var(--text-muted)' }}>チップ額</span>
                     <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                      {formatTokens(stat.totalTips)}
+                      {formatTokens(stat.totalTips)} tk
                     </span>
                   </div>
                   <div className="flex justify-between text-xs">
@@ -397,7 +402,7 @@ export default function CastComparePage() {
                   <div className="flex justify-between text-xs">
                     <span style={{ color: 'var(--text-muted)' }}>ユニークユーザー</span>
                     <span className="font-bold tabular-nums" style={{ color: 'var(--accent-primary)' }}>
-                      {stat.uniqueUsers}
+                      {stat.uniqueUsers}名
                     </span>
                   </div>
                   <div className="flex justify-between text-xs">
@@ -409,13 +414,13 @@ export default function CastComparePage() {
                   <div className="flex justify-between text-xs">
                     <span style={{ color: 'var(--text-muted)' }}>セッション数</span>
                     <span className="font-bold tabular-nums" style={{ color: 'var(--accent-purple)' }}>
-                      {stat.sessionCount}
+                      {stat.sessionCount}回
                     </span>
                   </div>
                   <div className="flex justify-between text-xs">
                     <span style={{ color: 'var(--text-muted)' }}>チップ/ギフト件数</span>
                     <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                      {stat.tipMessages}
+                      {stat.tipMessages}件
                     </span>
                   </div>
                 </div>
@@ -506,6 +511,9 @@ export default function CastComparePage() {
                   />
                 </RadarChart>
               </ResponsiveContainer>
+              <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>
+                ※ 各指標の最大値を100として正規化しています
+              </p>
             </div>
           </div>
         </>

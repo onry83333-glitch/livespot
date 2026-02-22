@@ -21,6 +21,11 @@ export function formatJST(dateStr: string): string {
   return new Date(dateStr).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
 }
 
+/** Format tokens as dual currency: ¥yen (N tk) */
+export function formatCoinDual(tokens: number): string {
+  return `${tokensToJPY(tokens)} (${tokens.toLocaleString()} tk)`;
+}
+
 /** Format relative time */
 export function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();

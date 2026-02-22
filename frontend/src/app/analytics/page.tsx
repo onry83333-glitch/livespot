@@ -75,6 +75,16 @@ const castPayroll = [
 /* ============================================================
    Page
    ============================================================ */
+const exportCSV = (data: Record<string, unknown>[], filename: string) => {
+  if (!data.length) return;
+  const headers = Object.keys(data[0]);
+  const csv = [headers.join(','), ...data.map(row => headers.map(h => JSON.stringify(row[h] ?? '')).join(','))].join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `${filename}_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+};
+
 export default function AnalyticsPage() {
   const { user, session } = useAuth();
   const supabaseRef = useRef(createClient());
@@ -85,7 +95,9 @@ export default function AnalyticsPage() {
   const [selectedAccount, setSelectedAccount] = useState<string>('');
 
   // DM効果測定 state
-  const [daysWindow, setDaysWindow] = useState(7);
+  const [daysWindow, setDaysWindow] = useState<number | 'custom'>(7);
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
   const [campaignFilter, setCampaignFilter] = useState('');
   const [summary, setSummary] = useState<EffectivenessSummary | null>(null);
   const [byCampaign, setByCampaign] = useState<CampaignRow[]>([]);
@@ -116,7 +128,12 @@ export default function AnalyticsPage() {
     setLoading(true);
     setError(null);
     try {
-      const since = new Date(Date.now() - 30 * 86400000).toISOString();
+      const since = daysWindow === 'custom' && customStart
+        ? new Date(customStart).toISOString()
+        : new Date(Date.now() - (typeof daysWindow === 'number' ? daysWindow : 7) * 86400000).toISOString();
+      const until = daysWindow === 'custom' && customEnd
+        ? new Date(customEnd + 'T23:59:59').toISOString()
+        : undefined;
 
       // DM送信ログ取得
       let query = sb.from('dm_send_log')
@@ -125,6 +142,10 @@ export default function AnalyticsPage() {
         .gte('created_at', since)
         .order('created_at', { ascending: false })
         .limit(1000);
+
+      if (until) {
+        query = query.lte('created_at', until);
+      }
 
       if (campaignFilter) {
         query = query.eq('campaign', campaignFilter);
@@ -186,7 +207,7 @@ export default function AnalyticsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedAccount, session, daysWindow, campaignFilter, sb]);
+  }, [selectedAccount, session, daysWindow, campaignFilter, customStart, customEnd, sb]);
 
   useEffect(() => {
     if (tab === 'dm') loadEffectiveness();
@@ -373,13 +394,36 @@ export default function AnalyticsPage() {
               <select
                 className="input-glass text-xs px-3 py-2 w-28"
                 value={daysWindow}
-                onChange={(e) => setDaysWindow(Number(e.target.value))}
+                onChange={(e) => setDaysWindow(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}
               >
                 <option value={7}>7日間</option>
                 <option value={14}>14日間</option>
                 <option value={30}>30日間</option>
+                <option value="custom">カスタム</option>
               </select>
             </div>
+            {daysWindow === 'custom' && (
+              <>
+                <div>
+                  <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>開始日</label>
+                  <input
+                    type="date"
+                    className="input-glass text-xs px-3 py-2 w-36"
+                    value={customStart}
+                    onChange={(e) => setCustomStart(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>終了日</label>
+                  <input
+                    type="date"
+                    className="input-glass text-xs px-3 py-2 w-36"
+                    value={customEnd}
+                    onChange={(e) => setCustomEnd(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
             <div>
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>キャンペーン</label>
               <select
@@ -431,21 +475,39 @@ export default function AnalyticsPage() {
               </div>
               <div className="glass-card p-5">
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>DM後 売上</p>
-                <p className="text-3xl font-bold mt-2 text-emerald-400">
-                  {tokensToJPY(summary.total_revenue_after_dm)}
-                </p>
-                <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  {summary.total_revenue_after_dm.toLocaleString()} tk
-                </p>
+                {summary.total_revenue_after_dm > 0 ? (
+                  <>
+                    <p className="text-3xl font-bold mt-2 text-emerald-400">
+                      {tokensToJPY(summary.total_revenue_after_dm)}
+                    </p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                      {summary.total_revenue_after_dm.toLocaleString()} tk
+                    </p>
+                  </>
+                ) : (
+                  <div className="mt-2">
+                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>--</p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--accent-amber)' }}>Coming soon — RPC接続準備中</p>
+                  </div>
+                )}
               </div>
               <div className="glass-card p-5">
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>1人あたり平均</p>
-                <p className="text-3xl font-bold mt-2 text-violet-400">
-                  {tokensToJPY(summary.avg_revenue_per_converted)}
-                </p>
-                <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  {summary.avg_revenue_per_converted.toLocaleString()} tk
-                </p>
+                {summary.avg_revenue_per_converted > 0 ? (
+                  <>
+                    <p className="text-3xl font-bold mt-2 text-violet-400">
+                      {tokensToJPY(summary.avg_revenue_per_converted)}
+                    </p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                      {summary.avg_revenue_per_converted.toLocaleString()} tk
+                    </p>
+                  </>
+                ) : (
+                  <div className="mt-2">
+                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>--</p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--accent-amber)' }}>Coming soon — RPC接続準備中</p>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -453,9 +515,23 @@ export default function AnalyticsPage() {
           {/* Campaign Comparison Table (AB Test) */}
           {!loading && byCampaign.length > 0 && (
             <div className="glass-card p-6">
-              <h3 className="text-sm font-semibold mb-4">
-                キャンペーン別比較（ABテスト）
-              </h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold">
+                  キャンペーン別比較（ABテスト）
+                </h3>
+                <button
+                  onClick={() => exportCSV(byCampaign.map(r => ({
+                    キャンペーン: r.campaign,
+                    送信数: r.sent,
+                    再課金: r.converted,
+                    CVR: `${r.rate}%`,
+                    売上_tk: r.revenue,
+                  })), 'dm_campaign_comparison')}
+                  className="btn-ghost text-[10px] px-3 py-1.5"
+                >
+                  CSVエクスポート
+                </button>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -531,7 +607,21 @@ export default function AnalyticsPage() {
           {/* Timeline Chart */}
           {!loading && timeline.length > 0 && (
             <div className="glass-card p-6">
-              <h3 className="text-sm font-semibold mb-4">日別推移（直近30日）</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold">日別推移（直近30日）</h3>
+                <button
+                  onClick={() => exportCSV(timeline.map(d => ({
+                    日付: d.date,
+                    送信数: d.sent,
+                    成功: d.success,
+                    エラー: d.error,
+                    再課金: d.converted,
+                  })), 'dm_timeline')}
+                  className="btn-ghost text-[10px] px-3 py-1.5"
+                >
+                  CSVエクスポート
+                </button>
+              </div>
 
               {/* Legend */}
               <div className="flex items-center gap-4 mb-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>
@@ -739,6 +829,24 @@ export default function AnalyticsPage() {
               <div className="glass-card p-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-semibold">ユーザー一覧</h3>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => exportCSV(
+                        funnelUsers
+                          .filter(u => funnelFilter === 'all' || u.segment === funnelFilter)
+                          .map(u => ({
+                            ユーザー名: u.user_name,
+                            セグメント: u.segmentLabel,
+                            累計トークン: u.total_tokens,
+                            取引回数: u.tx_count ?? '',
+                            最終課金: u.last_paid ? new Date(u.last_paid).toLocaleDateString('ja-JP') : '',
+                          })),
+                        'funnel_users'
+                      )}
+                      className="btn-ghost text-[10px] px-3 py-1.5"
+                    >
+                      CSVエクスポート
+                    </button>
                   <div className="flex gap-1">
                     {['all', 'whale', 'regular', 'light', 'free', 'lead'].map((f) => (
                       <button
@@ -753,6 +861,7 @@ export default function AnalyticsPage() {
                         {f === 'all' ? '全て' : f.charAt(0).toUpperCase() + f.slice(1)}
                       </button>
                     ))}
+                  </div>
                   </div>
                 </div>
 
@@ -830,6 +939,12 @@ export default function AnalyticsPage() {
       {/* ============ Payroll Tab (既存モック) ============ */}
       {tab === 'payroll' && (
         <div className="space-y-6 anim-fade-up">
+          {/* Demo warning */}
+          <div className="glass-card p-3 flex items-center gap-2" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
+            <span>&#9888;&#65039;</span>
+            <span className="text-xs">デモデータ — 実際の給与計算には使用しないでください</span>
+          </div>
+
           {/* Stats Row */}
           <div className="grid grid-cols-3 gap-4">
             {payrollStats.map((s, i) => (
@@ -849,6 +964,23 @@ export default function AnalyticsPage() {
 
           {/* Payroll Table */}
           <div className="glass-card p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold">キャスト給与明細</h3>
+              <button
+                onClick={() => exportCSV(castPayroll.map(c => ({
+                  キャスト名: c.name,
+                  ティア: c.tier,
+                  総売上: c.revenue,
+                  紹介料率: c.rate,
+                  最終支払額: c.payout,
+                  調整: c.adj,
+                  ステータス: c.status,
+                })), 'payroll')}
+                className="btn-ghost text-[10px] px-3 py-1.5"
+              >
+                CSVエクスポート
+              </button>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>

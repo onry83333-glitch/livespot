@@ -211,6 +211,11 @@ export default function SettingsPage() {
       {/* ============ Security Tab (既存モック) ============ */}
       {tab === 'security' && (
         <div className="space-y-6 anim-fade-up">
+          <div className="glass-card p-3 mb-4" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.15)' }}>
+            <p className="text-xs flex items-center gap-2" style={{ color: 'var(--accent-amber)' }}>
+              このセクションは開発中です。表示されているデータはサンプルです。
+            </p>
+          </div>
           <div className="grid grid-cols-3 gap-4">
             <div className="glass-card p-5">
               <div className="flex items-center justify-between">

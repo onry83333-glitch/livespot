@@ -314,11 +314,11 @@ export default function CastsPage() {
         return (
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>{totals.casts}</p>
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>{totals.casts}<span className="text-sm font-medium ml-0.5">名</span></p>
               <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>登録キャスト数</p>
             </div>
             <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(totals.thisWeekCoins)}</p>
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(totals.thisWeekCoins)}<span className="text-sm font-medium ml-0.5">tk</span></p>
               <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週のコイン</p>
             </div>
             <div className="glass-card p-4 text-center">
@@ -436,13 +436,13 @@ export default function CastsPage() {
                       )}
                     </td>
                     <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                      {formatTokens(cast.this_week_coins)}
+                      {formatTokens(cast.this_week_coins)} tk
                     </td>
                     <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--accent-green)' }}>
                       {tokensToJPY(cast.this_week_coins, coinRate)}
                     </td>
                     <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                      {formatTokens(cast.last_week_coins)}
+                      {formatTokens(cast.last_week_coins)} tk
                     </td>
                     <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{
                       color: diff > 0 ? 'var(--accent-green)' : diff < 0 ? 'var(--accent-pink)' : 'var(--text-muted)'
