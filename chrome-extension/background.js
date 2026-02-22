@@ -4099,7 +4099,7 @@ function stopDMPolling() {
 async function checkCastOnlineStatus(castName) {
   try {
     const res = await fetch(
-      `https://stripchat.com/api/front/v2/models/username/${encodeURIComponent(castName)}`,
+      `https://ja.stripchat.com/api/front/v2/models/username/${encodeURIComponent(castName)}/cam`,
       { headers: { 'Accept': 'application/json' } }
     );
     if (!res.ok) {
@@ -4546,8 +4546,8 @@ async function captureAllThumbnailsCDN() {
 
   // 登録キャスト一覧を収集
   const castNames = [];
-  if (registeredCastNamesCache && registeredCastNamesCache.size > 0) {
-    for (const name of registeredCastNamesCache) castNames.push(name);
+  if (registeredCastNames && registeredCastNames.size > 0) {
+    for (const name of registeredCastNames) castNames.push(name);
   } else if (ownCastNamesCache && ownCastNamesCache.size > 0) {
     for (const name of ownCastNamesCache) castNames.push(name);
   }
@@ -4964,30 +4964,69 @@ async function fetchViewerMembers(castName) {
       visit_count: 1,
     }));
 
-    // Supabase UPSERT (ON CONFLICT更新)
-    const upsertRes = await fetch(
-      `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          apikey: CONFIG.SUPABASE_ANON_KEY,
-          Authorization: `Bearer ${accessToken}`,
-          Prefer: 'return=minimal,resolution=merge-duplicates',
-        },
-        body: JSON.stringify(rows.map(r => ({
-          ...r,
-          last_seen_at: now,
-        }))),
-      }
-    );
+    // spy_viewers: 個別 UPSERT（session_id NULLのUNIQUE制約問題を回避）
+    let savedCount = 0;
+    for (const r of rows) {
+      try {
+        // 既存レコードを検索（session_id NULL対応）
+        const sessionFilter = r.session_id
+          ? `session_id=eq.${encodeURIComponent(r.session_id)}`
+          : 'session_id=is.null';
+        const checkRes = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(r.cast_name)}&user_name=eq.${encodeURIComponent(r.user_name)}&${sessionFilter}&select=id,visit_count&limit=1`,
+          {
+            headers: {
+              apikey: CONFIG.SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${accessToken}`,
+            },
+          }
+        );
+        const existing = checkRes.ok ? await checkRes.json() : [];
 
-    if (upsertRes.ok) {
-      console.log(`[LS-BG] spy_viewers: ${rows.length} members saved for ${castName}`);
-    } else {
-      const errText = await upsertRes.text().catch(() => '');
-      console.warn('[LS-BG] spy_viewers upsert failed:', upsertRes.status, errText.slice(0, 200));
+        if (existing.length > 0) {
+          // UPDATE: last_seen_at と visit_count を更新
+          await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers?id=eq.${existing[0].id}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: CONFIG.SUPABASE_ANON_KEY,
+                Authorization: `Bearer ${accessToken}`,
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify({
+                last_seen_at: now,
+                visit_count: (existing[0].visit_count || 0) + 1,
+                league: r.league,
+                level: r.level,
+                is_fan_club: r.is_fan_club,
+                user_id_stripchat: r.user_id_stripchat || undefined,
+              }),
+            }
+          );
+        } else {
+          // INSERT
+          await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: CONFIG.SUPABASE_ANON_KEY,
+                Authorization: `Bearer ${accessToken}`,
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify(r),
+            }
+          );
+        }
+        savedCount++;
+      } catch (e) {
+        console.warn('[LS-BG] spy_viewers row error:', r.user_name, e.message);
+      }
     }
+    console.log(`[LS-BG] spy_viewers: ${savedCount}/${rows.length} members saved for ${castName}`);
   } catch (err) {
     console.warn('[LS-BG] fetchViewerMembers error:', err.message);
   }

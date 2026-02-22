@@ -499,24 +499,22 @@ export default function DmPage() {
 
       // API送信モード: サーバーサイドでバッチ処理を試行
       // 失敗時はChrome拡張がポーリングでフォールバック送信する
-      fetch('/api/dm/batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          account_id: selectedAccount,
-          limit: 50,
-        }),
-      })
-        .then(r => r.json())
-        .then(data => {
-          if (data.success !== undefined || data.processed !== undefined) {
-            console.log('[DM] API batch result:', data);
-          } else {
-            console.warn('[DM] API batch fallback:', data.error || data);
-          }
-        })
-        .catch(e => console.warn('[DM] API batch failed, extension will pick up:', e));
+      console.log('[DM] Calling /api/dm/batch account_id=', selectedAccount, 'count=', count);
+      try {
+        const batchRes = await fetch('/api/dm/batch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            account_id: selectedAccount,
+            limit: 50,
+          }),
+        });
+        const batchData = await batchRes.json();
+        console.log('[DM] API batch response:', batchRes.status, batchData);
+      } catch (batchErr) {
+        console.warn('[DM] API batch failed, extension will pick up:', batchErr);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
