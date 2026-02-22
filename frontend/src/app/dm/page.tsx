@@ -675,16 +675,6 @@ export default function DmPage() {
                   value={message} onChange={(e) => setMessage(e.target.value)}
                   placeholder="\u30E1\u30C3\u30BB\u30FC\u30B8\u3092\u5165\u529B..." />
               </div>
-              <div className="glass-card p-5">
-                <h3 className="text-sm font-bold mb-3 flex items-center gap-2">Image</h3>
-                <div className="border-2 border-dashed rounded-xl p-8 text-center transition-colors hover:border-sky-500/30"
-                  style={{ borderColor: 'var(--border-glass)' }}>
-                  <div className="text-4xl mb-3 opacity-30">+</div>
-                  <p className="text-sm mb-1">\u30D5\u30A1\u30A4\u30EB\u3092\u30C9\u30E9\u30C3\u30B0&\u30C9\u30ED\u30C3\u30D7</p>
-                  <p className="text-[10px] mb-4" style={{ color: 'var(--text-muted)' }}>PNG, JPG, GIF (MAX 200MB)</p>
-                  <button className="btn-ghost text-xs">\u30D5\u30A1\u30A4\u30EB\u3092\u95B2\u89A7\u3059\u308B</button>
-                </div>
-              </div>
             </div>
 
             {/* Right: Settings */}

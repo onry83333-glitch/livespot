@@ -335,8 +335,8 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* データなし → デモデータ挿入 */}
-      {dataEmpty && stats && (
+      {/* データなし → デモデータ挿入（開発環境のみ） */}
+      {process.env.NODE_ENV === 'development' && dataEmpty && stats && (
         <div className="glass-card p-6 text-center anim-fade-up">
           <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
             {'\u3053\u306E\u30A2\u30AB\u30A6\u30F3\u30C8\u306B\u306F\u307E\u3060\u30C7\u30FC\u30BF\u304C\u3042\u308A\u307E\u305B\u3093\u3002\u30C7\u30E2\u30C7\u30FC\u30BF\u3092\u633F\u5165\u3057\u3066\u753B\u9762\u3092\u78BA\u8A8D\u3067\u304D\u307E\u3059\u3002'}

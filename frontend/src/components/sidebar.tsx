@@ -21,6 +21,9 @@ const navSections: NavSection[] = [
     title: 'メイン',
     items: [
       { href: '/casts',      icon: '📋', label: 'キャスト一覧' },
+      { href: '/dm',         icon: '💬', label: 'DM管理' },
+      { href: '/analytics',  icon: '📊', label: '売上分析' },
+      { href: '/users',      icon: '👥', label: 'ユーザー検索' },
     ],
   },
   {
@@ -271,10 +274,6 @@ function SidebarInner() {
             ↩
           </button>
         </div>
-        <button className="btn-go-live flex items-center justify-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-white anim-live"></span>
-          GO LIVE
-        </button>
       </div>
     </aside>
   );
