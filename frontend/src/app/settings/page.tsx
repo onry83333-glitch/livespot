@@ -36,6 +36,16 @@ export default function SettingsPage() {
   // === Chrome Extension Status ===
   const [extensionStatus, setExtensionStatus] = useState<'connected' | 'disconnected' | 'checking'>('checking');
 
+  // === Stripchat Session Status ===
+  const [scSession, setScSession] = useState<{
+    is_valid: boolean;
+    exported_at: string;
+    stripchat_user_id: string | null;
+    last_validated_at: string;
+    csrf_token: string | null;
+  } | null>(null);
+  const [scSessionLoading, setScSessionLoading] = useState(true);
+
   useEffect(() => {
     const check = async () => {
       const { data } = await sb.from('spy_messages')
@@ -53,6 +63,20 @@ export default function SettingsPage() {
     };
     check();
   }, [sb]);
+
+  // === Stripchat Session fetch ===
+  useEffect(() => {
+    if (!selectedAccount) return;
+    setScSessionLoading(true);
+    sb.from('stripchat_sessions')
+      .select('is_valid, exported_at, stripchat_user_id, last_validated_at, csrf_token')
+      .eq('account_id', selectedAccount)
+      .maybeSingle()
+      .then(({ data }) => {
+        setScSession(data);
+        setScSessionLoading(false);
+      });
+  }, [selectedAccount, sb]);
 
   // === Security (existing mock) ===
   const [banProtection, setBanProtection] = useState(true);
@@ -154,6 +178,68 @@ export default function SettingsPage() {
                 : '接続状態を確認しています...'}
           </p>
         </div>
+      </div>
+
+      {/* Stripchat DM API セッション */}
+      <div className="glass-card p-4">
+        <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+          Stripchat セッション
+          {!scSessionLoading && (
+            <span className={`w-2 h-2 rounded-full ${
+              scSession?.is_valid ? 'bg-emerald-500 anim-live' : 'bg-rose-500'
+            }`} />
+          )}
+        </h3>
+        {scSessionLoading ? (
+          <div className="h-8 rounded animate-pulse" style={{ background: 'var(--bg-card)' }} />
+        ) : scSession ? (
+          <div className="space-y-2 text-[11px]">
+            <div className="flex justify-between">
+              <span style={{ color: 'var(--text-muted)' }}>ステータス</span>
+              <span style={{ color: scSession.is_valid ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                {scSession.is_valid ? 'API送信可能' : 'セッション無効'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span style={{ color: 'var(--text-muted)' }}>Stripchat ID</span>
+              <span>{scSession.stripchat_user_id || '未設定'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span style={{ color: 'var(--text-muted)' }}>CSRF</span>
+              <span style={{ color: scSession.csrf_token ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
+                {scSession.csrf_token ? '取得済み' : '未取得'}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span style={{ color: 'var(--text-muted)' }}>最終同期</span>
+              <span>
+                {new Date(scSession.exported_at).toLocaleString('ja-JP', {
+                  month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                })}
+              </span>
+            </div>
+            <div className="flex justify-between">
+              <span style={{ color: 'var(--text-muted)' }}>最終検証</span>
+              <span>
+                {new Date(scSession.last_validated_at).toLocaleString('ja-JP', {
+                  month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                })}
+              </span>
+            </div>
+            <p className="text-[10px] mt-2 pt-2" style={{ color: 'var(--text-muted)', borderTop: '1px solid var(--border-glass)' }}>
+              Chrome拡張が1時間ごとにセッションを自動同期します
+            </p>
+          </div>
+        ) : (
+          <div className="text-[11px] space-y-2">
+            <p style={{ color: 'var(--text-muted)' }}>
+              セッション未登録。Chrome拡張を開いてStripchatにログインしてください。
+            </p>
+            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              ログイン後、拡張が自動でセッションを同期します。
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Tab Switch */}

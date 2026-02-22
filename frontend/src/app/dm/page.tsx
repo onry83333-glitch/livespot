@@ -143,6 +143,8 @@ export default function DmPage() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [batchId, setBatchId] = useState<string | null>(null);
+  const [apiSessionValid, setApiSessionValid] = useState(false);
+  const [apiSessionExportedAt, setApiSessionExportedAt] = useState<string | null>(null);
   const [queuedCount, setQueuedCount] = useState(0);
   const [statusCounts, setStatusCounts] = useState({ total: 0, queued: 0, sending: 0, success: 0, error: 0 });
   const [recentLogs, setRecentLogs] = useState<DMLogItem[]>([]);
@@ -191,10 +193,6 @@ export default function DmPage() {
   // === API offline state ===
   const [apiOffline, setApiOffline] = useState(false);
 
-  // === API DM送信セッション ===
-  const [apiSessionValid, setApiSessionValid] = useState(false);
-  const [apiSessionInfo, setApiSessionInfo] = useState<{exported_at: string; stripchat_user_id: string | null} | null>(null);
-
   // === URL preset handled flag ===
   const presetHandledRef = useRef(false);
 
@@ -220,8 +218,7 @@ export default function DmPage() {
       .maybeSingle()
       .then(({ data: scSession }) => {
         setApiSessionValid(!!scSession);
-        if (scSession) setApiSessionInfo({ exported_at: scSession.exported_at, stripchat_user_id: scSession.stripchat_user_id });
-        else setApiSessionInfo(null);
+        setApiSessionExportedAt(scSession?.exported_at || null);
       });
   }, [selectedAccount, sb]);
 
@@ -424,6 +421,7 @@ export default function DmPage() {
         id: l.id, user_name: l.user_name, message: l.message,
         status: l.status, error: l.error, campaign: l.campaign,
         queued_at: l.queued_at || l.created_at, sent_at: l.sent_at,
+        sent_via: l.sent_via,
       })));
     } catch { /* ignore */ }
   }, [sb, selectedAccount]);
@@ -486,7 +484,7 @@ export default function DmPage() {
           const { data: { session } } = await sb.auth.getSession();
           if (session?.access_token) {
             // バックグラウンドでAPI送信を開始（レスポンスを待たない）
-            fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/dm/batch`, {
+            fetch('/api/dm/batch', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -840,9 +838,9 @@ export default function DmPage() {
             <span style={{ color: apiSessionValid ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
               {apiSessionValid ? 'API送信可能' : 'Chrome拡張モード'}
             </span>
-            {apiSessionInfo && (
+            {apiSessionExportedAt && (
               <span style={{ color: 'var(--text-muted)' }}>
-                (同期: {new Date(apiSessionInfo.exported_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })})
+                (同期: {new Date(apiSessionExportedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })})
               </span>
             )}
           </div>
@@ -902,6 +900,12 @@ export default function DmPage() {
                       </span>
                       <span className="font-medium flex-1 truncate">{log.user_name}</span>
                       <span style={{ color: 'var(--text-muted)' }}>{log.status}</span>
+                      {log.sent_via === 'api' && (
+                        <span className="text-[8px] px-1.5 py-0.5 rounded ml-1"
+                          style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
+                          API
+                        </span>
+                      )}
                       {log.error && <span className="text-rose-400 truncate max-w-[200px]">{log.error}</span>}
                     </div>
                   ))}

@@ -21,6 +21,25 @@ export interface Account {
 }
 
 // ============================================================
+// Stripchat Sessions
+// ============================================================
+export interface StripchatSession {
+  id: string;
+  account_id: string;
+  session_cookie: string;
+  csrf_token: string | null;
+  csrf_timestamp: string | null;
+  stripchat_user_id: string | null;
+  front_version: string | null;
+  is_valid: boolean;
+  last_validated_at: string;
+  exported_at: string;
+  expires_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ============================================================
 // DM
 // ============================================================
 export interface DMLog {
@@ -40,6 +59,7 @@ export interface DMLog {
   scenario_enrollment_id?: string | null;
   edited_by_human?: boolean;
   original_ai_message?: string | null;
+  sent_via?: 'api' | 'extension';
 }
 
 export interface DMTemplate {
