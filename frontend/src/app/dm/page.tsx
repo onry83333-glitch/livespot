@@ -497,18 +497,26 @@ export default function DmPage() {
       setStatusCounts({ total: count, queued: count, sending: 0, success: 0, error: 0 });
       if (bid) pollStatus(bid);
 
-      // API送信モード: サーバーサイドでバッチ処理
-      if (apiSessionValid) {
-        fetch('/api/dm/batch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            account_id: selectedAccount,
-            limit: 50,
-          }),
-        }).catch(e => console.warn('API batch send failed, extension will pick up:', e));
-      }
+      // API送信モード: サーバーサイドでバッチ処理を試行
+      // 失敗時はChrome拡張がポーリングでフォールバック送信する
+      fetch('/api/dm/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          account_id: selectedAccount,
+          limit: 50,
+        }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success !== undefined || data.processed !== undefined) {
+            console.log('[DM] API batch result:', data);
+          } else {
+            console.warn('[DM] API batch fallback:', data.error || data);
+          }
+        })
+        .catch(e => console.warn('[DM] API batch failed, extension will pick up:', e));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
