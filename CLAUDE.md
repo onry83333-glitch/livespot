@@ -596,7 +596,23 @@ claude
 
 ### Production Hardening（品質巡回で発見）
 - [ ] CORS本番ドメイン限定（main.py）
-- [ ] Chrome拡張の環境変数化（config.js: ngrok/localhost → 環境切替）
+- [x] Chrome拡張の環境変数化（config.js: update_url検出で本番/開発自動切替）
+
+### [2026-02-22] UX巡回エージェント実施
+- 発見: 62件（Critical 8 / High 18 / Medium 26 / Low 10）
+- 最優先改善: サイドバーにDM/分析/ユーザーリンク追加（C3）、GO LIVEボタン削除（C8）
+- ジャーニー検証: 4本中4本で詰まり（DM送信8クリック→4クリック目標、CVR導線なし）
+- 詳細レポート: scripts/ux_audit_report_2026-02-22.md
+- Batch 1（~2h）: ナビ修正+非機能UI削除 → 即時信頼性UP ✅完了
+- Batch 2（~3h）: データ鮮度表示+単位統一 → 数字の信頼性
+
+### [2026-02-22] UX改善バッチ1 — 最優先5件
+- sidebar.tsx: DM管理/売上分析/ユーザー検索へのナビリンク追加
+- sidebar.tsx: GO LIVEボタン削除（非機能）
+- casts/[castName]/page.tsx: 離脱リスク/リテンションセクション — データなし時非表示
+- page.tsx: デモデータボタン — dev限定化
+- dm/page.tsx: 画像アップロードUI — 非機能のため削除
+- Batch 3（~4h）: アクション導線改善 → Whale→DM、セグメント→DM、CVR表示
 - [ ] Chrome拡張メモリリーク対策（background.js: Map/Setの上限設定）
 - [ ] Backend例外処理の改善（spy/sync/analytics の except pass）
 - [ ] DM送信ステータスバリデーション
