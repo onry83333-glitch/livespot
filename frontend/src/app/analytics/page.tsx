@@ -57,22 +57,6 @@ interface FunnelUser {
 }
 
 /* ============================================================
-   Mock data for payroll tab (既存)
-   ============================================================ */
-const payrollStats = [
-  { label: '総売上', value: '\u00A512,450,000', change: '+12.4%', positive: true },
-  { label: 'エージェンシー利益', value: '\u00A53,735,000', change: '+10.2%', positive: true },
-  { label: 'キャスト総支払額', value: '\u00A58,715,000', change: '+15.8%', positive: true },
-];
-
-const castPayroll = [
-  { name: '宮崎 さくら', tier: 'PREMIUM CAST', revenue: '\u00A52,450,000', rate: '30%', payout: '\u00A51,715,000', adj: '-\u00A5245,000', status: '送金済み', statusColor: '#22c55e' },
-  { name: '佐藤 美月', tier: 'Standard', revenue: '\u00A5850,000', rate: '35%', payout: '\u00A5552,500', adj: '-\u00A585,000', status: '処理中', statusColor: '#38bdf8' },
-  { name: '田中 絵里', tier: 'Standard', revenue: '\u00A51,200,000', rate: '32%', payout: '\u00A5816,000', adj: '-\u00A5120,000', status: '送金済み', statusColor: '#22c55e' },
-  { name: '渡辺 凛', tier: 'PREMIUM CAST', revenue: '\u00A51,980,000', rate: '30%', payout: '\u00A51,386,000', adj: '-\u00A5198,000', status: '送金済み', statusColor: '#22c55e' },
-];
-
-/* ============================================================
    Page
    ============================================================ */
 const exportCSV = (data: Record<string, unknown>[], filename: string) => {
@@ -330,7 +314,6 @@ export default function AnalyticsPage() {
   // Render helpers
   // ============================================================
   const maxTimelineSent = Math.max(...timeline.map((d) => d.sent), 1);
-  const maxTimelineConverted = Math.max(...timeline.map((d) => d.converted), 1);
 
   return (
     <div className="max-w-[1200px] space-y-6">
@@ -455,7 +438,7 @@ export default function AnalyticsPage() {
 
           {/* Summary Cards */}
           {!loading && summary && (
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="glass-card p-5">
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>DM送信数</p>
                 <p className="text-3xl font-bold mt-2 text-sky-400">{summary.total_sent.toLocaleString()}</p>
@@ -467,128 +450,34 @@ export default function AnalyticsPage() {
                   summary.conversion_rate >= 10 ? 'text-emerald-400' :
                   summary.conversion_rate >= 5 ? 'text-amber-400' : 'text-slate-300'
                 }`}>
-                  {summary.conversion_rate}%
+                  {summary.conversion_rate.toFixed(1)}%
                 </p>
                 <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
                   {summary.total_converted}人が再課金
                 </p>
               </div>
+              {summary.total_revenue_after_dm > 0 && (
               <div className="glass-card p-5">
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>DM後 売上</p>
-                {summary.total_revenue_after_dm > 0 ? (
-                  <>
-                    <p className="text-3xl font-bold mt-2 text-emerald-400">
-                      {tokensToJPY(summary.total_revenue_after_dm)}
-                    </p>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
-                      {summary.total_revenue_after_dm.toLocaleString()} tk
-                    </p>
-                  </>
-                ) : (
-                  <div className="mt-2">
-                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>--</p>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--accent-amber)' }}>Coming soon — RPC接続準備中</p>
-                  </div>
-                )}
+                <p className="text-3xl font-bold mt-2 text-emerald-400">
+                  {tokensToJPY(summary.total_revenue_after_dm)}
+                </p>
+                <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  {summary.total_revenue_after_dm.toLocaleString()} tk
+                </p>
               </div>
+              )}
+              {summary.avg_revenue_per_converted > 0 && (
               <div className="glass-card p-5">
                 <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>1人あたり平均</p>
-                {summary.avg_revenue_per_converted > 0 ? (
-                  <>
-                    <p className="text-3xl font-bold mt-2 text-violet-400">
-                      {tokensToJPY(summary.avg_revenue_per_converted)}
-                    </p>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
-                      {summary.avg_revenue_per_converted.toLocaleString()} tk
-                    </p>
-                  </>
-                ) : (
-                  <div className="mt-2">
-                    <p className="text-sm" style={{ color: 'var(--text-muted)' }}>--</p>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--accent-amber)' }}>Coming soon — RPC接続準備中</p>
-                  </div>
-                )}
+                <p className="text-3xl font-bold mt-2 text-violet-400">
+                  {tokensToJPY(summary.avg_revenue_per_converted)}
+                </p>
+                <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
+                  {summary.avg_revenue_per_converted.toLocaleString()} tk
+                </p>
               </div>
-            </div>
-          )}
-
-          {/* Campaign Comparison Table (AB Test) */}
-          {!loading && byCampaign.length > 0 && (
-            <div className="glass-card p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold">
-                  キャンペーン別比較（ABテスト）
-                </h3>
-                <button
-                  onClick={() => exportCSV(byCampaign.map(r => ({
-                    キャンペーン: r.campaign,
-                    送信数: r.sent,
-                    再課金: r.converted,
-                    CVR: `${r.rate}%`,
-                    売上_tk: r.revenue,
-                  })), 'dm_campaign_comparison')}
-                  className="btn-ghost text-[10px] px-3 py-1.5"
-                >
-                  CSVエクスポート
-                </button>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left" style={{ color: 'var(--text-muted)' }}>
-                      <th className="pb-3 font-medium text-xs">キャンペーン</th>
-                      <th className="pb-3 font-medium text-xs text-right">送信数</th>
-                      <th className="pb-3 font-medium text-xs text-right">再課金</th>
-                      <th className="pb-3 font-medium text-xs text-right">CVR</th>
-                      <th className="pb-3 font-medium text-xs text-right">売上 (tk)</th>
-                      <th className="pb-3 font-medium text-xs">CVR</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {byCampaign.map((r, i) => {
-                      const maxRate = Math.max(...byCampaign.map((c) => c.rate), 1);
-                      const barWidth = (r.rate / maxRate) * 100;
-                      return (
-                        <tr key={i} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
-                          <td className="py-3">
-                            <span className="text-xs font-mono px-2 py-1 rounded bg-white/[0.03]">
-                              {r.campaign || '(未設定)'}
-                            </span>
-                          </td>
-                          <td className="py-3 text-right tabular-nums">{r.sent}</td>
-                          <td className="py-3 text-right tabular-nums text-emerald-400">{r.converted}</td>
-                          <td className="py-3 text-right tabular-nums font-semibold">
-                            <span className={
-                              r.rate >= 10 ? 'text-emerald-400' :
-                              r.rate >= 5 ? 'text-amber-400' : 'text-slate-300'
-                            }>
-                              {r.rate}%
-                            </span>
-                          </td>
-                          <td className="py-3 text-right tabular-nums text-emerald-400">
-                            {r.revenue.toLocaleString()}
-                          </td>
-                          <td className="py-3 w-32">
-                            <div className="h-2 rounded-full bg-white/[0.04] overflow-hidden">
-                              <div
-                                className="h-full rounded-full transition-all duration-500"
-                                style={{
-                                  width: `${barWidth}%`,
-                                  background: r.rate >= 10
-                                    ? 'linear-gradient(90deg, #22c55e, #16a34a)'
-                                    : r.rate >= 5
-                                    ? 'linear-gradient(90deg, #f59e0b, #d97706)'
-                                    : 'linear-gradient(90deg, #64748b, #475569)',
-                                }}
-                              />
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              )}
             </div>
           )}
 
@@ -604,123 +493,184 @@ export default function AnalyticsPage() {
             </div>
           )}
 
-          {/* Timeline Chart */}
-          {!loading && timeline.length > 0 && (
-            <div className="glass-card p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-semibold">日別推移（直近30日）</h3>
-                <button
-                  onClick={() => exportCSV(timeline.map(d => ({
-                    日付: d.date,
-                    送信数: d.sent,
-                    成功: d.success,
-                    エラー: d.error,
-                    再課金: d.converted,
-                  })), 'dm_timeline')}
-                  className="btn-ghost text-[10px] px-3 py-1.5"
-                >
-                  CSVエクスポート
-                </button>
-              </div>
-
-              {/* Legend */}
-              <div className="flex items-center gap-4 mb-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-sm" style={{ background: 'rgba(56,189,248,0.6)' }} /> 送信数
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-sm" style={{ background: 'rgba(34,197,94,0.6)' }} /> 成功
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-3 h-3 rounded-sm" style={{ background: 'rgba(244,63,94,0.6)' }} /> エラー
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full border-2 border-amber-400" /> 再課金
-                </span>
-              </div>
-
-              {/* Bar + Line Chart */}
-              <div className="relative" style={{ height: '220px' }}>
-                <div className="flex items-end gap-[2px] h-full">
-                  {timeline.map((day, i) => {
-                    const barH = (day.sent / maxTimelineSent) * 180;
-                    const successH = (day.success / maxTimelineSent) * 180;
-                    const errorH = (day.error / maxTimelineSent) * 180;
-                    const convertedY = maxTimelineConverted > 0
-                      ? 180 - (day.converted / maxTimelineConverted) * 160
-                      : 180;
-
-                    return (
-                      <div
-                        key={i}
-                        className="flex-1 flex flex-col items-center justify-end relative group"
-                        style={{ minWidth: 0 }}
-                      >
-                        {/* Tooltip */}
-                        <div className="absolute bottom-full mb-2 hidden group-hover:block z-10 pointer-events-none">
-                          <div className="glass-card p-2 text-[10px] whitespace-nowrap" style={{ background: '#0f172a', border: '1px solid rgba(56,189,248,0.2)' }}>
-                            <p className="font-semibold">{day.date}</p>
-                            <p>送信: {day.sent} / 成功: {day.success}</p>
-                            <p>エラー: {day.error} / 再課金: {day.converted}</p>
-                          </div>
-                        </div>
-
-                        {/* Stacked Bar */}
-                        <div className="w-full flex flex-col items-center justify-end" style={{ height: '180px' }}>
-                          {day.error > 0 && (
-                            <div
-                              className="w-full rounded-t-sm"
-                              style={{
-                                height: `${Math.max(errorH, 2)}px`,
-                                background: 'rgba(244,63,94,0.5)',
-                              }}
-                            />
-                          )}
-                          {day.success > 0 && (
-                            <div
-                              className="w-full"
-                              style={{
-                                height: `${Math.max(successH, 2)}px`,
-                                background: 'rgba(34,197,94,0.5)',
-                                borderRadius: day.error > 0 ? '0' : '2px 2px 0 0',
-                              }}
-                            />
-                          )}
-                          {day.sent > day.success + day.error && (
-                            <div
-                              className="w-full"
-                              style={{
-                                height: `${Math.max(barH - successH - errorH, 1)}px`,
-                                background: 'rgba(56,189,248,0.3)',
-                              }}
-                            />
-                          )}
-                        </div>
-
-                        {/* Conversion dot (overlay) */}
-                        {day.converted > 0 && (
-                          <div
-                            className="absolute w-2 h-2 rounded-full bg-amber-400 border border-amber-300"
-                            style={{
-                              bottom: `${180 - convertedY + 20}px`,
-                              left: '50%',
-                              transform: 'translateX(-50%)',
-                              boxShadow: '0 0 6px rgba(245,158,11,0.5)',
-                            }}
-                          />
-                        )}
-
-                        {/* Date label (every 5th) */}
-                        {(i % 5 === 0 || i === timeline.length - 1) && (
-                          <p className="text-[8px] mt-1 whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
-                            {day.date.slice(5)}
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
+          {/* Campaign Table + Timeline Chart in 2-column layout */}
+          {!loading && (byCampaign.length > 0 || timeline.length > 0) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* Campaign Comparison Table (AB Test) */}
+              {byCampaign.length > 0 && (
+                <div className="glass-card p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold">
+                      キャンペーン別比較
+                    </h3>
+                    <button
+                      onClick={() => exportCSV(byCampaign.map(r => ({
+                        キャンペーン: r.campaign,
+                        送信数: r.sent,
+                        成功: r.converted,
+                        CVR: `${r.rate.toFixed(1)}%`,
+                      })), 'dm_campaign_comparison')}
+                      className="btn-ghost text-[10px] px-3 py-1.5"
+                    >
+                      CSV
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left" style={{ color: 'var(--text-muted)' }}>
+                          <th className="pb-3 font-medium text-xs">キャンペーン</th>
+                          <th className="pb-3 font-medium text-xs text-right">送信</th>
+                          <th className="pb-3 font-medium text-xs text-right">成功</th>
+                          <th className="pb-3 font-medium text-xs text-right">CVR</th>
+                          <th className="pb-3 font-medium text-xs w-24"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {byCampaign.map((r, i) => {
+                          const maxRate = Math.max(...byCampaign.map((c) => c.rate), 1);
+                          const barWidth = (r.rate / maxRate) * 100;
+                          return (
+                            <tr key={i} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                              <td className="py-2">
+                                <span className="text-xs font-mono px-2 py-0.5 rounded bg-white/[0.03] truncate inline-block max-w-[140px]">
+                                  {r.campaign || '(未設定)'}
+                                </span>
+                              </td>
+                              <td className="py-2 text-right tabular-nums text-xs">{r.sent}</td>
+                              <td className="py-2 text-right tabular-nums text-xs text-emerald-400">{r.converted}</td>
+                              <td className="py-2 text-right tabular-nums text-xs font-semibold">
+                                <span className={
+                                  r.rate >= 10 ? 'text-emerald-400' :
+                                  r.rate >= 5 ? 'text-amber-400' : 'text-slate-300'
+                                }>
+                                  {r.rate.toFixed(1)}%
+                                </span>
+                              </td>
+                              <td className="py-2 w-24">
+                                <div className="h-1.5 rounded-full bg-white/[0.04] overflow-hidden">
+                                  <div
+                                    className="h-full rounded-full transition-all duration-500"
+                                    style={{
+                                      width: `${barWidth}%`,
+                                      background: r.rate >= 10
+                                        ? 'linear-gradient(90deg, #22c55e, #16a34a)'
+                                        : r.rate >= 5
+                                        ? 'linear-gradient(90deg, #f59e0b, #d97706)'
+                                        : 'linear-gradient(90deg, #64748b, #475569)',
+                                    }}
+                                  />
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* Timeline Chart */}
+              {timeline.length > 0 && (
+                <div className="glass-card p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold">日別推移</h3>
+                    <button
+                      onClick={() => exportCSV(timeline.map(d => ({
+                        日付: d.date,
+                        送信数: d.sent,
+                        成功: d.success,
+                        エラー: d.error,
+                        再課金: d.converted,
+                      })), 'dm_timeline')}
+                      className="btn-ghost text-[10px] px-3 py-1.5"
+                    >
+                      CSV
+                    </button>
+                  </div>
+
+                  {/* Legend */}
+                  <div className="flex items-center gap-3 mb-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'rgba(56,189,248,0.6)' }} /> 送信
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'rgba(34,197,94,0.6)' }} /> 成功
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-sm" style={{ background: 'rgba(244,63,94,0.6)' }} /> エラー
+                    </span>
+                  </div>
+
+                  {/* Bar Chart */}
+                  <div className="relative" style={{ height: '180px' }}>
+                    <div className="flex items-end gap-[2px] h-full">
+                      {timeline.map((day, i) => {
+                        const barH = (day.sent / maxTimelineSent) * 150;
+                        const successH = (day.success / maxTimelineSent) * 150;
+                        const errorH = (day.error / maxTimelineSent) * 150;
+
+                        return (
+                          <div
+                            key={i}
+                            className="flex-1 flex flex-col items-center justify-end relative group"
+                            style={{ minWidth: 0 }}
+                          >
+                            {/* Tooltip */}
+                            <div className="absolute bottom-full mb-2 hidden group-hover:block z-10 pointer-events-none">
+                              <div className="glass-card p-2 text-[10px] whitespace-nowrap" style={{ background: '#0f172a', border: '1px solid rgba(56,189,248,0.2)' }}>
+                                <p className="font-semibold">{day.date}</p>
+                                <p>送信: {day.sent} / 成功: {day.success}</p>
+                                <p>エラー: {day.error}</p>
+                              </div>
+                            </div>
+
+                            {/* Stacked Bar */}
+                            <div className="w-full flex flex-col items-center justify-end" style={{ height: '150px' }}>
+                              {day.error > 0 && (
+                                <div
+                                  className="w-full rounded-t-sm"
+                                  style={{
+                                    height: `${Math.max(errorH, 2)}px`,
+                                    background: 'rgba(244,63,94,0.5)',
+                                  }}
+                                />
+                              )}
+                              {day.success > 0 && (
+                                <div
+                                  className="w-full"
+                                  style={{
+                                    height: `${Math.max(successH, 2)}px`,
+                                    background: 'rgba(34,197,94,0.5)',
+                                    borderRadius: day.error > 0 ? '0' : '2px 2px 0 0',
+                                  }}
+                                />
+                              )}
+                              {day.sent > day.success + day.error && (
+                                <div
+                                  className="w-full"
+                                  style={{
+                                    height: `${Math.max(barH - successH - errorH, 1)}px`,
+                                    background: 'rgba(56,189,248,0.3)',
+                                  }}
+                                />
+                              )}
+                            </div>
+
+                            {/* Date label (every 5th) */}
+                            {(i % 5 === 0 || i === timeline.length - 1) && (
+                              <p className="text-[8px] mt-1 whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                                {day.date.slice(5)}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -939,93 +889,12 @@ export default function AnalyticsPage() {
       {/* ============ Payroll Tab (既存モック) ============ */}
       {tab === 'payroll' && (
         <div className="space-y-6 anim-fade-up">
-          {/* Demo warning */}
-          <div className="glass-card p-3 flex items-center gap-2" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)' }}>
-            <span>&#9888;&#65039;</span>
-            <span className="text-xs">デモデータ — 実際の給与計算には使用しないでください</span>
-          </div>
-
-          {/* Stats Row */}
-          <div className="grid grid-cols-3 gap-4">
-            {payrollStats.map((s, i) => (
-              <div key={i} className="glass-card p-5">
-                <div className="flex items-center justify-between">
-                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>{s.label}</p>
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                    s.positive ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'
-                  }`}>{s.change}</span>
-                </div>
-                <p className="text-3xl font-bold mt-2 tracking-tight" style={{ color: 'var(--accent-green)' }}>
-                  {s.value}
-                </p>
-              </div>
-            ))}
-          </div>
-
-          {/* Payroll Table */}
-          <div className="glass-card p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-semibold">キャスト給与明細</h3>
-              <button
-                onClick={() => exportCSV(castPayroll.map(c => ({
-                  キャスト名: c.name,
-                  ティア: c.tier,
-                  総売上: c.revenue,
-                  紹介料率: c.rate,
-                  最終支払額: c.payout,
-                  調整: c.adj,
-                  ステータス: c.status,
-                })), 'payroll')}
-                className="btn-ghost text-[10px] px-3 py-1.5"
-              >
-                CSVエクスポート
-              </button>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left" style={{ color: 'var(--text-muted)' }}>
-                    <th className="pb-4 font-medium text-xs">キャスト名</th>
-                    <th className="pb-4 font-medium text-xs">総売上</th>
-                    <th className="pb-4 font-medium text-xs">紹介料率 (%)</th>
-                    <th className="pb-4 font-medium text-xs">最終支払額</th>
-                    <th className="pb-4 font-medium text-xs">源泉徴収・調整</th>
-                    <th className="pb-4 font-medium text-xs">ステータス</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {castPayroll.map((c, i) => (
-                    <tr key={i} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
-                      <td className="py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm"
-                            style={{ background: 'linear-gradient(135deg, rgba(56,189,248,0.2), rgba(168,85,247,0.2))' }}>
-                            {c.name.charAt(0)}
-                          </div>
-                          <div>
-                            <p className="font-semibold">{c.name}</p>
-                            <p className={`text-[10px] ${c.tier === 'PREMIUM CAST' ? 'text-amber-400' : ''}`}
-                              style={c.tier !== 'PREMIUM CAST' ? { color: 'var(--text-muted)' } : {}}>
-                              {c.tier}
-                            </p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-4 font-semibold text-emerald-400">{c.revenue}</td>
-                      <td className="py-4" style={{ color: 'var(--text-secondary)' }}>{c.rate}</td>
-                      <td className="py-4 font-semibold">{c.payout}</td>
-                      <td className="py-4 text-rose-400">{c.adj}</td>
-                      <td className="py-4">
-                        <span className="text-xs px-2.5 py-1 rounded-full"
-                          style={{ background: `${c.statusColor}15`, color: c.statusColor }}>
-                          {c.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+          {/* Demo warning - prominent */}
+          <div className="glass-card p-5 text-center" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)' }}>
+            <p className="text-base font-semibold text-amber-400 mb-1">開発中</p>
+            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+              給与計算機能は現在開発中です。以下はデモデータです。
+            </p>
           </div>
         </div>
       )}

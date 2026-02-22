@@ -891,7 +891,7 @@ export default function DmPage() {
                             cs.rate >= 80 ? 'text-emerald-400' :
                             cs.rate >= 50 ? 'text-amber-400' : 'text-slate-300'
                           }>
-                            {cs.rate}%
+                            {cs.rate.toFixed(1)}%
                           </span>
                         </td>
                       </tr>
