@@ -10,18 +10,18 @@ import { tokensToJPY } from '@/lib/utils';
 /* ============================================================
    Constants
    ============================================================ */
-const CHURN_TEMPLATE = '{username}\u3055\u3093\u3001\u6700\u8FD1\u898B\u304B\u3051\u306A\u3044\u306E\u3067\u6C17\u306B\u306A\u3063\u3061\u3083\u3063\u3066\uD83D\uDE0A\n\u5143\u6C17\u306B\u3057\u3066\u307E\u3059\u304B\uFF1F\n\u307E\u305F\u6C17\u304C\u5411\u3044\u305F\u3089\u3075\u3089\u3063\u3068\u6765\u3066\u304F\u308C\u305F\u3089\u5B09\u3057\u3044\u3067\u3059\u3002\n\u3067\u3082\u7121\u7406\u3057\u306A\u3044\u3067\u306D\u3001\u3042\u306A\u305F\u306E\u81EA\u7531\u3060\u304B\u3089\uD83D\uDE0A';
+const CHURN_TEMPLATE = '{username}さん、最近見かけないので気になっちゃって😊\n元気にしてますか？\nまた気が向いたらふらっと来てくれたら嬉しいです。\nでも無理しないでね、あなたの自由だから😊';
 
 const THANK_TEMPLATES: Record<string, string | null> = {
   'S1': null, // Manual input required
-  'S2': '{username}\u3055\u3093\u3001\u4ECA\u65E5\u306F\u3042\u308A\u304C\u3068\u3046\uD83D\uDE0A\n\u3059\u3054\u304F\u5B09\u3057\u304B\u3063\u305F\u3067\u3059\uFF01\n\u307E\u305F\u6C17\u304C\u5411\u3044\u305F\u3089\u904A\u3073\u306B\u6765\u3066\u304F\u3060\u3055\u3044\u306D\u3002\n\u3067\u3082\u7121\u7406\u3057\u306A\u3044\u3067\u306D\uD83D\uDE0A',
-  'S3': '{username}\u3055\u3093\u3001\u4ECA\u65E5\u306F\u3042\u308A\u304C\u3068\u3046\uD83D\uDE0A\n\u3059\u3054\u304F\u5B09\u3057\u304B\u3063\u305F\u3067\u3059\uFF01\n\u307E\u305F\u6C17\u304C\u5411\u3044\u305F\u3089\u904A\u3073\u306B\u6765\u3066\u304F\u3060\u3055\u3044\u306D\u3002\n\u3067\u3082\u7121\u7406\u3057\u306A\u3044\u3067\u306D\uD83D\uDE0A',
-  'S4': '{username}\u3055\u3093\u3001\u4ECA\u65E5\u306F\u3042\u308A\u304C\u3068\u3046\uD83D\uDE0A\n\u3059\u3054\u304F\u697D\u3057\u304B\u3063\u305F\u3067\u3059\uFF01\n\u6C17\u304C\u5411\u3044\u305F\u3089\u307E\u305F\u904A\u3073\u306B\u6765\u3066\u304F\u3060\u3055\u3044\u306D\u3002',
-  'S5': '{username}\u3055\u3093\u3001\u4ECA\u65E5\u306F\u3042\u308A\u304C\u3068\u3046\uD83D\uDE0A\n\u3059\u3054\u304F\u697D\u3057\u304B\u3063\u305F\u3067\u3059\uFF01\n\u6C17\u304C\u5411\u3044\u305F\u3089\u307E\u305F\u904A\u3073\u306B\u6765\u3066\u304F\u3060\u3055\u3044\u306D\u3002',
-  'S6': '{username}\u3055\u3093\u3001\u3042\u308A\u304C\u3068\u3046\uD83D\uDE0A\n\u307E\u305F\u4F1A\u3048\u305F\u3089\u5B09\u3057\u3044\u3067\u3059\u3002\n\u3042\u306A\u305F\u306E\u81EA\u7531\u3060\u304B\u3089\u3001\u6C17\u304C\u5411\u3044\u305F\u3089\u306D\uD83D\uDE0A',
-  'S7': '{username}\u3055\u3093\u3001\u3042\u308A\u304C\u3068\u3046\uD83D\uDE0A\n\u307E\u305F\u4F1A\u3048\u305F\u3089\u5B09\u3057\u3044\u3067\u3059\u3002\n\u3042\u306A\u305F\u306E\u81EA\u7531\u3060\u304B\u3089\u3001\u6C17\u304C\u5411\u3044\u305F\u3089\u306D\uD83D\uDE0A',
-  'S8': '{username}\u3055\u3093\u3001\u3042\u308A\u304C\u3068\u3046\uD83D\uDE0A\n\u307E\u305F\u4F1A\u3048\u305F\u3089\u5B09\u3057\u3044\u3067\u3059\u3002\n\u3042\u306A\u305F\u306E\u81EA\u7531\u3060\u304B\u3089\u3001\u6C17\u304C\u5411\u3044\u305F\u3089\u306D\uD83D\uDE0A',
-  'S9': '{username}\u3055\u3093\u3001\u3042\u308A\u304C\u3068\u3046\uD83D\uDE0A\n\u307E\u305F\u4F1A\u3048\u305F\u3089\u5B09\u3057\u3044\u3067\u3059\u3002\n\u3042\u306A\u305F\u306E\u81EA\u7531\u3060\u304B\u3089\u3001\u6C17\u304C\u5411\u3044\u305F\u3089\u306D\uD83D\uDE0A',
+  'S2': '{username}さん、今日はありがとう😊\nすごく嬉しかったです！\nまた気が向いたら遊びに来てくださいね。\nでも無理しないでね😊',
+  'S3': '{username}さん、今日はありがとう😊\nすごく嬉しかったです！\nまた気が向いたら遊びに来てくださいね。\nでも無理しないでね😊',
+  'S4': '{username}さん、今日はありがとう😊\nすごく楽しかったです！\n気が向いたらまた遊びに来てくださいね。',
+  'S5': '{username}さん、今日はありがとう😊\nすごく楽しかったです！\n気が向いたらまた遊びに来てくださいね。',
+  'S6': '{username}さん、ありがとう😊\nまた会えたら嬉しいです。\nあなたの自由だから、気が向いたらね😊',
+  'S7': '{username}さん、ありがとう😊\nまた会えたら嬉しいです。\nあなたの自由だから、気が向いたらね😊',
+  'S8': '{username}さん、ありがとう😊\nまた会えたら嬉しいです。\nあなたの自由だから、気が向いたらね😊',
+  'S9': '{username}さん、ありがとう😊\nまた会えたら嬉しいです。\nあなたの自由だから、気が向いたらね😊',
 };
 
 function getSegmentBadgeClasses(segment: string): string {
@@ -43,6 +43,7 @@ interface DMLogItem {
   campaign: string;
   queued_at: string;
   sent_at: string | null;
+  sent_via?: string | null;
 }
 
 interface NewWhale {
@@ -154,7 +155,7 @@ export default function DmPage() {
   const [whaleLoading, setWhaleLoading] = useState(false);
   const [whaleError, setWhaleError] = useState<string | null>(null);
   const [thankMessage, setThankMessage] = useState(
-    '{username}\u3055\u3093\u3001\u6628\u65E5\u306F\u5FDC\u63F4\u3042\u308A\u304C\u3068\u3046\u3054\u3056\u3044\u307E\u3057\u305F\uFF01\u3068\u3063\u3066\u3082\u5B09\u3057\u304B\u3063\u305F\u3067\u3059\uD83D\uDC95 \u307E\u305F\u904A\u3073\u306B\u6765\u3066\u304F\u3060\u3055\u3044\u306D\uFF01'
+    '{username}さん、昨日は応援ありがとうございました！とっても嬉しかったです💕 また遊びに来てくださいね！'
   );
   const [thankSending, setThankSending] = useState(false);
   const [thankResult, setThankResult] = useState<{ queued: number; batch_id: string } | null>(null);
@@ -190,6 +191,10 @@ export default function DmPage() {
   // === API offline state ===
   const [apiOffline, setApiOffline] = useState(false);
 
+  // === API DM送信セッション ===
+  const [apiSessionValid, setApiSessionValid] = useState(false);
+  const [apiSessionInfo, setApiSessionInfo] = useState<{exported_at: string; stripchat_user_id: string | null} | null>(null);
+
   // === URL preset handled flag ===
   const presetHandledRef = useRef(false);
 
@@ -204,6 +209,21 @@ export default function DmPage() {
       if (list.length > 0) setSelectedAccount(list[0].id);
     });
   }, [user, sb]);
+
+  // === API DM送信セッション確認 ===
+  useEffect(() => {
+    if (!selectedAccount) return;
+    sb.from('stripchat_sessions')
+      .select('id, is_valid, exported_at, stripchat_user_id')
+      .eq('account_id', selectedAccount)
+      .eq('is_valid', true)
+      .maybeSingle()
+      .then(({ data: scSession }) => {
+        setApiSessionValid(!!scSession);
+        if (scSession) setApiSessionInfo({ exported_at: scSession.exported_at, stripchat_user_id: scSession.stripchat_user_id });
+        else setApiSessionInfo(null);
+      });
+  }, [selectedAccount, sb]);
 
   // === キャンペーン効果測定データ取得 ===
   useEffect(() => {
@@ -420,9 +440,9 @@ export default function DmPage() {
   }, [user, batchId, pollStatus, sb, selectedAccount]);
 
   const handleSend = async () => {
-    if (targets.length === 0) { setError('\u30BF\u30FC\u30B2\u30C3\u30C8\u30921\u4EF6\u4EE5\u4E0A\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044'); return; }
-    if (!message.trim()) { setError('\u30E1\u30C3\u30BB\u30FC\u30B8\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044'); return; }
-    if (!selectedAccount) { setError('\u30A2\u30AB\u30A6\u30F3\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044'); return; }
+    if (targets.length === 0) { setError('ターゲットを1件以上入力してください'); return; }
+    if (!message.trim()) { setError('メッセージを入力してください'); return; }
+    if (!selectedAccount) { setError('アカウントを選択してください'); return; }
     setSending(true); setError(null); setBatchId(null);
     try {
       // ターゲットからユーザー名を抽出
@@ -439,7 +459,7 @@ export default function DmPage() {
 
       // RPC関数がエラーを返した場合（上限超え等）
       if (data?.error) {
-        setError(`${data.error} (\u4F7F\u7528\u6E08\u307F: ${data.used}/${data.limit})`);
+        setError(`${data.error} (使用済み: ${data.used}/${data.limit})`);
         return;
       }
 
@@ -459,6 +479,29 @@ export default function DmPage() {
       setQueuedCount(count);
       setStatusCounts({ total: count, queued: count, sending: 0, success: 0, error: 0 });
       if (bid) pollStatus(bid);
+
+      // API送信モード: サーバーサイドでバッチ処理
+      if (apiSessionValid) {
+        try {
+          const { data: { session } } = await sb.auth.getSession();
+          if (session?.access_token) {
+            // バックグラウンドでAPI送信を開始（レスポンスを待たない）
+            fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/dm/batch`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${session.access_token}`,
+              },
+              body: JSON.stringify({
+                account_id: selectedAccount,
+                limit: 50,
+              }),
+            }).catch(e => console.warn('API batch send failed:', e));
+          }
+        } catch (e) {
+          console.warn('API batch trigger failed, extension will pick up:', e);
+        }
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -467,7 +510,7 @@ export default function DmPage() {
 
   // === お礼DMロジック (legacy / fallback) ===
   const detectWhales = async () => {
-    if (!selectedAccount) { setWhaleError('\u30A2\u30AB\u30A6\u30F3\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044'); return; }
+    if (!selectedAccount) { setWhaleError('アカウントを選択してください'); return; }
     setWhaleLoading(true); setWhaleError(null); setWhales([]); setWhaleChecked(new Set()); setThankResult(null);
     try {
       const daysAgo = parseInt(thankPeriod);
@@ -513,7 +556,7 @@ export default function DmPage() {
       filtered.forEach(w => { if (!w.already_dm_sent) autoChecked.add(w.user_name); });
       setWhaleChecked(autoChecked);
     } catch (e: unknown) {
-      setWhaleError(e instanceof Error ? e.message : '\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F');
+      setWhaleError(e instanceof Error ? e.message : 'エラーが発生しました');
     }
     setWhaleLoading(false);
   };
@@ -557,9 +600,9 @@ export default function DmPage() {
 
   // === お礼DM送信 (shared for both v1 and v2) ===
   const handleThankSend = async () => {
-    if (whaleChecked.size === 0) { setWhaleError('\u30E6\u30FC\u30B6\u30FC\u30921\u540D\u4EE5\u4E0A\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044'); return; }
-    if (!thankMessage.trim()) { setWhaleError('\u30E1\u30C3\u30BB\u30FC\u30B8\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044'); return; }
-    if (!selectedAccount) { setWhaleError('\u30A2\u30AB\u30A6\u30F3\u30C8\u3092\u9078\u629E\u3057\u3066\u304F\u3060\u3055\u3044'); return; }
+    if (whaleChecked.size === 0) { setWhaleError('ユーザーを1名以上選択してください'); return; }
+    if (!thankMessage.trim()) { setWhaleError('メッセージを入力してください'); return; }
+    if (!selectedAccount) { setWhaleError('アカウントを選択してください'); return; }
     setThankSending(true); setWhaleError(null); setThankResult(null);
     try {
       const usernames = Array.from(whaleChecked);
@@ -572,7 +615,7 @@ export default function DmPage() {
 
       if (rpcErr) {
         if (rpcErr.message?.includes('function') || rpcErr.code === '42883') {
-          console.warn('[DM] create_dm_batch_personalized\u672A\u5B9F\u88C5 \u2192 \u76F4\u63A5INSERT');
+          console.warn('[DM] create_dm_batch_personalized未実装 → 直接INSERT');
           const bid = `thank_${Date.now()}`;
           const rows = usernames.map(un => ({
             account_id: selectedAccount,
@@ -591,13 +634,13 @@ export default function DmPage() {
           throw rpcErr;
         }
       } else if (data?.error) {
-        setWhaleError(`${data.error} (\u4F7F\u7528\u6E08\u307F: ${data.used}/${data.limit})`);
+        setWhaleError(`${data.error} (使用済み: ${data.used}/${data.limit})`);
         return;
       } else {
         setThankResult({ queued: data?.count || usernames.length, batch_id: data?.batch_id || '' });
       }
     } catch (e: unknown) {
-      setWhaleError(e instanceof Error ? e.message : '\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F');
+      setWhaleError(e instanceof Error ? e.message : 'エラーが発生しました');
     }
     setThankSending(false);
   };
@@ -611,7 +654,7 @@ export default function DmPage() {
     // Validate: all selected must have a message
     const emptyMsg = selected.find(c => !(thankCandidateMessages[c.user_name] || '').trim());
     if (emptyMsg) {
-      setWhaleError(`${emptyMsg.user_name} \u306E\u30E1\u30C3\u30BB\u30FC\u30B8\u304C\u7A7A\u3067\u3059`);
+      setWhaleError(`${emptyMsg.user_name} のメッセージが空です`);
       setThankConfirmOpen(false);
       return;
     }
@@ -637,7 +680,7 @@ export default function DmPage() {
       if (insertErr) throw insertErr;
       setThankResult({ queued: rows.length, batch_id: bid });
     } catch (e: unknown) {
-      setWhaleError(e instanceof Error ? e.message : '\u30A8\u30E9\u30FC\u304C\u767A\u751F\u3057\u307E\u3057\u305F');
+      setWhaleError(e instanceof Error ? e.message : 'エラーが発生しました');
     }
     setThankSending(false);
   };
@@ -655,7 +698,7 @@ export default function DmPage() {
           <h1 className="text-xl font-bold">DM</h1>
           <span className="badge-info text-[10px]">V7.0</span>
           <span className="badge-info text-[10px] flex items-center gap-1">
-            Chrome\u62E1\u5F35\u3067\u5B9F\u884C
+            Chrome拡張で実行
           </span>
         </div>
         {accounts.length > 0 && (
@@ -670,10 +713,10 @@ export default function DmPage() {
       {/* Tab Switch */}
       <div className="flex gap-1">
         {([
-          { key: 'bulk' as const, label: '\u4E00\u6589\u9001\u4FE1' },
-          { key: 'thank' as const, label: '\u304A\u793C\uFF24\uFF2D' },
-          { key: 'auto' as const, label: `\u81EA\u52D5DM${autoDMs.length > 0 ? ` (${autoDMs.length})` : ''}` },
-          { key: 'scenario' as const, label: '\u30B7\u30CA\u30EA\u30AA' },
+          { key: 'bulk' as const, label: '一斉送信' },
+          { key: 'thank' as const, label: 'お礼ＤＭ' },
+          { key: 'auto' as const, label: `自動DM${autoDMs.length > 0 ? ` (${autoDMs.length})` : ''}` },
+          { key: 'scenario' as const, label: 'シナリオ' },
         ]).map(t => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`px-5 py-2.5 rounded-lg text-xs font-medium transition-all ${
@@ -701,18 +744,18 @@ export default function DmPage() {
               <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
                 Target
               </h3>
-              <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>URL\u307E\u305F\u306F\u30E6\u30FC\u30B6\u30FC\u540D\uFF081\u884C1\u4EF6\u3001{targets.length}\u4EF6\uFF09</p>
+              <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>URLまたはユーザー名（1行1件、{targets.length}件）</p>
               <textarea
                 className="input-glass font-mono text-[11px] leading-relaxed h-48 resize-none"
                 value={targetsText}
                 onChange={e => setTargetsText(e.target.value)}
-                placeholder="https://ja.stripchat.com/user/username&#10;\u307E\u305F\u306F\u30E6\u30FC\u30B6\u30FC\u540D\u30921\u884C\u305A\u3064"
+                placeholder="https://ja.stripchat.com/user/username&#10;またはユーザー名を1行ずつ"
               />
               <div className="mt-4">
                 <div className="flex items-center justify-center gap-2">
-                  <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>\u78BA\u5B9A\u30BF\u30FC\u30B2\u30C3\u30C8</span>
+                  <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>確定ターゲット</span>
                   <span className="text-2xl font-bold">{targets.length}</span>
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>\u540D</span>
+                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>名</span>
                 </div>
               </div>
             </div>
@@ -723,7 +766,7 @@ export default function DmPage() {
                 <h3 className="text-sm font-bold mb-3 flex items-center gap-2">Message</h3>
                 <textarea className="input-glass h-28 resize-none text-sm"
                   value={message} onChange={(e) => setMessage(e.target.value)}
-                  placeholder="\u30E1\u30C3\u30BB\u30FC\u30B8\u3092\u5165\u529B..." />
+                  placeholder="メッセージを入力..." />
               </div>
             </div>
 
@@ -731,12 +774,12 @@ export default function DmPage() {
             <div className="col-span-4 glass-card p-5">
               <h3 className="text-sm font-bold mb-4 flex items-center gap-2">Settings</h3>
               <div className="mb-5">
-                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>\u9806\u756A\u9001\u4FE1</p>
+                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>順番送信</p>
                 <div className="space-y-2">
                   {([
-                    { key: 'text-image' as const, label: '\u30C6\u30AD\u30B9\u30C8 \u2192 \u753B\u50CF' },
-                    { key: 'image-text' as const, label: '\u753B\u50CF \u2192 \u30C6\u30AD\u30B9\u30C8' },
-                    { key: 'text-only' as const, label: '\u30C6\u30AD\u30B9\u30C8\u306E\u307F' },
+                    { key: 'text-image' as const, label: 'テキスト → 画像' },
+                    { key: 'image-text' as const, label: '画像 → テキスト' },
+                    { key: 'text-only' as const, label: 'テキストのみ' },
                   ]).map(o => (
                     <button key={o.key} onClick={() => setSendOrder(o.key)}
                       className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-all ${
@@ -749,32 +792,32 @@ export default function DmPage() {
                 </div>
               </div>
               <div className="mb-5">
-                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>\u30A2\u30AF\u30BB\u30B9\u753B\u50CF</p>
+                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>アクセス画像</p>
                 <div className="flex gap-2">
                   <button onClick={() => setAccessImage('free')}
-                    className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${accessImage === 'free' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'btn-ghost'}`}>\u7121\u6599</button>
+                    className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${accessImage === 'free' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20' : 'btn-ghost'}`}>無料</button>
                   <button onClick={() => setAccessImage('paid')}
-                    className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${accessImage === 'paid' ? 'bg-sky-500/15 text-sky-400 border border-sky-500/20' : 'btn-ghost'}`}>\u6709\u6599\u8A2D\u5B9A</button>
+                    className={`px-4 py-2 rounded-lg text-xs font-medium transition-all ${accessImage === 'paid' ? 'bg-sky-500/15 text-sky-400 border border-sky-500/20' : 'btn-ghost'}`}>有料設定</button>
                 </div>
               </div>
               <div className="mb-5">
-                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>\u9001\u4FE1\u30E2\u30FC\u30C9</p>
+                <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>送信モード</p>
                 <div className="space-y-2">
                   <button onClick={() => setSendMode('sequential')}
                     className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-all ${sendMode === 'sequential' ? 'bg-sky-500/15 text-sky-400 border border-sky-500/20' : 'text-slate-400 hover:bg-white/[0.03]'}`}>
                     <span className={`inline-block w-3 h-3 rounded-full mr-2 border-2 ${sendMode === 'sequential' ? 'bg-sky-400 border-sky-400' : 'border-slate-600'}`}></span>
-                    \u9806\u6B21 (\u5B89\u5168)
+                    順次 (安全)
                   </button>
                   <button onClick={() => setSendMode('pipeline')}
                     className={`w-full text-left px-3 py-2 rounded-lg text-xs transition-all ${sendMode === 'pipeline' ? 'bg-sky-500/15 text-sky-400 border border-sky-500/20' : 'text-slate-400 hover:bg-white/[0.03]'}`}>
                     <span className={`inline-block w-3 h-3 rounded-full mr-2 border-2 ${sendMode === 'pipeline' ? 'bg-sky-400 border-sky-400' : 'border-slate-600'}`}></span>
-                    \u30D1\u30A4\u30D7\u30E9\u30A4\u30F3 (\u9AD8\u901F)
+                    パイプライン (高速)
                   </button>
                 </div>
               </div>
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>\u540C\u6642\u30BF\u30D6</p>
+                  <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>同時タブ</p>
                   <span className="text-2xl font-bold text-sky-400">{tabs}</span>
                 </div>
                 <input type="range" min="1" max="5" value={tabs}
@@ -791,18 +834,31 @@ export default function DmPage() {
             </div>
           )}
 
+          {/* API送信ステータス */}
+          <div className="flex items-center gap-2 text-[10px] mb-2">
+            <span className={`w-2 h-2 rounded-full ${apiSessionValid ? 'bg-emerald-500 anim-live' : 'bg-amber-500'}`} />
+            <span style={{ color: apiSessionValid ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
+              {apiSessionValid ? 'API送信可能' : 'Chrome拡張モード'}
+            </span>
+            {apiSessionInfo && (
+              <span style={{ color: 'var(--text-muted)' }}>
+                (同期: {new Date(apiSessionInfo.exported_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })})
+              </span>
+            )}
+          </div>
+
           {/* Send Button */}
           <button onClick={handleSend} disabled={sending}
             className="w-full py-4 rounded-2xl text-lg font-bold text-white transition-all duration-300 flex items-center justify-center gap-3 disabled:opacity-50"
             style={{ background: 'linear-gradient(135deg, var(--accent-pink), #e11d48)', boxShadow: '0 6px 30px rgba(244,63,94,0.3)' }}>
-            {sending ? '\u30AD\u30E5\u30FC\u767B\u9332\u4E2D...' : `\u9001\u4FE1\u958B\u59CB\uFF08${targets.length}\u4EF6\uFF09`}
+            {sending ? 'キュー登録中...' : `送信開始（${targets.length}件）`}
           </button>
 
           {/* Batch Status */}
           {batchId && (
             <div className="glass-card p-5 anim-fade-up">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-sm font-bold">\u9001\u4FE1\u30B9\u30C6\u30FC\u30BF\u30B9</h3>
+                <h3 className="text-sm font-bold">送信ステータス</h3>
                 <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>{batchId}</span>
               </div>
               <div className="w-full h-2 rounded-full bg-slate-800 mb-4 overflow-hidden">
@@ -816,19 +872,19 @@ export default function DmPage() {
               </div>
               <div className="grid grid-cols-4 gap-3 mb-4">
                 <div className="glass-panel p-3 rounded-xl text-center">
-                  <p className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>\u5F85\u6A5F</p>
+                  <p className="text-[10px] mb-1" style={{ color: 'var(--text-muted)' }}>待機</p>
                   <p className="text-lg font-bold">{statusCounts.queued}</p>
                 </div>
                 <div className="glass-panel p-3 rounded-xl text-center">
-                  <p className="text-[10px] mb-1" style={{ color: 'var(--accent-primary)' }}>\u9001\u4FE1\u4E2D</p>
+                  <p className="text-[10px] mb-1" style={{ color: 'var(--accent-primary)' }}>送信中</p>
                   <p className="text-lg font-bold text-sky-400">{statusCounts.sending}</p>
                 </div>
                 <div className="glass-panel p-3 rounded-xl text-center">
-                  <p className="text-[10px] mb-1" style={{ color: 'var(--accent-green)' }}>\u6210\u529F</p>
+                  <p className="text-[10px] mb-1" style={{ color: 'var(--accent-green)' }}>成功</p>
                   <p className="text-lg font-bold text-emerald-400">{statusCounts.success}</p>
                 </div>
                 <div className="glass-panel p-3 rounded-xl text-center">
-                  <p className="text-[10px] mb-1" style={{ color: 'var(--accent-pink)' }}>\u5931\u6557</p>
+                  <p className="text-[10px] mb-1" style={{ color: 'var(--accent-pink)' }}>失敗</p>
                   <p className="text-lg font-bold text-rose-400">{statusCounts.error}</p>
                 </div>
               </div>
@@ -842,7 +898,7 @@ export default function DmPage() {
                         log.status === 'error' ? 'text-rose-400' :
                         log.status === 'sending' ? 'text-sky-400' : 'text-slate-500'
                       }>
-                        {log.status === 'success' ? '\u2713' : log.status === 'error' ? '\u2715' : log.status === 'sending' ? '\u21BB' : '\u25CB'}
+                        {log.status === 'success' ? '✓' : log.status === 'error' ? '✕' : log.status === 'sending' ? '↻' : '○'}
                       </span>
                       <span className="font-medium flex-1 truncate">{log.user_name}</span>
                       <span style={{ color: 'var(--text-muted)' }}>{log.status}</span>
@@ -919,7 +975,7 @@ export default function DmPage() {
           {thankResult && (
             <div className="px-4 py-3 rounded-xl text-sm border"
               style={{ background: 'rgba(34,197,94,0.08)', borderColor: 'rgba(34,197,94,0.2)', color: '#22c55e' }}>
-              {thankResult.queued}\u4EF6\u306E\u304A\u793CEDM\u3092\u30AD\u30E5\u30FC\u306B\u8FFD\u52A0\u3057\u307E\u3057\u305F\uFF08{thankResult.batch_id}\uFF09
+              {thankResult.queued}件のお礼EDMをキューに追加しました（{thankResult.batch_id}）
             </div>
           )}
 
@@ -943,17 +999,17 @@ export default function DmPage() {
               {/* No candidates */}
               {!thankCandidateLoading && thankCandidates.length === 0 && (
                 <div className="glass-card p-10 text-center">
-                  <p className="text-4xl mb-4 opacity-30">\u2714</p>
+                  <p className="text-4xl mb-4 opacity-30">✔</p>
                   <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
-                    \u304A\u793CEDM\u5019\u88DC\u306A\u3057
+                    お礼EDM候補なし
                   </p>
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    \u73FE\u5728\u304A\u793CEDM\u3092\u9001\u308B\u5019\u88DC\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093\u3067\u3057\u305F\u3002
+                    現在お礼EDMを送る候補が見つかりませんでした。
                   </p>
                   <button
                     onClick={loadThankCandidates}
                     className="btn-ghost text-xs mt-4 px-4 py-2">
-                    \u518D\u691C\u51FA
+                    再検出
                   </button>
                 </div>
               )}
@@ -964,12 +1020,12 @@ export default function DmPage() {
                   <div className="glass-card p-5">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-sm font-bold">
-                        \u304A\u793CEDM\u5019\u88DC\uFF08{thankCandidates.length}\u540D\uFF09
+                        お礼EDM候補（{thankCandidates.length}名）
                       </h3>
                       <div className="flex gap-2">
-                        <button onClick={selectAllCandidates} className="btn-ghost text-[10px] px-3 py-1">\u5168\u9078\u629E</button>
-                        <button onClick={deselectAllCandidates} className="btn-ghost text-[10px] px-3 py-1">\u5168\u89E3\u9664</button>
-                        <button onClick={loadThankCandidates} className="btn-ghost text-[10px] px-3 py-1">\u518D\u691C\u51FA</button>
+                        <button onClick={selectAllCandidates} className="btn-ghost text-[10px] px-3 py-1">全選択</button>
+                        <button onClick={deselectAllCandidates} className="btn-ghost text-[10px] px-3 py-1">全解除</button>
+                        <button onClick={loadThankCandidates} className="btn-ghost text-[10px] px-3 py-1">再検出</button>
                       </div>
                     </div>
 
@@ -1017,7 +1073,7 @@ export default function DmPage() {
                               {/* S1 manual label */}
                               {isS1 && (
                                 <span className="text-[10px] text-amber-400 flex items-center gap-1">
-                                  \u26A0\uFE0F \u624B\u52D5\u5165\u529B
+                                  ⚠️ 手動入力
                                 </span>
                               )}
                             </div>
@@ -1030,7 +1086,7 @@ export default function DmPage() {
                               style={{ minHeight: '60px' }}
                               value={thankCandidateMessages[c.user_name] || ''}
                               onChange={e => updateCandidateMessage(c.user_name, e.target.value)}
-                              placeholder={isS1 ? '\u624B\u52D5\u3067\u30E1\u30C3\u30BB\u30FC\u30B8\u3092\u5165\u529B\u3057\u3066\u304F\u3060\u3055\u3044...' : '\u30E1\u30C3\u30BB\u30FC\u30B8'}
+                              placeholder={isS1 ? '手動でメッセージを入力してください...' : 'メッセージ'}
                             />
                           </div>
                         );
@@ -1038,7 +1094,7 @@ export default function DmPage() {
                     </div>
 
                     <div className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {thankCandidateChecked.size}\u540D \u9078\u629E\u4E2D
+                      {thankCandidateChecked.size}名 選択中
                     </div>
                   </div>
 
@@ -1054,8 +1110,8 @@ export default function DmPage() {
                       boxShadow: thankCandidateChecked.size > 0 ? '0 6px 30px rgba(34,197,94,0.3)' : 'none',
                     }}>
                     {thankSending
-                      ? '\u30AD\u30E5\u30FC\u767B\u9332\u4E2D...'
-                      : `\u78BA\u8A8D\u3057\u3066\u9001\u4FE1\uFF08${thankCandidateChecked.size}\u4EF6\uFF09`
+                      ? 'キュー登録中...'
+                      : `確認して送信（${thankCandidateChecked.size}件）`
                     }
                   </button>
 
@@ -1063,9 +1119,9 @@ export default function DmPage() {
                   {thankConfirmOpen && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)' }}>
                       <div className="glass-card p-6 max-w-md w-full mx-4 anim-fade-up">
-                        <h3 className="text-base font-bold mb-4">\u304A\u793CEDM\u9001\u4FE1\u78BA\u8A8D</h3>
+                        <h3 className="text-base font-bold mb-4">お礼EDM送信確認</h3>
                         <p className="text-sm mb-3" style={{ color: 'var(--text-secondary)' }}>
-                          {thankCandidateChecked.size}\u540D\u306B\u304A\u793CEDM\u3092\u9001\u4FE1\u3057\u307E\u3059\u3002
+                          {thankCandidateChecked.size}名にお礼EDMを送信します。
                         </p>
                         {/* Segment breakdown */}
                         <div className="space-y-1 mb-4">
@@ -1076,7 +1132,7 @@ export default function DmPage() {
                                 <span className={`px-2 py-0.5 rounded-full font-medium ${getSegmentBadgeClasses(seg)}`}>
                                   {seg}
                                 </span>
-                                <span style={{ color: 'var(--text-secondary)' }}>{count}\u540D</span>
+                                <span style={{ color: 'var(--text-secondary)' }}>{count}名</span>
                               </div>
                             ))}
                         </div>
@@ -1084,14 +1140,14 @@ export default function DmPage() {
                           <button
                             onClick={() => setThankConfirmOpen(false)}
                             className="btn-ghost text-xs flex-1 py-2.5">
-                            \u30AD\u30E3\u30F3\u30BB\u30EB
+                            キャンセル
                           </button>
                           <button
                             onClick={handleThankV2Send}
                             disabled={thankSending}
                             className="flex-1 py-2.5 rounded-xl text-xs font-bold text-white disabled:opacity-50"
                             style={{ background: 'linear-gradient(135deg, #22c55e, #16a34a)' }}>
-                            {thankSending ? '\u9001\u4FE1\u4E2D...' : '\u9001\u4FE1\u5B9F\u884C'}
+                            {thankSending ? '送信中...' : '送信実行'}
                           </button>
                         </div>
                       </div>
@@ -1107,25 +1163,25 @@ export default function DmPage() {
             <>
               {/* Controls */}
               <div className="glass-card p-5">
-                <h3 className="text-sm font-bold mb-4">\u65B0\u898F\u592A\u5BA2\u3092\u691C\u51FA</h3>
+                <h3 className="text-sm font-bold mb-4">新規太客を検出</h3>
                 <div className="flex items-end gap-4 flex-wrap">
                   <div>
-                    <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>\u671F\u9593</label>
+                    <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>期間</label>
                     <select className="input-glass text-xs px-3 py-2 w-32"
                       value={thankPeriod} onChange={e => setThankPeriod(e.target.value as '1' | '3' | '7')}>
-                      <option value="1">\u6628\u65E5</option>
-                      <option value="3">\u76F4\u8FD13\u65E5</option>
-                      <option value="7">\u76F4\u8FD17\u65E5</option>
+                      <option value="1">昨日</option>
+                      <option value="3">直近3日</option>
+                      <option value="7">直近7日</option>
                     </select>
                   </div>
                   <div>
-                    <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>\u6700\u4F4E\u30B3\u30A4\u30F3\u6570</label>
+                    <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>最低コイン数</label>
                     <input type="number" className="input-glass text-xs px-3 py-2 w-28"
                       value={thankMinCoins} onChange={e => setThankMinCoins(Number(e.target.value))} min={1} />
                   </div>
                   <button onClick={detectWhales} disabled={whaleLoading}
                     className="btn-primary text-xs px-5 py-2.5 disabled:opacity-50">
-                    {whaleLoading ? '\u691C\u51FA\u4E2D...' : '\u691C\u51FA\u3059\u308B'}
+                    {whaleLoading ? '検出中...' : '検出する'}
                   </button>
                 </div>
               </div>
@@ -1137,11 +1193,11 @@ export default function DmPage() {
                   <div className="glass-card p-5">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-sm font-bold">
-                        \u691C\u51FA\u7D50\u679C\uFF08{whales.length}\u540D\uFF09
+                        検出結果（{whales.length}名）
                       </h3>
                       <div className="flex gap-2">
-                        <button onClick={selectAll} className="btn-ghost text-[10px] px-3 py-1">\u5168\u9078\u629E</button>
-                        <button onClick={deselectAll} className="btn-ghost text-[10px] px-3 py-1">\u5168\u89E3\u9664</button>
+                        <button onClick={selectAll} className="btn-ghost text-[10px] px-3 py-1">全選択</button>
+                        <button onClick={deselectAll} className="btn-ghost text-[10px] px-3 py-1">全解除</button>
                       </div>
                     </div>
                     <div className="overflow-x-auto">
@@ -1149,10 +1205,10 @@ export default function DmPage() {
                         <thead>
                           <tr className="text-left" style={{ color: 'var(--text-muted)' }}>
                             <th className="pb-3 font-medium text-xs w-10"></th>
-                            <th className="pb-3 font-medium text-xs">\u30E6\u30FC\u30B6\u30FC\u540D</th>
-                            <th className="pb-3 font-medium text-xs text-right">\u8AB2\u91D1\u984D</th>
-                            <th className="pb-3 font-medium text-xs text-right">\u521D\u8AB2\u91D1\u65E5</th>
-                            <th className="pb-3 font-medium text-xs text-center">DM\u72B6\u6CC1</th>
+                            <th className="pb-3 font-medium text-xs">ユーザー名</th>
+                            <th className="pb-3 font-medium text-xs text-right">課金額</th>
+                            <th className="pb-3 font-medium text-xs text-right">初課金日</th>
+                            <th className="pb-3 font-medium text-xs text-center">DM状況</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1184,9 +1240,9 @@ export default function DmPage() {
                               </td>
                               <td className="py-3 text-center">
                                 {w.already_dm_sent ? (
-                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">\u9001\u4FE1\u6E08\u307F</span>
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400">送信済み</span>
                                 ) : (
-                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-500/10 text-slate-400">\u672A\u9001\u4FE1</span>
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-500/10 text-slate-400">未送信</span>
                                 )}
                               </td>
                             </tr>
@@ -1195,21 +1251,21 @@ export default function DmPage() {
                       </table>
                     </div>
                     <div className="mt-3 text-xs" style={{ color: 'var(--text-muted)' }}>
-                      {whaleChecked.size}\u540D \u9078\u629E\u4E2D
+                      {whaleChecked.size}名 選択中
                     </div>
                   </div>
 
                   {/* Message + Send */}
                   <div className="glass-card p-5">
-                    <h3 className="text-sm font-bold mb-3">\u304A\u793C\u30E1\u30C3\u30BB\u30FC\u30B8</h3>
+                    <h3 className="text-sm font-bold mb-3">お礼メッセージ</h3>
                     <p className="text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
-                      {'{username}'} \u306F\u30E6\u30FC\u30B6\u30FC\u540D\u306B\u81EA\u52D5\u7F6E\u63DB\u3055\u308C\u307E\u3059
+                      {'{username}'} はユーザー名に自動置換されます
                     </p>
                     <textarea
                       className="input-glass h-24 resize-none text-sm"
                       value={thankMessage}
                       onChange={e => setThankMessage(e.target.value)}
-                      placeholder="\u304A\u793C\u30E1\u30C3\u30BB\u30FC\u30B8\u3092\u5165\u529B..."
+                      placeholder="お礼メッセージを入力..."
                     />
 
                     <button onClick={handleThankSend} disabled={thankSending || whaleChecked.size === 0}
@@ -1221,8 +1277,8 @@ export default function DmPage() {
                         boxShadow: whaleChecked.size > 0 ? '0 6px 30px rgba(34,197,94,0.3)' : 'none',
                       }}>
                       {thankSending
-                        ? '\u30AD\u30E5\u30FC\u767B\u9332\u4E2D...'
-                        : `\u304A\u793CEDM\u3092\u9001\u4FE1\uFF08${whaleChecked.size}\u4EF6\uFF09`
+                        ? 'キュー登録中...'
+                        : `お礼EDMを送信（${whaleChecked.size}件）`
                       }
                     </button>
                   </div>
@@ -1234,10 +1290,10 @@ export default function DmPage() {
                 <div className="glass-card p-10 text-center">
                   <p className="text-4xl mb-4 opacity-30">+</p>
                   <p className="text-sm mb-2" style={{ color: 'var(--text-secondary)' }}>
-                    \u300C\u691C\u51FA\u3059\u308B\u300D\u3092\u30AF\u30EA\u30C3\u30AF\u3057\u3066\u65B0\u898F\u592A\u5BA2\u3092\u691C\u7D22
+                    「検出する」をクリックして新規太客を検索
                   </p>
                   <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    \u671F\u9593\u4E2D\u306B\u521D\u3081\u3066\u8AB2\u91D1\u3057\u3001\u95BE\u5024\u4EE5\u4E0A\u306E\u30B3\u30A4\u30F3\u3092\u4F7F\u3063\u305F\u30E6\u30FC\u30B6\u30FC\u304C\u8868\u793A\u3055\u308C\u307E\u3059\u3002
+                    期間中に初めて課金し、閾値以上のコインを使ったユーザーが表示されます。
                   </p>
                 </div>
               )}
@@ -1352,7 +1408,7 @@ export default function DmPage() {
                             if (next.has(campaign)) next.delete(campaign); else next.add(campaign);
                             return next;
                           })}>
-                            <span className="text-xs">{isGroupExpanded ? '\u25BC' : '\u25B6'}</span>
+                            <span className="text-xs">{isGroupExpanded ? '▼' : '▶'}</span>
                           </button>
                         )}
                         <span className={`text-xs font-bold ${labelColor}`}>{label}</span>
@@ -1588,7 +1644,7 @@ export default function DmPage() {
                   className="flex items-center gap-2"
                   style={{ cursor: shouldCollapse ? 'pointer' : 'default' }}
                 >
-                  {shouldCollapse && <span className="text-xs">{enrollmentListExpanded ? '\u25BC' : '\u25B6'}</span>}
+                  {shouldCollapse && <span className="text-xs">{enrollmentListExpanded ? '▼' : '▶'}</span>}
                   <h3 className="text-sm font-bold">エンロールメント ({filteredEnrollments.length}件)</h3>
                 </button>
                 <div className="flex gap-1">
@@ -1615,7 +1671,7 @@ export default function DmPage() {
                       <div key={e.id} className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs hover:bg-white/[0.02]"
                         style={{ background: 'rgba(15,23,42,0.3)' }}>
                         <span className={statusColors[e.status] || 'text-slate-500'}>
-                          {e.status === 'active' ? '\u25CF' : e.status === 'goal_reached' ? '\u2713' : e.status === 'completed' ? '\u25CE' : '\u25CB'}
+                          {e.status === 'active' ? '●' : e.status === 'goal_reached' ? '✓' : e.status === 'completed' ? '◎' : '○'}
                         </span>
                         <span className="font-medium w-32 truncate">{e.username}</span>
                         {e.cast_name && (

@@ -2902,7 +2902,7 @@ function CastDetailInner() {
                                         {row.paid_after.toLocaleString()}
                                       </div>
                                       <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
-                                        {row.cvr_pct}%
+                                        {Number(row.cvr_pct).toFixed(1)}%
                                       </div>
                                       <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
                                         {row.total_tokens.toLocaleString()}
