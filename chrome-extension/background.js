@@ -188,6 +188,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     checkDmSchedules().catch(e => {
       console.warn('[LS-BG] DMスケジュールチェック失敗:', e.message);
     });
+    // メモリ管理: 無制限オブジェクトの上限チェック
+    cleanupUnboundedCollections();
   }
 
   // 定期コイン同期（6時間ごと）
@@ -251,11 +253,17 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     });
   }
 
-  // スクリーンショット（5分ごと）
+  // スクリーンショット（CDN方式優先、フォールバックでcaptureVisibleTab）
   if (alarm.name === 'spy-screenshot') {
-    captureAllSpyTabs().catch(e => {
-      console.warn('[LS-BG] Screenshot: キャプチャ失敗:', e.message);
+    captureAllThumbnailsCDN().catch(e => {
+      console.warn('[LS-SPY] CDN thumbnail failed, falling back to captureVisibleTab:', e.message);
+      captureAllSpyTabs().catch(e2 => console.warn('[LS-SPY] Screenshot fallback also failed:', e2.message));
     });
+  }
+
+  // Whisperポーリング（10秒ごと）
+  if (alarm.name === 'whisper-poll') {
+    pollWhispers();
   }
 });
 
@@ -288,6 +296,38 @@ function settleStaleGroupChats() {
         console.warn('[LS-BG] GC安全弁精算失敗:', e.message);
       });
     }
+  }
+}
+
+// メモリ管理: 無制限オブジェクトのサイズ上限チェック
+const COLLECTION_LIMITS = {
+  autoPatrolTabs: 100,
+  spyRotationTabs: 100,
+  monitoredCastStatus: 200,
+  screenshotIntervalCache: 200,
+  screenshotLastCapture: 200,
+  gcRateCache: 200,
+};
+
+function cleanupUnboundedCollections() {
+  for (const [name, limit] of Object.entries(COLLECTION_LIMITS)) {
+    const obj = { autoPatrolTabs, spyRotationTabs, monitoredCastStatus, screenshotIntervalCache, screenshotLastCapture, gcRateCache }[name];
+    if (!obj) continue;
+    const keys = Object.keys(obj);
+    if (keys.length > limit) {
+      // 古い順に削除（FIFOで先頭から削除）
+      const toDelete = keys.slice(0, keys.length - limit);
+      for (const k of toDelete) delete obj[k];
+      console.log(`[LS-BG] メモリ管理: ${name} ${toDelete.length}件削除 → ${Object.keys(obj).length}件`);
+    }
+  }
+  // successfulTaskIds Set の上限（5000件）
+  if (successfulTaskIds.size > 5000) {
+    const arr = [...successfulTaskIds];
+    const toKeep = arr.slice(-2500);
+    successfulTaskIds.clear();
+    toKeep.forEach(id => successfulTaskIds.add(id));
+    console.log('[LS-BG] メモリ管理: successfulTaskIds 2500件に縮小');
   }
 }
 
@@ -1392,8 +1432,7 @@ async function triggerChurnRecoveryDMs() {
  * @returns { message, ai_generated, ai_reasoning, ai_confidence }
  */
 async function generateDmMessage(userName, castName, triggerType, stepNumber, segment) {
-  // PERSONA_API_URL: localhost:3000 (dev) or livespot-rouge.vercel.app (prod)
-  const personaUrl = CONFIG.PERSONA_API_URL || 'http://localhost:3000';
+  const personaUrl = CONFIG.PERSONA_API_URL;
 
   try {
     await loadAuth();
@@ -1943,14 +1982,15 @@ async function pollWhispers() {
 
 function startWhisperPolling() {
   if (whisperPollingTimer) return;
-  console.log('[LS-BG] Whisperポーリング開始(10秒間隔)');
+  whisperPollingTimer = true; // フラグとして使用
+  console.log('[LS-BG] Whisperポーリング開始(chrome.alarms 10秒間隔)');
   pollWhispers();
-  whisperPollingTimer = setInterval(pollWhispers, 10000);
+  chrome.alarms.create('whisper-poll', { periodInMinutes: 10 / 60 }); // 10秒
 }
 
 function stopWhisperPolling() {
   if (whisperPollingTimer) {
-    clearInterval(whisperPollingTimer);
+    chrome.alarms.clear('whisper-poll');
     whisperPollingTimer = null;
   }
 }
@@ -4436,15 +4476,123 @@ async function handleSpyRotation() {
 // Screenshot Capture — SPY監視中の全タブスクリーンショット（5分間隔）
 // ============================================================
 
+/**
+ * CDN方式: Stripchat公開APIからサムネイルURLを取得
+ * captureVisibleTab不要 — タブを開かなくてもOK
+ */
+async function fetchThumbnail(username) {
+  try {
+    const res = await fetch(`https://stripchat.com/api/front/v2/models/username/${username}/cam`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const modelId = data?.user?.id;
+    const snapshotTimestamp = data?.user?.snapshotTimestamp;
+    if (!modelId || !snapshotTimestamp) return null;
+    const thumbUrl = `https://img.doppiocdn.org/thumbs/${snapshotTimestamp}/${modelId}_webp`;
+    return { thumbUrl, modelId, snapshotTimestamp, status: data?.user?.status || 'unknown' };
+  } catch (err) {
+    console.warn('[LS-SPY] fetchThumbnail failed:', username, err.message);
+    return null;
+  }
+}
+
+/**
+ * CDN方式: 全監視キャストのサムネイルをCDN URLで保存
+ * captureVisibleTabの代替 — タブ切り替え不要
+ */
+async function captureAllThumbnailsCDN() {
+  if (!accessToken || !accountId) return;
+
+  // 登録キャスト一覧を収集
+  const castNames = [];
+  if (registeredCastNamesCache && registeredCastNamesCache.size > 0) {
+    for (const name of registeredCastNamesCache) castNames.push(name);
+  } else if (ownCastNamesCache && ownCastNamesCache.size > 0) {
+    for (const name of ownCastNamesCache) castNames.push(name);
+  }
+
+  // SPY監視中のタブからもキャスト名を収集
+  const EXCLUDE_PAGES = ['favorites', 'messages', 'settings', 'feed', 'members', 'login', 'signup', 'new', 'search', 'models', 'categories', '404'];
+  try {
+    const allTabs = await chrome.tabs.query({ url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] });
+    for (const tab of allTabs) {
+      if (!tab.url) continue;
+      const m = tab.url.match(/stripchat\.com\/([A-Za-z0-9_-]+)/);
+      if (!m) continue;
+      const name = m[1];
+      if (!EXCLUDE_PAGES.includes(name) && !castNames.includes(name)) {
+        castNames.push(name);
+      }
+    }
+  } catch { /* tabs API not available */ }
+
+  if (castNames.length === 0) return;
+
+  console.log(`[LS-SPY] CDN Thumbnail: ${castNames.length}キャスト対象: ${castNames.join(', ')}`);
+
+  for (const castName of castNames) {
+    // キャスト別間隔チェック
+    const interval = screenshotIntervalCache[castName];
+    if (interval === undefined || interval === null || interval <= 0) continue;
+    const lastCapture = screenshotLastCapture[castName] || 0;
+    const elapsedMin = (Date.now() - lastCapture) / 60000;
+    if (elapsedMin < interval) continue;
+
+    const result = await fetchThumbnail(castName);
+    if (!result) {
+      console.log(`[LS-SPY] CDN Thumbnail: ${castName} — サムネイル取得失敗（オフライン or API変更）`);
+      continue;
+    }
+
+    // メタデータをscreenshotsテーブルに保存（CDN URLのみ、Storageアップロード不要）
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `${castName}_cdn_${timestamp}.webp`;
+    const sessionId = castSessions.get(castName) || currentSessionId || null;
+
+    try {
+      const metaRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/screenshots`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          cast_name: castName,
+          session_id: sessionId,
+          filename: filename,
+          storage_path: null,
+          thumbnail_url: result.thumbUrl,
+          captured_at: new Date().toISOString(),
+        }),
+      });
+      if (metaRes.ok) {
+        screenshotLastCapture[castName] = Date.now();
+        console.log(`[LS-SPY] CDN Thumbnail saved: ${castName} status=${result.status}`);
+      } else {
+        console.warn(`[LS-SPY] CDN Thumbnail metadata failed: ${castName}`, metaRes.status);
+      }
+    } catch (err) {
+      console.warn(`[LS-SPY] CDN Thumbnail error: ${castName}`, err.message);
+    }
+
+    await sleep_bg(500); // API rate limit
+  }
+}
+
 function startScreenshotCapture() {
   chrome.alarms.get('spy-screenshot', (existing) => {
     if (!existing) {
       chrome.alarms.create('spy-screenshot', { periodInMinutes: 1 });
     }
   });
-  // 即時キャプチャ（初回）
-  captureAllSpyTabs().catch(e => console.warn('[LS-BG] Screenshot: 初回キャプチャ失敗:', e.message));
-  console.log('[LS-SPY] Screenshot alarm registered (1分間隔, キャスト別判定)');
+  // 即時キャプチャ（CDN方式優先）
+  captureAllThumbnailsCDN().catch(e => console.warn('[LS-BG] Screenshot: CDN初回キャプチャ失敗:', e.message));
+  console.log('[LS-SPY] Screenshot alarm registered (1分間隔, CDN方式優先)');
 }
 
 function stopScreenshotCapture() {

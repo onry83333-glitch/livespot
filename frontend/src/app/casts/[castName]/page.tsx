@@ -9,12 +9,12 @@ import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
-import { PersonaTab } from '@/components/persona-tab';
+
 
 /* ============================================================
    Types
    ============================================================ */
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots' | 'persona';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots';
 
 interface CastStatsData {
   total_messages: number;
@@ -104,6 +104,7 @@ interface ScreenshotItem {
   session_id: string | null;
   filename: string;
   storage_path: string | null;
+  thumbnail_url: string | null;
   captured_at: string;
   signedUrl?: string | null;
 }
@@ -172,7 +173,6 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'sales',     icon: '💰', label: '売上' },
   { key: 'realtime',  icon: '👁', label: 'リアルタイム' },
   { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
-  { key: 'persona',     icon: '🎭', label: 'ペルソナ' },
 ];
 
 /* ============================================================
@@ -1131,7 +1131,7 @@ function CastDetailInner() {
     setScreenshotsLoading(true);
     (async () => {
       const { data, error } = await sb.from('screenshots')
-        .select('id, cast_name, session_id, filename, storage_path, captured_at')
+        .select('id, cast_name, session_id, filename, storage_path, thumbnail_url, captured_at')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
         .order('captured_at', { ascending: false })
@@ -2834,13 +2834,14 @@ function CastDetailInner() {
                   </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {/* Paid users for this cast */}
-                    <div className="glass-card p-4">
-                      <h3 className="text-sm font-bold mb-3">有料ユーザー (このキャスト)</h3>
+                    {/* Left column: Paid users */}
+                    <div className="space-y-4">
+                      <div className="glass-card p-4">
+                        <h3 className="text-sm font-bold mb-3">有料ユーザー (このキャスト)</h3>
                       {paidUsers.length === 0 ? (
                         <p className="text-xs" style={{ color: 'var(--text-muted)' }}>有料ユーザーデータなし</p>
                       ) : (
-                        <div className="space-y-1.5 max-h-80 overflow-auto">
+                        <div className="space-y-1.5 max-h-[480px] overflow-auto">
                           {paidUsers.map((u, i) => (
                             <div key={u.user_name} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
                               <div className="flex items-center gap-2 min-w-0">
@@ -2861,130 +2862,134 @@ function CastDetailInner() {
                           ))}
                         </div>
                       )}
+                      </div>
                     </div>
 
-                    {/* Recent coin transactions */}
-                    <div className="glass-card p-4">
-                      <h3 className="text-sm font-bold mb-3">直近のコイン履歴 (このキャスト)</h3>
-                      {coinTxs.length === 0 ? (
-                        <div className="text-center py-6">
-                          <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>コイン履歴なし</p>
-                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                            Chrome拡張からStripchatにログインし、Popupの「名簿同期」で取得できます
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-1 max-h-80 overflow-auto">
-                          {coinTxs.slice(0, 50).map(tx => (
-                            <div key={tx.id} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
-                              <div className="min-w-0 flex-1">
-                                <span className="font-semibold">{tx.user_name}</span>
-                                <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded"
-                                  style={{ background: 'rgba(168,139,250,0.1)', color: 'var(--accent-purple, #a855f7)' }}>
-                                  {tx.type}
-                                </span>
-                              </div>
-                              <div className="flex-shrink-0 ml-2 text-right">
-                                <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                  {tx.tokens.toLocaleString()} tk
-                                </span>
-                                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgo(tx.date)}</p>
-                              </div>
+                    {/* Right column: DM CVR + Coin history */}
+                    <div className="space-y-4">
+                      {/* DM Campaign CVR */}
+                      {dmCvr.length > 0 && (
+                        <div className="glass-card p-4">
+                          <h3 className="text-sm font-bold mb-3">DM Campaign CVR</h3>
+                          <div className="space-y-2">
+                            {/* Header */}
+                            <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold px-2" style={{ color: 'var(--text-muted)' }}>
+                              <div className="col-span-4">Campaign</div>
+                              <div className="col-span-1 text-right">Sent</div>
+                              <div className="col-span-1 text-right">Paid</div>
+                              <div className="col-span-2 text-right">CVR</div>
+                              <div className="col-span-2 text-right">Tokens</div>
+                              <div className="col-span-2 text-right">Avg/人</div>
                             </div>
-                          ))}
+                            {/* Rows */}
+                            {dmCvr.map(row => {
+                              const cvrColor = row.cvr_pct >= 50 ? 'var(--accent-green)'
+                                : row.cvr_pct >= 20 ? 'var(--accent-amber)'
+                                : 'var(--accent-pink)';
+                              const barWidth = Math.min(row.cvr_pct, 100);
+                              return (
+                                <div key={row.campaign}>
+                                  <div
+                                    className="glass-panel px-2 py-2 rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
+                                    onClick={() => setDmCvrExpanded(dmCvrExpanded === row.campaign ? null : row.campaign)}
+                                  >
+                                    <div className="grid grid-cols-12 gap-2 items-center text-[11px]">
+                                      <div className="col-span-4 truncate font-medium">{row.campaign}</div>
+                                      <div className="col-span-1 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
+                                        {row.dm_sent.toLocaleString()}
+                                      </div>
+                                      <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
+                                        {row.paid_after.toLocaleString()}
+                                      </div>
+                                      <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
+                                        {row.cvr_pct}%
+                                      </div>
+                                      <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                        {row.total_tokens.toLocaleString()}
+                                      </div>
+                                      <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
+                                        {(row.avg_tokens_per_payer || 0).toLocaleString()}
+                                      </div>
+                                    </div>
+                                    {/* CVR Bar */}
+                                    <div className="mt-1.5 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                      <div
+                                        className="h-full rounded-full transition-all"
+                                        style={{ width: `${barWidth}%`, background: cvrColor }}
+                                      />
+                                    </div>
+                                  </div>
+                                  {/* Expanded detail */}
+                                  {dmCvrExpanded === row.campaign && (
+                                    <div className="mt-1 px-3 py-2 rounded-lg text-[10px] space-y-1" style={{ background: 'rgba(15,23,42,0.4)' }}>
+                                      <div className="flex justify-between">
+                                        <span style={{ color: 'var(--text-muted)' }}>初回送信</span>
+                                        <span>{row.first_sent ? formatJST(row.first_sent) : '-'}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span style={{ color: 'var(--text-muted)' }}>最終送信</span>
+                                        <span>{row.last_sent ? formatJST(row.last_sent) : '-'}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span style={{ color: 'var(--text-muted)' }}>合計収益</span>
+                                        <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(row.total_tokens, coinRate)}</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span style={{ color: 'var(--text-muted)' }}>課金者平均</span>
+                                        <span style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)}</span>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {/* Summary */}
+                          <div className="mt-3 pt-3 flex items-center justify-between text-[10px]" style={{ borderTop: '1px solid var(--border-glass)' }}>
+                            <span style={{ color: 'var(--text-muted)' }}>
+                              {dmCvr.length}キャンペーン / 送信合計 {dmCvr.reduce((s, r) => s + r.dm_sent, 0).toLocaleString()}通
+                            </span>
+                            <span style={{ color: 'var(--accent-green)' }}>
+                              総収益 {tokensToJPY(dmCvr.reduce((s, r) => s + r.total_tokens, 0), coinRate)}
+                            </span>
+                          </div>
                         </div>
                       )}
-                    </div>
-                  </div>
 
-                  {/* DM Campaign CVR */}
-                  {dmCvr.length > 0 && (
-                    <div className="glass-card p-4">
-                      <h3 className="text-sm font-bold mb-3">DM Campaign CVR</h3>
-                      <div className="space-y-2">
-                        {/* Header */}
-                        <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold px-2" style={{ color: 'var(--text-muted)' }}>
-                          <div className="col-span-4">Campaign</div>
-                          <div className="col-span-1 text-right">Sent</div>
-                          <div className="col-span-1 text-right">Paid</div>
-                          <div className="col-span-2 text-right">CVR</div>
-                          <div className="col-span-2 text-right">Tokens</div>
-                          <div className="col-span-2 text-right">Avg/人</div>
-                        </div>
-                        {/* Rows */}
-                        {dmCvr.map(row => {
-                          const cvrColor = row.cvr_pct >= 50 ? 'var(--accent-green)'
-                            : row.cvr_pct >= 20 ? 'var(--accent-amber)'
-                            : 'var(--accent-pink)';
-                          const barWidth = Math.min(row.cvr_pct, 100);
-                          return (
-                            <div key={row.campaign}>
-                              <div
-                                className="glass-panel px-2 py-2 rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
-                                onClick={() => setDmCvrExpanded(dmCvrExpanded === row.campaign ? null : row.campaign)}
-                              >
-                                <div className="grid grid-cols-12 gap-2 items-center text-[11px]">
-                                  <div className="col-span-4 truncate font-medium">{row.campaign}</div>
-                                  <div className="col-span-1 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                                    {row.dm_sent.toLocaleString()}
-                                  </div>
-                                  <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
-                                    {row.paid_after.toLocaleString()}
-                                  </div>
-                                  <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
-                                    {row.cvr_pct}%
-                                  </div>
-                                  <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                    {row.total_tokens.toLocaleString()}
-                                  </div>
-                                  <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                                    {(row.avg_tokens_per_payer || 0).toLocaleString()}
-                                  </div>
+                      {/* Recent coin transactions */}
+                      <div className="glass-card p-4">
+                        <h3 className="text-sm font-bold mb-3">直近のコイン履歴 (このキャスト)</h3>
+                        {coinTxs.length === 0 ? (
+                          <div className="text-center py-6">
+                            <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>コイン履歴なし</p>
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                              Chrome拡張からStripchatにログインし、Popupの「名簿同期」で取得できます
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="space-y-1 max-h-80 overflow-auto">
+                            {coinTxs.slice(0, 50).map(tx => (
+                              <div key={tx.id} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-semibold">{tx.user_name}</span>
+                                  <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded"
+                                    style={{ background: 'rgba(168,139,250,0.1)', color: 'var(--accent-purple, #a855f7)' }}>
+                                    {tx.type}
+                                  </span>
                                 </div>
-                                {/* CVR Bar */}
-                                <div className="mt-1.5 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                                  <div
-                                    className="h-full rounded-full transition-all"
-                                    style={{ width: `${barWidth}%`, background: cvrColor }}
-                                  />
+                                <div className="flex-shrink-0 ml-2 text-right">
+                                  <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                    {tx.tokens.toLocaleString()} tk
+                                  </span>
+                                  <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgo(tx.date)}</p>
                                 </div>
                               </div>
-                              {/* Expanded detail */}
-                              {dmCvrExpanded === row.campaign && (
-                                <div className="mt-1 px-3 py-2 rounded-lg text-[10px] space-y-1" style={{ background: 'rgba(15,23,42,0.4)' }}>
-                                  <div className="flex justify-between">
-                                    <span style={{ color: 'var(--text-muted)' }}>初回送信</span>
-                                    <span>{row.first_sent ? formatJST(row.first_sent) : '-'}</span>
-                                  </div>
-                                  <div className="flex justify-between">
-                                    <span style={{ color: 'var(--text-muted)' }}>最終送信</span>
-                                    <span>{row.last_sent ? formatJST(row.last_sent) : '-'}</span>
-                                  </div>
-                                  <div className="flex justify-between">
-                                    <span style={{ color: 'var(--text-muted)' }}>合計収益</span>
-                                    <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(row.total_tokens, coinRate)}</span>
-                                  </div>
-                                  <div className="flex justify-between">
-                                    <span style={{ color: 'var(--text-muted)' }}>課金者平均</span>
-                                    <span style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)}</span>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      {/* Summary */}
-                      <div className="mt-3 pt-3 flex items-center justify-between text-[10px]" style={{ borderTop: '1px solid var(--border-glass)' }}>
-                        <span style={{ color: 'var(--text-muted)' }}>
-                          {dmCvr.length}キャンペーン / 送信合計 {dmCvr.reduce((s, r) => s + r.dm_sent, 0).toLocaleString()}通
-                        </span>
-                        <span style={{ color: 'var(--accent-green)' }}>
-                          総収益 {tokensToJPY(dmCvr.reduce((s, r) => s + r.total_tokens, 0), coinRate)}
-                        </span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
-                  )}
+                  </div>
                 </>
               )}
             </div>
@@ -3131,7 +3136,7 @@ function CastDetailInner() {
                 ) : (
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                     {screenshots.map((ss) => {
-                      const imageUrl = ss.signedUrl || null;
+                      const imageUrl = ss.thumbnail_url || ss.signedUrl || null;
                       return (
                         <div key={ss.id} className="glass-panel rounded-xl overflow-hidden">
                           {imageUrl ? (
@@ -3150,8 +3155,14 @@ function CastDetailInner() {
                             </div>
                           )}
                           <div className="p-2">
-                            <p className="text-[10px] truncate" style={{ color: 'var(--text-secondary)' }}>
+                            <p className="text-[10px] truncate flex items-center" style={{ color: 'var(--text-secondary)' }}>
                               {ss.filename}
+                              {ss.thumbnail_url && (
+                                <span className="text-[8px] px-1 py-0.5 rounded ml-1"
+                                  style={{ background: 'rgba(34,197,94,0.1)', color: 'var(--accent-green)' }}>
+                                  CDN
+                                </span>
+                              )}
                             </p>
                             <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                               {formatJST(ss.captured_at)}
@@ -3166,9 +3177,7 @@ function CastDetailInner() {
             </div>
           )}
 
-          {activeTab === 'persona' && accountId && (
-            <PersonaTab castName={castName} accountId={accountId} />
-          )}
+
         </>
       )}
 
