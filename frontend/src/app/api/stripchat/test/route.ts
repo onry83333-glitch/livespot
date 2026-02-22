@@ -16,27 +16,44 @@ export async function GET(req: NextRequest) {
   let cfTestStatus = 0;
   let cfBlocked = false;
 
+  let modelData: Record<string, unknown> | null = null;
+
   try {
-    const configRes = await fetch('https://ja.stripchat.com/api/front/v2/config', {
-      headers: { Accept: 'application/json' },
-    });
-    cfTestStatus = configRes.status;
-    cfBlocked = configRes.status === 403;
+    const testUsername = req.nextUrl.searchParams.get('cast') || 'Risa_06';
+    const res = await fetch(
+      `https://ja.stripchat.com/api/front/v2/models/username/${encodeURIComponent(testUsername)}/cam`,
+      { headers: { Accept: 'application/json' } },
+    );
+    cfTestStatus = res.status;
+    cfBlocked = res.status === 403;
 
     if (!cfBlocked) {
-      const cfMitigated = configRes.headers.get('cf-mitigated');
+      const cfMitigated = res.headers.get('cf-mitigated');
       if (cfMitigated) cfBlocked = true;
     }
 
-    if (!cfBlocked && configRes.ok) {
-      const text = await configRes.text();
+    if (!cfBlocked && res.ok) {
+      const text = await res.text();
       if (text.includes('cf-') && text.includes('<html')) {
         cfBlocked = true;
+      } else {
+        try {
+          const json = JSON.parse(text);
+          modelData = {
+            userId: json?.user?.id,
+            username: json?.user?.username,
+            status: json?.user?.status,
+            viewersCount: json?.user?.viewersCount,
+            snapshotTimestamp: json?.user?.snapshotTimestamp,
+          };
+        } catch {
+          // JSON parse failed
+        }
       }
     }
 
-    cfTestOk = configRes.ok && !cfBlocked;
-  } catch (err) {
+    cfTestOk = res.ok && !cfBlocked;
+  } catch {
     cfTestStatus = 0;
     cfBlocked = false;
   }
@@ -86,6 +103,7 @@ export async function GET(req: NextRequest) {
     ok: cfTestOk,
     status: cfTestStatus,
     cfBlocked,
+    modelData,
     sessionValid,
     sessionTestOk,
     csrfAvailable,
