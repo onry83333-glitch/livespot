@@ -38,14 +38,7 @@ export async function GET(req: NextRequest) {
         cfBlocked = true;
       } else {
         try {
-          const json = JSON.parse(text);
-          modelData = {
-            userId: json?.user?.id,
-            username: json?.user?.username,
-            status: json?.user?.status,
-            viewersCount: json?.user?.viewersCount,
-            snapshotTimestamp: json?.user?.snapshotTimestamp,
-          };
+          modelData = JSON.parse(text);
         } catch {
           // JSON parse failed
         }
