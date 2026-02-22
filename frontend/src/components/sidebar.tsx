@@ -18,25 +18,25 @@ interface NavSection {
 
 const navSections: NavSection[] = [
   {
-    title: 'メイン',
+    title: '',
     items: [
       { href: '/casts',      icon: '📋', label: 'キャスト一覧' },
-      { href: '/dm',         icon: '💬', label: 'DM管理' },
-      { href: '/analytics',  icon: '📊', label: '売上分析' },
-      { href: '/users',      icon: '👥', label: 'ユーザー検索' },
+      { href: '/dm',         icon: '📨', label: 'DM管理' },
     ],
   },
   {
-    title: 'スパイ（他社分析）',
+    title: '分析',
     items: [
-      { href: '/spy',        icon: '👁', label: 'リアルタイム監視' },
+      { href: '/analytics',  icon: '📊', label: '売上分析' },
+      { href: '/users',      icon: '👥', label: 'ユーザー検索' },
+      { href: '/spy',        icon: '🔭', label: '他社SPY' },
     ],
   },
   {
     title: '管理',
     items: [
       { href: '/admin/command-center', icon: '🎛️', label: 'コマンドセンター' },
-      { href: '/settings',   icon: '⚙️', label: '管理&セキュリティ' },
+      { href: '/settings',   icon: '⚙️', label: '設定' },
     ],
   },
 ];
@@ -133,12 +133,15 @@ function SidebarInner() {
 
       {/* Nav Sections */}
       <nav className="flex-1 px-3 space-y-4 overflow-auto">
-        {navSections.map(section => (
-          <div key={section.title}>
-            <p className="text-[9px] font-bold uppercase tracking-[0.15em] px-3 mb-1.5"
-              style={{ color: 'var(--text-muted)' }}>
-              {section.title}
-            </p>
+        {navSections.map((section, idx) => (
+          <div key={section.title || `section-${idx}`}>
+            {idx > 0 && <div className="border-t my-2 mx-3" style={{ borderColor: 'var(--border-glass)' }} />}
+            {section.title && (
+              <p className="text-[9px] font-bold uppercase tracking-[0.15em] px-3 mb-1.5"
+                style={{ color: 'var(--text-muted)' }}>
+                {section.title}
+              </p>
+            )}
             <div className="space-y-0.5">
               {section.items.map(item => {
                 const isActive = item.href === '/'
@@ -164,8 +167,8 @@ function SidebarInner() {
               })}
             </div>
 
-            {/* Spy submenu: スパイセクションの直後に表示 */}
-            {section.title === 'スパイ（他社分析）' && activeSpyCastName && (
+            {/* Spy submenu: 分析セクションの直後に表示 */}
+            {section.title === '分析' && activeSpyCastName && (
               <div className="mt-2 ml-2 pl-3 border-l" style={{ borderColor: 'rgba(56,189,248,0.15)' }}>
                 <Link href="/spy"
                   className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px] text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-all mb-1"
@@ -204,7 +207,7 @@ function SidebarInner() {
             )}
 
             {/* Cast submenu: キャスト一覧セクションの直後に表示 */}
-            {section.title === 'メイン' && activeCastName && (
+            {section.title === '' && activeCastName && (
               <div className="mt-2 ml-2 pl-3 border-l" style={{ borderColor: 'rgba(56,189,248,0.15)' }}>
                 {/* Back link */}
                 <Link href="/casts"

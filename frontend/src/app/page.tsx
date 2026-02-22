@@ -65,6 +65,12 @@ export default function DashboardPage() {
   const [newAccountName, setNewAccountName] = useState('');
   const [addingAccount, setAddingAccount] = useState(false);
 
+  // Live casts
+  const [liveCasts, setLiveCasts] = useState<string[]>([]);
+
+  // Recommended actions
+  const [recommendations, setRecommendations] = useState<{icon: string; text: string; href: string}[]>([]);
+
   // Churn risk alert
   const [churnRiskUsers, setChurnRiskUsers] = useState<ChurnRiskUser[]>([]);
   const churnFetchedRef = useRef<string | null>(null); // Tracks which account we've fetched churn for
@@ -90,7 +96,7 @@ export default function DashboardPage() {
     const since7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
     // 並列クエリ
-    const [whalesRes, txRes, spyRes, dmCountRes, dmRecentRes] = await Promise.all([
+    const [whalesRes, txRes, spyRes, dmCountRes, dmRecentRes, liveRes] = await Promise.all([
       // ホエールランキング: paid_users top 15
       sb.from('paid_users')
         .select('user_name, total_coins')
@@ -119,23 +125,56 @@ export default function DashboardPage() {
         .eq('account_id', accountId)
         .order('queued_at', { ascending: false })
         .limit(10),
+      // 配信中キャスト検出: 直近10分以内のspy_messages
+      sb.from('spy_messages')
+        .select('cast_name')
+        .eq('account_id', accountId)
+        .gte('created_at', new Date(now.getTime() - 10 * 60 * 1000).toISOString())
+        .order('created_at', { ascending: false })
+        .limit(100),
     ]);
 
     const whales = whalesRes.data || [];
     const txList = txRes.data || [];
     const totalRevenue = txList.reduce((sum, t) => sum + (t.tokens || 0), 0);
     const hasData = whales.length > 0 || txList.length > 0;
+    const detectedLiveCasts = Array.from(new Set((liveRes.data || []).map(m => m.cast_name).filter(Boolean))) as string[];
+    const dmSent7dCount = dmCountRes.count ?? 0;
 
     setDataEmpty(!hasData);
+    setLiveCasts(detectedLiveCasts);
     setStats({
       totalRevenue30d: totalRevenue,
       txCount30d: txList.length,
       spyMessages1h: spyRes.count ?? 0,
-      dmSent7d: dmCountRes.count ?? 0,
+      dmSent7d: dmSent7dCount,
       whales,
       recentDM: dmRecentRes.data || [],
     });
     setLastFetchedAt(new Date());
+
+    // 推奨アクション算出
+    const recs: {icon: string; text: string; href: string}[] = [];
+    if (dmSent7dCount === 0) {
+      recs.push({ icon: '📨', text: '7日間DM未送信 -- リテンションDMの送信を検討', href: '/dm' });
+    }
+    const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+    const dormantWhales = whales.filter((w: WhaleUser) => {
+      // paid_users にはlast_payment_dateがないため、total_coins >= 50000 の大口のみ対象
+      return w.total_coins >= 50000;
+    });
+    if (dormantWhales.length > 0) {
+      // paid_users テーブルのlast_payment_dateをチェック
+      const { data: whaleDetails } = await sb.from('paid_users')
+        .select('user_name, last_payment_date')
+        .eq('account_id', accountId)
+        .in('user_name', dormantWhales.map(w => w.user_name))
+        .lt('last_payment_date', fourteenDaysAgo.toISOString());
+      if (whaleDetails && whaleDetails.length > 0) {
+        recs.push({ icon: '🐋', text: `離脱Whaleあり (${whaleDetails.length}名) -- 復帰DMを送信`, href: '/dm' });
+      }
+    }
+    setRecommendations(recs);
   }, [sb]);
 
   // Churn risk data loading
@@ -363,6 +402,43 @@ export default function DashboardPage() {
           {demoError && (
             <p className="mt-3 text-xs" style={{ color: 'var(--accent-pink)' }}>{demoError}</p>
           )}
+        </div>
+      )}
+
+      {/* 配信中キャスト */}
+      {liveCasts.length > 0 && (
+        <div className="glass-card p-4 flex items-center gap-4 anim-fade-up">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 anim-live"></span>
+            <span className="text-sm font-bold">{'\u914D\u4FE1\u4E2D'} ({liveCasts.length})</span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {liveCasts.map(name => (
+              <Link key={name} href={`/casts/${encodeURIComponent(name)}?tab=realtime`}
+                className="px-3 py-1 rounded-lg text-xs font-medium hover:bg-white/[0.05] transition-all"
+                style={{ background: 'rgba(244,63,94,0.1)', color: 'var(--accent-pink)', border: '1px solid rgba(244,63,94,0.2)' }}>
+                {name}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 推奨アクション */}
+      {recommendations.length > 0 && (
+        <div className="glass-card p-4 anim-fade-up">
+          <p className="text-xs font-bold mb-2" style={{ color: 'var(--text-muted)' }}>{'\uD83D\uDCCB \u63A8\u5968\u30A2\u30AF\u30B7\u30E7\u30F3'}</p>
+          <div className="space-y-2">
+            {recommendations.map((r, i) => (
+              <Link key={i} href={r.href}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs hover:bg-white/[0.03] transition-all"
+                style={{ color: 'var(--text-secondary)' }}>
+                <span>{r.icon}</span>
+                <span>{r.text}</span>
+                <span className="ml-auto" style={{ color: 'var(--accent-primary)' }}>{'\u2192'}</span>
+              </Link>
+            ))}
+          </div>
         </div>
       )}
 

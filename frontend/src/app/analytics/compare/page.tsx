@@ -389,7 +389,7 @@ export default function CastComparePage() {
                   <div className="flex justify-between text-xs">
                     <span style={{ color: 'var(--text-muted)' }}>チップ額</span>
                     <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                      {formatTokens(stat.totalTips)} tk
+                      {formatTokens(stat.totalTips)}
                     </span>
                   </div>
                   <div className="flex justify-between text-xs">
