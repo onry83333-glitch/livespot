@@ -721,8 +721,8 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
           <div ref={scrollRef} className="flex-1 overflow-auto space-y-0.5 pr-1 min-h-0">
             {filteredMessages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full gap-3">
-                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{searchQuery ? '検索結果なし' : 'メッセージがありません'}</p>
-                {!searchQuery && <p className="text-xs" style={{ color: 'var(--text-muted)' }}>「デモデータ挿入」でテストデータを追加できます</p>}
+                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{searchQuery ? '検索結果なし' : 'SPYログがありません'}</p>
+                {!searchQuery && <p className="text-xs" style={{ color: 'var(--text-muted)' }}>SPY対象のキャストが配信中になるとメッセージが表示されます</p>}
               </div>
             ) : filteredMessages.map(msg => <ChatMessage key={msg.id} message={msg} />)}
           </div>
@@ -770,7 +770,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
             <div className="glass-card p-4">
               <h3 className="text-xs font-bold mb-3">💰 トップチッパー</h3>
               {realtimeStats.topTippers.length === 0 ? (
-                <p className="text-[10px] text-center py-2" style={{ color: 'var(--text-muted)' }}>チップなし</p>
+                <p className="text-[10px] text-center py-2" style={{ color: 'var(--text-muted)' }}>まだチップがありません</p>
               ) : (
                 <div className="space-y-2">
                   {realtimeStats.topTippers.map((t, i) => (
@@ -1840,7 +1840,7 @@ function SimpleAnalysisTab() {
         <div className="glass-card p-4">
           <h3 className="text-xs font-bold mb-3">💰 トップ5チッパー</h3>
           {topTippers.length === 0 ? (
-            <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>チップデータなし</p>
+            <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>チップデータがまだありません</p>
           ) : (
             <div className="space-y-2">
               {topTippers.map((t, i) => (
@@ -1861,7 +1861,7 @@ function SimpleAnalysisTab() {
         <div className="glass-card p-4">
           <h3 className="text-xs font-bold mb-3">📨 メッセージ内訳</h3>
           {msgBreakdown.length === 0 ? (
-            <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>データなし</p>
+            <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>メッセージ内訳データがまだありません</p>
           ) : (
             <div className="space-y-2">
               {msgBreakdown.map(b => {
@@ -1890,7 +1890,7 @@ function SimpleAnalysisTab() {
       <div className="glass-card p-4">
         <h3 className="text-xs font-bold mb-3">💸 直近チップタイムライン</h3>
         {tipTimeline.length === 0 ? (
-          <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>チップイベントなし</p>
+          <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>チップイベントがまだありません</p>
         ) : (
           <div className="overflow-auto">
             <table className="w-full text-[11px]">

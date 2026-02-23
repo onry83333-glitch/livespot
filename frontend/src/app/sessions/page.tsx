@@ -825,7 +825,7 @@ export default function SessionsPage() {
                             </div>
                           ))}
                           {topByMessages.length === 0 && (
-                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>データなし</p>
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>メッセージランキングデータがありません</p>
                           )}
                         </div>
                       </div>
@@ -844,7 +844,7 @@ export default function SessionsPage() {
                             </div>
                           ))}
                           {topByCoins.length === 0 && (
-                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>データなし</p>
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>コインランキングデータがありません</p>
                           )}
                         </div>
                       </div>
