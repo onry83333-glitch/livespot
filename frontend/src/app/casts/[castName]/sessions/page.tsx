@@ -236,23 +236,23 @@ export default function SessionListPage() {
   return (
     <div className="min-h-screen bg-mesh">
       <div className="max-w-6xl mx-auto px-4 py-8 space-y-6">
+        {/* ============ Breadcrumb ============ */}
+        <nav className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          <Link href="/casts" className="hover:underline">キャスト</Link>
+          <span>/</span>
+          <Link href={`/casts/${encodeURIComponent(castName)}`} className="hover:underline">{castName}</Link>
+          <span>/</span>
+          <span style={{ color: 'var(--text-secondary)' }}>セッション一覧</span>
+        </nav>
+
         {/* ============ Header ============ */}
         <div className="flex items-center justify-between">
+          <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+            📺 {castName} — 配信セッション一覧
+          </h1>
           <div className="flex items-center gap-3">
-            <Link
-              href={`/casts/${encodeURIComponent(castName)}?tab=sessions`}
-              className="text-xs px-2 py-1 rounded hover:bg-white/5 transition-colors"
-              style={{ color: 'var(--text-muted)' }}
-            >
-              ← キャスト詳細
-            </Link>
-            <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-              📺 {castName} — 配信セッション一覧
-            </h1>
-          </div>
-          <div className="flex items-center gap-3">
-            {/* 配信準備ボタン: 最新終了セッションに ?mode=pre で遷移 */}
-            {sessions.length > 0 && !sessions[0]?.is_active && (
+            {/* 配信準備ボタン: セッションあり→最新終了セッション、なし→DM管理 */}
+            {sessions.length > 0 && !sessions[0]?.is_active ? (
               <button
                 onClick={() => {
                   const latest = sessions[0];
@@ -267,7 +267,19 @@ export default function SessionListPage() {
               >
                 📡 配信準備
               </button>
-            )}
+            ) : !loading && sessions.length === 0 ? (
+              <Link
+                href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:scale-105"
+                style={{
+                  background: 'rgba(245,158,11,0.15)',
+                  border: '1px solid rgba(245,158,11,0.3)',
+                  color: 'rgb(251,191,36)',
+                }}
+              >
+                📡 配信準備（DM管理へ）
+              </Link>
+            ) : null}
             <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
               全 {totalCount} セッション
             </span>

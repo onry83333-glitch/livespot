@@ -310,7 +310,7 @@ export default function SessionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [mode, setMode] = useState<BroadcastMode>(urlMode === 'pre' ? 'pre' : urlMode === 'live' ? 'live' : 'post');
+  const [mode, setMode] = useState<BroadcastMode | null>(urlMode === 'pre' ? 'pre' : urlMode === 'live' ? 'live' : null);
   const [actions, setActions] = useState<SessionActions | null>(null);
   const [actionsLoading, setActionsLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -335,6 +335,7 @@ export default function SessionDetailPage() {
   const [realtimeConnected, setRealtimeConnected] = useState(false);
   const [dmVisitBanners, setDmVisitBanners] = useState<DmVisitBanner[]>([]);
   const [mobileTab, setMobileTab] = useState<'chat' | 'viewers' | 'stats'>('chat');
+  const [messageLimitHit, setMessageLimitHit] = useState(false);
   const [liveRevenueByType, setLiveRevenueByType] = useState<Record<string, number>>({});
   const [liveLoading, setLiveLoading] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
@@ -457,9 +458,12 @@ export default function SessionDetailPage() {
     setMode(endedAt < tenMinAgo ? 'post' : 'live');
   }, [summary, urlMode]);
 
+  // Resolved mode (fallback to 'post' while auto-detecting)
+  const resolvedMode: BroadcastMode = mode ?? 'post';
+
   // Load actions for post AND pre modes
   const loadActions = useCallback(async () => {
-    if (!accountId || mode === 'live') return;
+    if (!accountId || resolvedMode === 'live') return;
     setActionsLoading(true);
     const { data, error: actErr } = await sb.rpc('get_session_actions', {
       p_account_id: accountId,
@@ -473,13 +477,13 @@ export default function SessionDetailPage() {
     const result = Array.isArray(data) ? data[0] : data;
     if (result) setActions(result as SessionActions);
     setActionsLoading(false);
-  }, [accountId, sessionId, mode, sb]);
+  }, [accountId, sessionId, resolvedMode, sb]);
 
   useEffect(() => { loadActions(); }, [loadActions]);
 
   // Load pre-broadcast data (segments + templates)
   useEffect(() => {
-    if (mode !== 'pre' || !accountId) return;
+    if (resolvedMode !== 'pre' || !accountId) return;
     const loadPreData = async () => {
       setPreLoading(true);
       // Load segment counts
@@ -509,7 +513,7 @@ export default function SessionDetailPage() {
       setPreLoading(false);
     };
     loadPreData();
-  }, [mode, accountId, sb]);
+  }, [resolvedMode, accountId, sb]);
 
   // Toast auto-clear
   useEffect(() => {
@@ -520,7 +524,7 @@ export default function SessionDetailPage() {
 
   // Load transcripts for this session (post mode only)
   useEffect(() => {
-    if (!accountId || mode !== 'post') return;
+    if (!accountId || resolvedMode !== 'post') return;
     setTranscriptsLoading(true);
     sb.from('cast_transcripts')
       .select('id, session_id, cast_name, segment_start_seconds, segment_end_seconds, text, language, confidence, source_file, processing_status, error_message, created_at')
@@ -531,7 +535,7 @@ export default function SessionDetailPage() {
         if (!err && data) setTranscripts(data as CastTranscript[]);
         setTranscriptsLoading(false);
       });
-  }, [accountId, sessionId, mode, sb]);
+  }, [accountId, sessionId, resolvedMode, sb]);
 
   // ============================================================
   // LIVE MODE: Data loading + Realtime + Polling
@@ -603,8 +607,27 @@ export default function SessionDetailPage() {
           is_new_payer: msg.tokens > 0,
         }].sort((a, b) => b.lifetime_tokens - a.lifetime_tokens);
       });
+
+      // Async: fetch segment for new viewer from paid_users
+      supabaseRef.current
+        .from('paid_users')
+        .select('segment')
+        .eq('account_id', accountId!)
+        .eq('cast_name', castName)
+        .or(`username.eq.${msg.user_name},user_name.eq.${msg.user_name}`)
+        .limit(1)
+        .single()
+        .then(({ data: puData }) => {
+          if (puData?.segment) {
+            setLiveViewers(prev => prev.map(v =>
+              v.user_name === msg.user_name && v.segment === null
+                ? { ...v, segment: puData.segment }
+                : v
+            ));
+          }
+        });
     }
-  }, []);
+  }, [accountId, castName]);
 
   const loadLiveData = useCallback(async () => {
     if (!accountId || !summary) return;
@@ -622,6 +645,7 @@ export default function SessionDetailPage() {
     if (msgs && msgs.length > 0) {
       setLiveMessages(msgs as LiveMessage[]);
       lastMessageTimeRef.current = msgs[msgs.length - 1].message_time;
+      if (msgs.length >= 500) setMessageLimitHit(true);
 
       let totalTk = 0;
       const typeMap: Record<string, number> = {};
@@ -742,13 +766,13 @@ export default function SessionDetailPage() {
 
   // Effect: Load live data when mode = 'live'
   useEffect(() => {
-    if (mode !== 'live' || !accountId || !summary) return;
+    if (resolvedMode !== 'live' || !accountId || !summary) return;
     loadLiveData();
-  }, [mode, accountId, summary, loadLiveData]);
+  }, [resolvedMode, accountId, summary, loadLiveData]);
 
   // Effect: Realtime subscription
   useEffect(() => {
-    if (mode !== 'live' || !accountId) return;
+    if (resolvedMode !== 'live' || !accountId) return;
     const channel = sb
       .channel(`live-${sessionId}`)
       .on('postgres_changes', {
@@ -763,24 +787,39 @@ export default function SessionDetailPage() {
         setRealtimeConnected(status === 'SUBSCRIBED');
       });
     return () => { sb.removeChannel(channel); };
-  }, [mode, accountId, sessionId, sb, handleNewMessage]);
+  }, [resolvedMode, accountId, sessionId, sb, handleNewMessage]);
 
   // Effect: Polling fallback (10s if Realtime not connected)
   useEffect(() => {
-    if (mode !== 'live' || !accountId || realtimeConnected) return;
+    if (resolvedMode !== 'live' || !accountId || realtimeConnected) return;
     const interval = setInterval(pollNewMessages, 10000);
     return () => clearInterval(interval);
-  }, [mode, accountId, realtimeConnected, pollNewMessages]);
+  }, [resolvedMode, accountId, realtimeConnected, pollNewMessages]);
+
+  // Effect: Auto-transition live→post after 10min inactivity
+  useEffect(() => {
+    if (resolvedMode !== 'live') return;
+    const checkInactivity = () => {
+      const lastTime = lastMessageTimeRef.current;
+      if (!lastTime) return;
+      const elapsed = Date.now() - new Date(lastTime).getTime();
+      if (elapsed > 10 * 60 * 1000) {
+        setMode('post');
+      }
+    };
+    const interval = setInterval(checkInactivity, 30000);
+    return () => clearInterval(interval);
+  }, [resolvedMode]);
 
   // Effect: Elapsed time timer
   useEffect(() => {
-    if (mode !== 'live' || !summary) return;
+    if (resolvedMode !== 'live' || !summary) return;
     const startTime = new Date(summary.started_at).getTime();
     const update = () => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
     update();
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
-  }, [mode, summary]);
+  }, [resolvedMode, summary]);
 
   // Effect: DM visit banner auto-clear (5s)
   useEffect(() => {
@@ -852,24 +891,38 @@ export default function SessionDetailPage() {
 
   return (
     <div className="min-h-screen bg-mesh">
-      <div className={`mx-auto px-4 py-8 space-y-6 ${mode === 'live' ? 'max-w-7xl' : 'max-w-5xl'}`}>
+      <div className={`mx-auto px-4 py-8 space-y-6 ${resolvedMode === 'live' ? 'max-w-7xl' : 'max-w-5xl'}`}>
+        {/* Breadcrumb */}
+        <nav className="flex items-center gap-1.5 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          <Link href="/casts" className="hover:underline">キャスト</Link>
+          <span>/</span>
+          <Link href={`/casts/${encodeURIComponent(castName)}`} className="hover:underline">{castName}</Link>
+          <span>/</span>
+          <Link href={`/casts/${encodeURIComponent(castName)}/sessions`} className="hover:underline">セッション一覧</Link>
+          <span>/</span>
+          <span style={{ color: 'var(--text-secondary)' }}>詳細</span>
+        </nav>
+
         {/* Header */}
         <div className="flex items-center gap-3">
-          <Link
-            href={`/casts/${encodeURIComponent(castName)}/sessions`}
-            className="text-xs px-2 py-1 rounded hover:bg-white/5 transition-colors"
-            style={{ color: 'var(--text-muted)' }}
-          >{`← ${LABELS.backToList}`}</Link>
           <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-            {mode === 'pre' ? `📡 ${LABELS.preBroadcastPrep}` : mode === 'live' ? `🔴 ${LABELS.liveStatus}` : `📺 ${LABELS.sessionDetail}`}
+            {resolvedMode === 'pre' ? `📡 ${LABELS.preBroadcastPrep}` : resolvedMode === 'live' ? `🔴 ${LABELS.liveStatus}` : `📺 ${LABELS.sessionDetail}`}
           </h1>
         </div>
 
+        {/* Mode skeleton while auto-detecting */}
+        {mode === null && !loading && (
+          <div className="glass-card p-6 text-center animate-pulse">
+            <div className="h-4 bg-white/5 rounded w-1/4 mx-auto mb-2" />
+            <div className="h-3 bg-white/5 rounded w-1/2 mx-auto" />
+          </div>
+        )}
+
         {/* Mode Tabs */}
-        {summary && (
+        {summary && mode !== null && (
           <div className="flex gap-1">
             {(['pre', 'live', 'post'] as BroadcastMode[]).map(m => {
-              const isActive = mode === m;
+              const isActive = resolvedMode === m;
               const isLive = m === 'live';
               const colors = modeColors[m];
               return (
@@ -904,7 +957,7 @@ export default function SessionDetailPage() {
             {/* ============================================================
                PRE-BROADCAST MODE
                ============================================================ */}
-            {mode === 'pre' && (
+            {resolvedMode === 'pre' && (
               <>
                 {/* Summary Bar */}
                 <div className="rounded-xl p-5 border-2" style={{ borderColor: 'rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.05)' }}>
@@ -1061,7 +1114,7 @@ export default function SessionDetailPage() {
             {/* ============================================================
                LIVE MODE
                ============================================================ */}
-            {mode === 'live' && (
+            {resolvedMode === 'live' && (
               <>
                 {/* Live Status Bar */}
                 <div className="rounded-xl p-4 border-2" style={{ borderColor: 'rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.08)' }}>
@@ -1130,7 +1183,7 @@ export default function SessionDetailPage() {
                     {/* 3-Column Layout */}
                     <div className="grid grid-cols-1 lg:grid-cols-[250px_1fr_280px] gap-4" style={{ minHeight: '500px' }}>
                       {/* === Left: Viewer Panel === */}
-                      <div className={`glass-card p-4 overflow-y-auto ${mobileTab !== 'viewers' ? 'hidden lg:block' : ''}`} style={{ maxHeight: '600px' }}>
+                      <div className={`glass-card p-4 overflow-y-auto ${mobileTab !== 'viewers' ? 'hidden lg:block' : ''}`} style={{ maxHeight: 'calc(100vh - 300px)', minHeight: '400px' }}>
                         <h3 className="text-xs font-bold mb-3 sticky top-0 pb-2" style={{ color: 'rgb(248,113,113)', background: 'inherit' }}>
                           {`👥 ${LABELS.viewerPanel} (${liveViewers.length}${LABELS.personSuffix})`}
                         </h3>
@@ -1165,10 +1218,15 @@ export default function SessionDetailPage() {
                       </div>
 
                       {/* === Center: Chat Feed === */}
-                      <div className={`glass-card flex flex-col ${mobileTab !== 'chat' ? 'hidden lg:flex' : ''}`} style={{ maxHeight: '600px' }}>
+                      <div className={`glass-card flex flex-col ${mobileTab !== 'chat' ? 'hidden lg:flex' : ''}`} style={{ maxHeight: 'calc(100vh - 300px)', minHeight: '400px' }}>
                         <h3 className="text-xs font-bold px-4 pt-4 pb-2" style={{ color: 'rgb(248,113,113)' }}>
                           {`💬 ${LABELS.chatFeed} (${liveMessages.length})`}
                         </h3>
+                        {messageLimitHit && (
+                          <div className="mx-4 mb-2 px-3 py-1.5 rounded-lg text-[10px]" style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)', color: 'rgb(251,191,36)' }}>
+                            ⚠ 初期表示は直近500件のみ。以降のメッセージはリアルタイムで追加されます。
+                          </div>
+                        )}
                         <div
                           ref={chatContainerRef}
                           onScroll={handleChatScroll}
@@ -1211,7 +1269,7 @@ export default function SessionDetailPage() {
                       </div>
 
                       {/* === Right: Stats Panel === */}
-                      <div className={`glass-card p-4 overflow-y-auto ${mobileTab !== 'stats' ? 'hidden lg:block' : ''}`} style={{ maxHeight: '600px' }}>
+                      <div className={`glass-card p-4 overflow-y-auto ${mobileTab !== 'stats' ? 'hidden lg:block' : ''}`} style={{ maxHeight: 'calc(100vh - 300px)', minHeight: '400px' }}>
                         <h3 className="text-xs font-bold mb-4" style={{ color: 'rgb(248,113,113)' }}>
                           {`📊 ${LABELS.statsPanel}`}
                         </h3>
@@ -1292,7 +1350,7 @@ export default function SessionDetailPage() {
             {/* ============================================================
                POST-BROADCAST MODE
                ============================================================ */}
-            {mode === 'post' && (
+            {resolvedMode === 'post' && (
               <>
                 {/* Session Info */}
                 <div className="glass-card p-5">
@@ -1407,7 +1465,7 @@ export default function SessionDetailPage() {
                 )}
 
                 {/* Post-broadcast actions */}
-                {mode === 'post' && (
+                {resolvedMode === 'post' && (
                   <>
                     {actionsLoading ? (
                       <div className="glass-card p-8 text-center">
@@ -1505,12 +1563,32 @@ export default function SessionDetailPage() {
                           {actions.visited_no_action.length === 0 ? (
                             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
                           ) : (
-                            <div className="flex flex-wrap gap-2">
-                              {groupBySegmentRange(actions.visited_no_action).map(g => (
-                                <span key={g.label} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)' }}>
-                                  {g.label}: <span className="font-bold" style={{ color: 'rgb(250,204,21)' }}>{g.count}{LABELS.personSuffix}</span>
-                                </span>
-                              ))}
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap gap-2">
+                                {groupBySegmentRange(actions.visited_no_action).map(g => (
+                                  <span key={g.label} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)' }}>
+                                    {g.label}: <span className="font-bold" style={{ color: 'rgb(250,204,21)' }}>{g.count}{LABELS.personSuffix}</span>
+                                  </span>
+                                ))}
+                              </div>
+                              <details className="mt-2">
+                                <summary className="text-[10px] cursor-pointer select-none" style={{ color: 'var(--text-muted)' }}>
+                                  {`ユーザー一覧を表示 (${actions.visited_no_action.length}${LABELS.personSuffix})`}
+                                </summary>
+                                <div className="mt-2 space-y-1 max-h-60 overflow-y-auto">
+                                  {actions.visited_no_action.map(u => (
+                                    <div key={u.user_name} className="flex items-center gap-2 px-3 py-1 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{u.segment}</span>
+                                      <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-[11px] font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
+                                      <Link
+                                        href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
+                                        className="text-[10px] px-1.5 py-0.5 rounded ml-auto hover:opacity-80 transition-opacity"
+                                        style={{ background: 'rgba(56,189,248,0.15)', color: 'var(--accent-primary)' }}
+                                      >{'💬 DM'}</Link>
+                                    </div>
+                                  ))}
+                                </div>
+                              </details>
                             </div>
                           )}
                         </div>
