@@ -366,7 +366,7 @@ export default function SessionDetailPage() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
                   { label: LABELS.sales, value: formatTokens(summary.total_tokens), sub: tokensToJPY(summary.total_tokens, COIN_RATE), color: 'var(--accent-amber)' },
-                  { label: LABELS.tipCount, value: `${summary.tip_count}`, sub: `${formatTokens(summary.total_tokens)} tk`, color: 'var(--accent-primary)' },
+                  { label: LABELS.tipCount, value: `${summary.tip_count}`, sub: `${summary.tip_count > 0 ? `${Math.round(summary.total_tokens / summary.tip_count)} tk/tip` : ''}`, color: 'var(--accent-primary)' },
                   { label: LABELS.users, value: `${summary.unique_users}`, sub: '', color: 'var(--accent-purple)' },
                   { label: LABELS.messages, value: `${summary.msg_count}`, sub: '', color: 'var(--text-primary)' },
                 ].map(kpi => (
@@ -384,10 +384,12 @@ export default function SessionDetailPage() {
               <div className="glass-card p-5">
                 <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`💰 ${LABELS.salesBreakdown}`}</h3>
                 <div className="space-y-2">
-                  {Object.entries(summary.tokens_by_type)
+                  {(() => {
+                    const typeTotal = Object.values(summary.tokens_by_type).reduce((s, v) => s + v, 0);
+                    return Object.entries(summary.tokens_by_type)
                     .sort(([, a], [, b]) => b - a)
                     .map(([type, tokens]) => {
-                      const pct = summary.total_tokens > 0 ? Math.round(tokens / summary.total_tokens * 100) : 0;
+                      const pct = typeTotal > 0 ? Math.round(tokens / typeTotal * 100) : 0;
                       return (
                         <div key={type} className="flex items-center gap-3">
                           <span className="text-xs w-24 text-right" style={{ color: 'var(--text-secondary)' }}>{type}</span>
@@ -398,7 +400,8 @@ export default function SessionDetailPage() {
                           <span className="text-[10px] min-w-[40px] text-right" style={{ color: 'var(--text-muted)' }}>{pct}%</span>
                         </div>
                       );
-                    })}
+                    });
+                  })()}
                 </div>
               </div>
             )}
