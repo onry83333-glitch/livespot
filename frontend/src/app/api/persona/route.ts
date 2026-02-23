@@ -9,30 +9,171 @@ const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 // Types
 // ============================================================
 type TaskType = 'dm_generate' | 'fb_report' | 'dm_evaluate' | 'realtime_coach' | 'recruitment_copy' | 'training_task';
-type Mode = 'customer' | 'recruitment';
 
-interface PersonaRow {
+interface CastPersona {
   id: string;
   account_id: string;
   cast_name: string;
-  character_type: string;
-  speaking_style: {
-    suffix: string[];
-    emoji_rate: 'low' | 'medium' | 'high';
-    formality: 'casual' | 'casual_polite' | 'polite';
-    max_length: number;
-  };
-  personality_traits: string[];
-  ng_behaviors: string[];
-  greeting_patterns: Record<string, string>;
-  dm_tone_examples: Record<string, string>;
+  display_name: string | null;
+  personality: string | null;
+  speaking_style: string | null;
+  emoji_style: string | null;
+  taboo_topics: string | null;
+  greeting_patterns: string[];
+  dm_tone: string;
+  byaf_style: string | null;
+  system_prompt_base: string | null;
+  system_prompt_cast: string | null;
+  system_prompt_context: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-interface RequestBody {
+interface DmGenerateBody {
+  cast_name: string;
+  account_id: string;
+  target_username: string;
+  segment?: string;
+  context?: string;
+  template_type: 'thank' | 'follow' | 'pre_broadcast' | 'vip' | 'churn';
+}
+
+interface AiGenerateBody {
   task_type: TaskType;
-  mode?: Mode;
   cast_name: string;
   context: Record<string, unknown>;
+}
+
+// ============================================================
+// Supabase helper — 認証トークン付きクライアント
+// ============================================================
+function getAuthClient(token: string) {
+  return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
+}
+
+async function verifyAuth(req: NextRequest): Promise<{ token: string } | NextResponse> {
+  const authHeader = req.headers.get('authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
+  }
+  const token = authHeader.slice(7);
+  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
+  });
+  if (!userRes.ok) {
+    return NextResponse.json({ error: '認証トークンが無効です' }, { status: 401 });
+  }
+  return { token };
+}
+
+// ============================================================
+// GET /api/persona?cast_name=xxx&account_id=yyy
+// ペルソナ取得
+// ============================================================
+export async function GET(req: NextRequest) {
+  const auth = await verifyAuth(req);
+  if (auth instanceof NextResponse) return auth;
+
+  const { searchParams } = new URL(req.url);
+  const castName = searchParams.get('cast_name');
+  const accountId = searchParams.get('account_id');
+
+  if (!castName || !accountId) {
+    return NextResponse.json({ error: 'cast_name と account_id は必須です' }, { status: 400 });
+  }
+
+  const sb = getAuthClient(auth.token);
+  const { data, error } = await sb
+    .from('cast_personas')
+    .select('*')
+    .eq('account_id', accountId)
+    .eq('cast_name', castName)
+    .single();
+
+  if (error && error.code !== 'PGRST116') {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ persona: data || null });
+}
+
+// ============================================================
+// PUT /api/persona — ペルソナ更新（upsert）
+// ============================================================
+export async function PUT(req: NextRequest) {
+  const auth = await verifyAuth(req);
+  if (auth instanceof NextResponse) return auth;
+
+  const body = await req.json();
+  const { account_id, cast_name, ...fields } = body;
+
+  if (!account_id || !cast_name) {
+    return NextResponse.json({ error: 'account_id と cast_name は必須です' }, { status: 400 });
+  }
+
+  const sb = getAuthClient(auth.token);
+  const { data, error } = await sb
+    .from('cast_personas')
+    .upsert({
+      account_id,
+      cast_name,
+      ...fields,
+    }, { onConflict: 'account_id,cast_name' })
+    .select()
+    .single();
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  return NextResponse.json({ persona: data });
+}
+
+// ============================================================
+// Phase 1 テンプレートベースDM文面生成
+// ============================================================
+const DM_TEMPLATES: Record<string, string[]> = {
+  thank: [
+    '{user_name}さん💕 今日は来てくれてありがとう！すっごく嬉しかった！ {byaf}',
+    '{user_name}さん！ チップありがとう😊 {user_name}さんがいると楽しい！ {byaf}',
+    '{user_name}さん✨ 今日も会えて嬉しかった！ありがとうね！ {byaf}',
+  ],
+  follow: [
+    '{user_name}さん、最近会えてないね😢 元気にしてる？ {byaf}',
+    '{user_name}さん！ 久しぶり〜！また遊びに来てね😊 {byaf}',
+  ],
+  pre_broadcast: [
+    '{user_name}さん！ 今日配信するよ〜！楽しみにしててね✨ {byaf}',
+    '{user_name}さん💕 今日も配信するから遊びに来てね！ {byaf}',
+  ],
+  vip: [
+    '{user_name}さん💎 いつも本当にありがとう！{user_name}さんのおかげで頑張れてるよ！ {byaf}',
+    '{user_name}さん✨ いつも応援してくれて感謝してます！特別な存在だよ💕 {byaf}',
+  ],
+  churn: [
+    '{user_name}さん、元気にしてる？最近見かけないから気になってたの😢 {byaf}',
+    '{user_name}さん！ 久しぶり〜！たまには顔見せてね😊 {byaf}',
+  ],
+};
+
+function generateDmFromTemplate(
+  persona: CastPersona | null,
+  templateType: string,
+  targetUsername: string,
+): { message: string; persona_used: string | null } {
+  const templates = DM_TEMPLATES[templateType] || DM_TEMPLATES.thank;
+  const idx = Math.floor(Math.random() * templates.length);
+  let message = templates[idx];
+
+  const byaf = persona?.byaf_style || 'もちろん無理しないでね！';
+  const displayName = persona?.display_name || null;
+
+  message = message.replace(/\{user_name\}/g, targetUsername);
+  message = message.replace(/\{byaf\}/g, byaf);
+
+  return { message, persona_used: displayName };
 }
 
 // ============================================================
@@ -68,34 +209,33 @@ const LAYER_A_ANDO_FOUNDATION = `あなたはライブ配信プラットフォ�
 - ×「ファン」 → ○「○○さん」（名前呼び）`;
 
 // ============================================================
-// Layer B — キャスト人格定義（動的生成）
+// Layer B — キャスト人格定義（cast_personas テーブルから動的生成）
 // ============================================================
-function buildLayerB(persona: PersonaRow): string {
-  const ngList = persona.ng_behaviors.map(b => `- ${b}`).join('\n');
-  const toneExamples = Object.entries(persona.dm_tone_examples)
-    .map(([key, val]) => `${key}: ${val}`)
-    .join('\n');
+function buildLayerB(persona: CastPersona): string {
+  const parts = [
+    `=== あなたのキャラクター ===`,
+    `キャスト名: ${persona.display_name || persona.cast_name}`,
+  ];
 
-  return `=== あなたのキャラクター ===
-キャスト名: ${persona.cast_name}
-タイプ: ${persona.character_type}
-性格: ${persona.personality_traits.join('、')}
-口調の語尾: ${persona.speaking_style.suffix.join('、')}
-絵文字使用率: ${persona.speaking_style.emoji_rate}
-敬語レベル: ${persona.speaking_style.formality}
+  if (persona.personality) parts.push(`性格: ${persona.personality}`);
+  if (persona.speaking_style) parts.push(`口調: ${persona.speaking_style}`);
+  if (persona.emoji_style) parts.push(`絵文字: ${persona.emoji_style}`);
+  if (persona.dm_tone) parts.push(`DMトーン: ${persona.dm_tone}`);
+  if (persona.byaf_style) parts.push(`BYAF: ${persona.byaf_style}`);
+  if (persona.taboo_topics) parts.push(`\n禁止話題:\n${persona.taboo_topics}`);
 
-絶対にしないこと:
-${ngList}
+  // L2: キャスト固有プロンプト
+  if (persona.system_prompt_cast) {
+    parts.push(`\n=== キャスト固有ルール ===\n${persona.system_prompt_cast}`);
+  }
 
-トーンのお手本:
-${toneExamples}
+  parts.push(`\n↓ このキャラクターとして生成してください。「このキャストが書きそうな文章」になっていることが最も重要。`);
 
-↓ このキャラクターとして生成してください。
-「このキャストが書きそうな文章」になっていることが最も重要。`;
+  return parts.join('\n');
 }
 
 // ============================================================
-// Layer C — タスク固有ルール（全パターン定義）
+// Layer C — タスク固有ルール
 // ============================================================
 const LAYER_C_RULES: Record<TaskType, string> = {
   dm_generate: `=== DM生成ルール ===
@@ -110,13 +250,6 @@ const LAYER_C_RULES: Record<TaskType, string> = {
   S4-S6(常連)=居場所感・安心感
   S7-S8(中堅)=軽い誘い
   S9-S10(ライト/単発)=軽く短く
-- シナリオ別目的:
-  thankyou_vip=言質取り（「また来てくれる？」）
-  thankyou_regular=行動再定義（「応援してくれて嬉しい」）
-  thankyou_first=短く嬉しさだけ
-  churn_recovery_14d=軽いノリで
-  churn_recovery_30d=企画・イベント告知を添える
-  churn_recovery_60d=最終DM、淡白に
 - 必ず以下のJSON形式で出力:
 {"message": "...", "reasoning": "..."}`,
 
@@ -127,8 +260,7 @@ const LAYER_C_RULES: Record<TaskType, string> = {
   3. 改善点（3つ、具体的なアクション付き）
   4. 次回アクション（優先度順に3つ）
 - 数値根拠必須。「良かった」ではなく「チップ率30%増」。
-- キャストのキャラで書く（設定された口調で「お疲れ様〜！」から始まる）。
-- 過去セッションとの比較があれば必ず言及。
+- キャストのキャラで書く。
 - JSON形式で出力:
 {"evaluation": "A", "good_points": [...], "improvements": [...], "next_actions": [...], "summary": "..."}`,
 
@@ -136,36 +268,24 @@ const LAYER_C_RULES: Record<TaskType, string> = {
 - DM文面を評価してスコア0-100で採点。
 - 評価軸: BYAF有無/キャラ一致度/文字数/個別感/セグメント適合度
 - 改善案3つを具体的に提示。
-- ペルソナ反応シミュレーション:
-  S2(VIP準現役)がどう感じるか
-  S5(常連離脱危機)がどう感じるか
-  S9(ライト)がどう感じるか
 - JSON形式で出力:
-{"score": 85, "breakdown": {...}, "improvements": [...], "simulations": {"S2": "...", "S5": "...", "S9": "..."}}`,
+{"score": 85, "breakdown": {...}, "improvements": [...]}`,
 
   realtime_coach: `=== リアルタイムコーチルール ===
 - 短文3行以内。即座に使える具体的アクション。
-- 「今○○の話題が盛り上がってるから、ここでギフト誘導」のように具体的に。
 - 数字やユーザー名を必ず含める。
 - JSON形式で出力:
 {"action": "...", "reasoning": "...", "urgency": "high|medium|low"}`,
 
   recruitment_copy: `=== 採用コピー生成ルール ===
-- Princess Marketing Realism 4Step準拠:
-  Step1: 「私だけは分かってるよ」（共感）
-  Step2: 「でもこのままだと…」（問題提起、恐怖禁止）
-  Step3: 「こういう場所があるよ」（オンリーワン訴求）
-  Step4: 「まずは話だけ聞いてみない？」（軽いCTA）
+- Princess Marketing Realism 4Step準拠
 - 主語は「あなた」。
 - 禁止: 「チャットレディ」「アダルト」「風俗」「恐怖訴求」「簡単に稼げる」
-- ペルソナ3人の反応シミュレーション付き。
 - JSON形式で出力:
-{"copy": "...", "step_breakdown": {...}, "simulations": [...]}`,
+{"copy": "...", "step_breakdown": {...}}`,
 
   training_task: `=== 育成タスク生成ルール ===
 - 具体的で3つ。測定可能。
-- 例: 「チップ時のお礼を『名前+具体行動』にする練習を3回」
-- 各タスクに成功基準と期限を設定。
 - JSON形式で出力:
 {"tasks": [{"task": "...", "success_criteria": "...", "deadline": "..."}]}`,
 };
@@ -173,29 +293,59 @@ const LAYER_C_RULES: Record<TaskType, string> = {
 // ============================================================
 // デフォルトペルソナ（テーブルに未登録の場合）
 // ============================================================
-const DEFAULT_PERSONA: PersonaRow = {
+const DEFAULT_PERSONA: CastPersona = {
   id: '',
   account_id: '',
   cast_name: 'default',
-  character_type: '甘え系',
-  speaking_style: { suffix: ['〜', 'よ', 'ね'], emoji_rate: 'medium', formality: 'casual_polite', max_length: 120 },
-  personality_traits: ['聞き上手'],
-  ng_behaviors: ['他キャストの悪口', 'お金の話を直接する'],
-  greeting_patterns: { first_time: 'はじめまして！', regular: 'おかえり〜', vip: '○○さん待ってた！' },
-  dm_tone_examples: { thankyou: '今日はありがとう〜', churn: '最近見かけないけど元気？' },
+  display_name: null,
+  personality: '聞き上手で優しい',
+  speaking_style: '〜だよ！〜かな？',
+  emoji_style: '適度に使用',
+  taboo_topics: null,
+  greeting_patterns: [],
+  dm_tone: 'friendly',
+  byaf_style: 'もちろん無理しないでね！',
+  system_prompt_base: null,
+  system_prompt_cast: null,
+  system_prompt_context: null,
+  created_at: '',
+  updated_at: '',
 };
 
 // ============================================================
-// User Promptビルダー（task_type別）
+// セグメント判定
+// ============================================================
+function getSegmentLabel(totalCoins: number, lastSeen: string | null): string {
+  const daysSince = lastSeen
+    ? Math.floor((Date.now() - new Date(lastSeen).getTime()) / 86400000)
+    : 999;
+  if (totalCoins >= 5000) {
+    if (daysSince <= 7) return 'S1:VIP現役';
+    if (daysSince <= 90) return 'S2:VIP準現役';
+    return 'S3:VIP休眠';
+  }
+  if (totalCoins >= 1000) {
+    if (daysSince <= 7) return 'S4:常連現役';
+    if (daysSince <= 90) return 'S5:常連離脱危機';
+    return 'S6:常連休眠';
+  }
+  if (totalCoins >= 300) {
+    if (daysSince <= 30) return 'S7:中堅現役';
+    return 'S8:中堅休眠';
+  }
+  if (totalCoins >= 50) return 'S9:ライト';
+  return 'S10:単発';
+}
+
+// ============================================================
+// User Prompt ビルダー
 // ============================================================
 async function buildUserPrompt(
   taskType: TaskType,
   context: Record<string, unknown>,
   token: string,
 ): Promise<string> {
-  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-  });
+  const supabase = getAuthClient(token);
 
   switch (taskType) {
     case 'dm_generate': {
@@ -204,7 +354,6 @@ async function buildUserPrompt(
       const scenarioType = context.scenario_type as string || 'thankyou_regular';
       const stepNumber = context.step_number as number || 1;
 
-      // spy_messages 直近10件
       const { data: spyMsgs } = await supabase
         .from('spy_messages')
         .select('message, message_time, msg_type, tokens')
@@ -213,7 +362,6 @@ async function buildUserPrompt(
         .order('message_time', { ascending: false })
         .limit(10);
 
-      // coin_transactions サマリー
       const { data: coinTx } = await supabase
         .from('coin_transactions')
         .select('tokens, type, date')
@@ -226,7 +374,6 @@ async function buildUserPrompt(
       const avgCoins = coinTx && coinTx.length > 0 ? Math.round(totalCoins / coinTx.length) : 0;
       const lastTxDate = coinTx?.[0]?.date || '不明';
 
-      // paid_users からセグメント
       const { data: paidUser } = await supabase
         .from('paid_users')
         .select('total_coins, last_seen')
@@ -237,7 +384,6 @@ async function buildUserPrompt(
         ? getSegmentLabel(paidUser.total_coins, paidUser.last_seen)
         : 'S10:単発';
 
-      // 前回DM（成功したもの最大3件）
       const { data: lastDms } = await supabase
         .from('dm_send_log')
         .select('message, sent_at, template_name')
@@ -247,16 +393,6 @@ async function buildUserPrompt(
         .order('sent_at', { ascending: false })
         .limit(3);
 
-      // シナリオエンロールメント状態
-      const { data: enrollment } = await supabase
-        .from('dm_scenario_enrollments')
-        .select('scenario_id, current_step, status, enrolled_at, metadata')
-        .eq('username', userName)
-        .eq('status', 'active')
-        .order('enrolled_at', { ascending: false })
-        .limit(1)
-        .single();
-
       const spyLog = spyMsgs?.map(m =>
         `[${m.message_time?.slice(11, 16) || '??:??'}] ${m.msg_type}: ${m.message || ''} ${m.tokens ? `(${m.tokens}tk)` : ''}`
       ).join('\n') || 'なし';
@@ -265,15 +401,10 @@ async function buildUserPrompt(
         `- ${d.message || '?'} (${d.sent_at?.slice(0, 10) || '?'}, ${d.template_name || ''})`
       ).join('\n') || 'なし';
 
-      const enrollmentInfo = enrollment
-        ? `ステータス: ${enrollment.status}, Step${enrollment.current_step}, 登録: ${enrollment.enrolled_at?.slice(0, 10) || '?'}`
-        : 'なし';
-
       return `ユーザー名: ${userName}
 セグメント: ${segment}
 累計コイン: ${totalCoins}tk / 平均: ${avgCoins}tk / 最終: ${lastTxDate}
 シナリオ: ${scenarioType} (Step ${stepNumber})
-エンロールメント: ${enrollmentInfo}
 
 前回DM履歴（直近3件）:
 ${lastDmLog}
@@ -288,14 +419,6 @@ ${spyLog}
 
     case 'fb_report': {
       const sessionId = context.session_id as string;
-
-      const { data: session } = await supabase
-        .from('sessions')
-        .select('*')
-        .eq('session_id', sessionId)
-        .single();
-
-      if (!session) return 'セッションが見つかりません。';
 
       const { data: messages } = await supabase
         .from('spy_messages')
@@ -319,12 +442,6 @@ ${spyLog}
         .map(([name, coins], i) => `${i + 1}. ${name}: ${coins}tk`)
         .join('\n');
 
-      const endedAt = session.ended_at || msgs[msgs.length - 1]?.message_time || new Date().toISOString();
-      const durationMin = Math.max(1, Math.round(
-        (new Date(endedAt).getTime() - new Date(session.started_at).getTime()) / 60000
-      ));
-
-      // チャットサンプル（先頭20 + 末尾20）
       const chatMsgs = msgs.filter(m => m.msg_type === 'chat');
       const chatSample = [
         ...chatMsgs.slice(0, 20),
@@ -334,8 +451,6 @@ ${spyLog}
       ).join('\n');
 
       return `配信データ:
-キャスト: ${session.title}
-配信時間: ${durationMin}分
 メッセージ数: ${msgs.length}
 チップ合計: ${totalTokens}tk
 ユニーク発言者: ${uniqueUsers}名
@@ -352,31 +467,6 @@ ${chatSample || 'なし'}
     default:
       return JSON.stringify(context);
   }
-}
-
-// ============================================================
-// セグメント判定（ai-report と同じロジック）
-// ============================================================
-function getSegmentLabel(totalCoins: number, lastSeen: string | null): string {
-  const daysSince = lastSeen
-    ? Math.floor((Date.now() - new Date(lastSeen).getTime()) / 86400000)
-    : 999;
-  if (totalCoins >= 5000) {
-    if (daysSince <= 7) return 'S1:VIP現役';
-    if (daysSince <= 90) return 'S2:VIP準現役';
-    return 'S3:VIP休眠';
-  }
-  if (totalCoins >= 1000) {
-    if (daysSince <= 7) return 'S4:常連現役';
-    if (daysSince <= 90) return 'S5:常連離脱危機';
-    return 'S6:常連休眠';
-  }
-  if (totalCoins >= 300) {
-    if (daysSince <= 30) return 'S7:中堅現役';
-    return 'S8:中堅休眠';
-  }
-  if (totalCoins >= 50) return 'S9:ライト';
-  return 'S10:単発';
 }
 
 // ============================================================
@@ -404,7 +494,7 @@ async function callClaude(systemPrompt: string, userPrompt: string, maxTokens = 
       throw Object.assign(new Error('APIキーが無効です'), { statusCode: 502 });
     }
     if (apiRes.status === 429) {
-      throw Object.assign(new Error('レート制限中です。しばらく待ってから再試行してください'), { statusCode: 429 });
+      throw Object.assign(new Error('レート制限中です'), { statusCode: 429 });
     }
     throw Object.assign(
       new Error((errBody as Record<string, unknown>).error as string || `Claude API error: ${apiRes.status}`),
@@ -425,96 +515,98 @@ async function callClaude(systemPrompt: string, userPrompt: string, maxTokens = 
 
 // ============================================================
 // POST /api/persona
+// mode=generate → Phase 1テンプレート文面生成
+// mode=ai       → Phase 2 Claude API文面生成
+// (後方互換) task_type指定 → Phase 2
 // ============================================================
 export async function POST(req: NextRequest) {
-  // 1. 認証チェック
-  const authHeader = req.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
-  }
-  const token = authHeader.slice(7);
+  const auth = await verifyAuth(req);
+  if (auth instanceof NextResponse) return auth;
 
-  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: {
-      apikey: SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  if (!userRes.ok) {
-    return NextResponse.json({ error: '認証トークンが無効です' }, { status: 401 });
+  const body = await req.json();
+  const mode = body.mode as string || (body.task_type ? 'ai' : 'generate');
+
+  // ── Phase 1: テンプレートベースDM生成 ──
+  if (mode === 'generate') {
+    const { cast_name, account_id, target_username, template_type } = body as DmGenerateBody;
+    if (!cast_name || !account_id || !target_username) {
+      return NextResponse.json({ error: 'cast_name, account_id, target_username は必須です' }, { status: 400 });
+    }
+
+    const sb = getAuthClient(auth.token);
+    const { data: persona } = await sb
+      .from('cast_personas')
+      .select('*')
+      .eq('account_id', account_id)
+      .eq('cast_name', cast_name)
+      .single();
+
+    const result = generateDmFromTemplate(
+      persona as CastPersona | null,
+      template_type || 'thank',
+      target_username,
+    );
+
+    return NextResponse.json(result);
   }
 
-  if (!ANTHROPIC_API_KEY) {
-    return NextResponse.json({ error: 'ANTHROPIC_API_KEY が未設定です' }, { status: 500 });
-  }
-
-  // 2. リクエストボディ
-  const body = (await req.json()) as RequestBody;
-  const { task_type, cast_name, context } = body;
+  // ── Phase 2: Claude API生成 ──
+  const { task_type, cast_name, context } = body as AiGenerateBody;
 
   if (!task_type || !cast_name) {
     return NextResponse.json({ error: 'task_type と cast_name は必須です' }, { status: 400 });
   }
-
   if (!LAYER_C_RULES[task_type]) {
     return NextResponse.json({ error: `未対応のtask_type: ${task_type}` }, { status: 400 });
   }
+  if (!ANTHROPIC_API_KEY) {
+    return NextResponse.json({ error: 'ANTHROPIC_API_KEY が未設定です' }, { status: 500 });
+  }
 
   try {
-    // 3. cast_persona テーブルからペルソナ取得
-    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-    });
-
-    const { data: persona } = await supabase
-      .from('cast_persona')
+    const sb = getAuthClient(auth.token);
+    const { data: persona } = await sb
+      .from('cast_personas')
       .select('*')
       .eq('cast_name', cast_name)
       .single();
 
-    const activePersona: PersonaRow = persona
-      ? (persona as PersonaRow)
+    const activePersona: CastPersona = persona
+      ? (persona as CastPersona)
       : { ...DEFAULT_PERSONA, cast_name };
 
-    // 4. System Prompt 組み立て = Layer A + Layer B + Layer C
+    // System Prompt = L1(base) + Layer A + Layer B + Layer C
+    const l1 = activePersona.system_prompt_base || LAYER_A_ANDO_FOUNDATION;
     const systemPrompt = [
-      LAYER_A_ANDO_FOUNDATION,
+      l1,
       '',
       buildLayerB(activePersona),
       '',
+      // L3: 動的コンテキスト（設定されていれば追加）
+      activePersona.system_prompt_context ? `=== 直近コンテキスト ===\n${activePersona.system_prompt_context}` : '',
+      '',
       LAYER_C_RULES[task_type],
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 
-    // 5. User Prompt 組み立て
-    const userPrompt = await buildUserPrompt(task_type, { ...context, cast_name }, token);
+    const userPrompt = await buildUserPrompt(task_type, { ...context, cast_name }, auth.token);
 
-    // 6. Claude API 呼び出し
     const maxTokens = task_type === 'dm_generate' || task_type === 'realtime_coach' ? 500 : 1000;
     const result = await callClaude(systemPrompt, userPrompt, maxTokens);
 
-    // 7. JSON パース試行
     let parsed: unknown = null;
     try {
       const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
-      }
-    } catch {
-      // JSONパース失敗 — テキストをそのまま返す
-    }
+      if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+    } catch { /* ignore */ }
 
     return NextResponse.json({
       output: parsed || result.text,
       raw_text: result.text,
       reasoning: parsed && typeof parsed === 'object' && 'reasoning' in parsed
-        ? (parsed as Record<string, unknown>).reasoning
-        : null,
-      confidence: parsed && typeof parsed === 'object' && 'score' in parsed
-        ? (parsed as Record<string, unknown>).score
-        : null,
+        ? (parsed as Record<string, unknown>).reasoning : null,
       cost_tokens: result.tokensUsed,
       cost_usd: result.costUsd,
-      persona_used: activePersona.cast_name,
+      persona_used: activePersona.display_name || activePersona.cast_name,
       persona_found: !!persona,
     });
   } catch (e: unknown) {

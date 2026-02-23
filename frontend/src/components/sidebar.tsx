@@ -50,6 +50,7 @@ const castTabs = [
   { tab: 'analytics', icon: '📈', label: '分析' },
   { tab: 'sales',     icon: '💰', label: '売上' },
   { tab: 'realtime',  icon: '👁', label: 'リアルタイム' },
+  { tab: 'persona',   icon: '🎭', label: 'ペルソナ' },
 ];
 
 const spyTabs = [

@@ -15,7 +15,7 @@ import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 /* ============================================================
    Types
    ============================================================ */
-type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots';
+type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots' | 'persona';
 
 interface CastStatsData {
   total_messages: number;
@@ -193,6 +193,23 @@ interface PopAlert {
   timestamp: number;
 }
 
+interface PersonaData {
+  id?: string;
+  account_id: string;
+  cast_name: string;
+  display_name: string | null;
+  personality: string | null;
+  speaking_style: string | null;
+  emoji_style: string | null;
+  taboo_topics: string | null;
+  greeting_patterns: string[];
+  dm_tone: string;
+  byaf_style: string | null;
+  system_prompt_base: string | null;
+  system_prompt_cast: string | null;
+  system_prompt_context: string | null;
+}
+
 const ALERT_RULE_LABELS: Record<string, { icon: string; label: string; defaultThreshold: number }> = {
   high_tip: { icon: '💎', label: '高額チップ', defaultThreshold: 100 },
   vip_enter: { icon: '👑', label: 'VIP入室', defaultThreshold: 0 },
@@ -210,6 +227,7 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'sales',     icon: '💰', label: '売上' },
   { key: 'realtime',  icon: '👁', label: 'リアルタイム' },
   { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
+  { key: 'persona',     icon: '🎭', label: 'ペルソナ' },
 ];
 
 /* ============================================================
@@ -300,7 +318,28 @@ function CastDetailInner() {
   const [dmUserHistoryLoading, setDmUserHistoryLoading] = useState(false);
 
   // DM Section toggle (A/B/C/D)
-  const [dmSection, setDmSection] = useState<'users' | 'send' | 'campaigns'>('users');
+  const [dmSection, setDmSection] = useState<'users' | 'send' | 'campaigns' | 'scenarios'>('users');
+
+  // Scenario state
+  interface ScenarioItem {
+    id: string;
+    scenario_name: string;
+    trigger_type: string;
+    trigger_config: Record<string, unknown>;
+    segment_targets: string[];
+    steps: { step: number; delay_hours: number; template: string; message: string; goal?: string }[];
+    is_active: boolean;
+    auto_approve_step0: boolean;
+    daily_send_limit: number;
+    min_interval_hours: number;
+    created_at: string;
+  }
+  const [scenarios, setScenarios] = useState<ScenarioItem[]>([]);
+  const [scenarioEnrollCounts, setScenarioEnrollCounts] = useState<Map<string, number>>(new Map());
+  const [scenariosLoading, setScenariosLoading] = useState(false);
+  const [scenarioExpanded, setScenarioExpanded] = useState<string | null>(null);
+  const [scenarioCreating, setScenarioCreating] = useState(false);
+  const [newScenario, setNewScenario] = useState({ name: '', triggerType: 'first_payment', config: '{}' });
 
   // Sales state
   const [coinTxs, setCoinTxs] = useState<CoinTxItem[]>([]);
@@ -403,6 +442,14 @@ function CastDetailInner() {
   const [broadcastNewUsers, setBroadcastNewUsers] = useState<BroadcastNewUser[]>([]);
   const [broadcastLoading, setBroadcastLoading] = useState(false);
   const [broadcastDetailLoading, setBroadcastDetailLoading] = useState(false);
+
+  // Persona
+  const [persona, setPersona] = useState<PersonaData | null>(null);
+  const [personaLoading, setPersonaLoading] = useState(false);
+  const [personaSaving, setPersonaSaving] = useState(false);
+  const [personaForm, setPersonaForm] = useState<Partial<PersonaData>>({});
+  const [personaTestResult, setPersonaTestResult] = useState<string | null>(null);
+  const [personaTestLoading, setPersonaTestLoading] = useState(false);
 
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
@@ -1390,6 +1437,96 @@ function CastDetailInner() {
       setScreenshotsLoading(false);
     })();
   }, [accountId, castName, activeTab, sb]);
+
+  // ============================================================
+  // Persona
+  // ============================================================
+  useEffect(() => {
+    if (!accountId || activeTab !== 'persona') return;
+    setPersonaLoading(true);
+    (async () => {
+      try {
+        const { data: session } = await sb.auth.getSession();
+        const token = session?.session?.access_token;
+        if (!token) { setPersonaLoading(false); return; }
+
+        const res = await fetch(`/api/persona?cast_name=${encodeURIComponent(castName)}&account_id=${accountId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const json = await res.json();
+        if (json.persona) {
+          setPersona(json.persona);
+          setPersonaForm(json.persona);
+        } else {
+          // デフォルト値を設定
+          const defaults: Partial<PersonaData> = {
+            account_id: accountId,
+            cast_name: castName,
+            display_name: '',
+            personality: '',
+            speaking_style: '',
+            emoji_style: '',
+            taboo_topics: '',
+            dm_tone: 'friendly',
+            byaf_style: '',
+            system_prompt_base: '',
+            system_prompt_cast: '',
+          };
+          setPersona(null);
+          setPersonaForm(defaults);
+        }
+      } catch { /* ignore */ }
+      setPersonaLoading(false);
+    })();
+  }, [accountId, castName, activeTab, sb]);
+
+  const handlePersonaSave = useCallback(async () => {
+    if (!accountId) return;
+    setPersonaSaving(true);
+    try {
+      const { data: session } = await sb.auth.getSession();
+      const token = session?.session?.access_token;
+      if (!token) { setPersonaSaving(false); return; }
+
+      const res = await fetch('/api/persona', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ account_id: accountId, cast_name: castName, ...personaForm }),
+      });
+      const json = await res.json();
+      if (json.persona) {
+        setPersona(json.persona);
+        setPersonaForm(json.persona);
+      }
+    } catch { /* ignore */ }
+    setPersonaSaving(false);
+  }, [accountId, castName, personaForm, sb]);
+
+  const handlePersonaTestDm = useCallback(async (templateType: string) => {
+    if (!accountId) return;
+    setPersonaTestLoading(true);
+    setPersonaTestResult(null);
+    try {
+      const { data: session } = await sb.auth.getSession();
+      const token = session?.session?.access_token;
+      if (!token) { setPersonaTestLoading(false); return; }
+
+      const res = await fetch('/api/persona', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          mode: 'generate',
+          cast_name: castName,
+          account_id: accountId,
+          target_username: 'TestUser123',
+          template_type: templateType,
+        }),
+      });
+      const json = await res.json();
+      setPersonaTestResult(json.message || json.error || '生成失敗');
+    } catch { setPersonaTestResult('エラーが発生しました'); }
+    setPersonaTestLoading(false);
+  }, [accountId, castName, sb]);
 
   // Retention stats
   const retentionCounts = useMemo(() => {
@@ -3942,6 +4079,269 @@ function CastDetailInner() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* ============ PERSONA ============ */}
+          {activeTab === 'persona' && (
+            <div className="space-y-4">
+              {personaLoading ? (
+                <div className="space-y-3">
+                  {[0,1,2].map(i => (
+                    <div key={i} className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  ))}
+                </div>
+              ) : (
+                <>
+                  {/* キャラクター定義 */}
+                  <div className="glass-card p-5">
+                    <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                      🎭 キャラクター定義
+                      {persona && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-lg font-normal"
+                          style={{ background: 'rgba(34,197,94,0.1)', color: 'var(--accent-green)' }}>
+                          設定済み
+                        </span>
+                      )}
+                    </h3>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* 表示名 */}
+                      <div>
+                        <label className="text-[10px] font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>
+                          表示名
+                        </label>
+                        <input
+                          className="input-glass w-full text-xs"
+                          placeholder="例: りさ"
+                          value={personaForm.display_name || ''}
+                          onChange={e => setPersonaForm(prev => ({ ...prev, display_name: e.target.value }))}
+                        />
+                      </div>
+
+                      {/* DMトーン */}
+                      <div>
+                        <label className="text-[10px] font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>
+                          DMトーン
+                        </label>
+                        <select
+                          className="input-glass w-full text-xs"
+                          value={personaForm.dm_tone || 'friendly'}
+                          onChange={e => setPersonaForm(prev => ({ ...prev, dm_tone: e.target.value }))}
+                        >
+                          <option value="friendly">friendly（親しみやすい）</option>
+                          <option value="flirty">flirty（甘え系）</option>
+                          <option value="cool">cool（クール）</option>
+                          <option value="cute">cute（かわいい系）</option>
+                        </select>
+                      </div>
+
+                      {/* 性格 */}
+                      <div className="md:col-span-2">
+                        <label className="text-[10px] font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>
+                          性格・キャラ概要
+                        </label>
+                        <textarea
+                          className="input-glass w-full text-xs"
+                          rows={2}
+                          placeholder="例: 明るくて甘えん坊。ファンとの距離が近い。初見にも優しい。"
+                          value={personaForm.personality || ''}
+                          onChange={e => setPersonaForm(prev => ({ ...prev, personality: e.target.value }))}
+                        />
+                      </div>
+
+                      {/* 口調 */}
+                      <div>
+                        <label className="text-[10px] font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>
+                          口調
+                        </label>
+                        <input
+                          className="input-glass w-full text-xs"
+                          placeholder="例: 〜だよ！〜かな？"
+                          value={personaForm.speaking_style || ''}
+                          onChange={e => setPersonaForm(prev => ({ ...prev, speaking_style: e.target.value }))}
+                        />
+                      </div>
+
+                      {/* 絵文字スタイル */}
+                      <div>
+                        <label className="text-[10px] font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>
+                          絵文字の傾向
+                        </label>
+                        <input
+                          className="input-glass w-full text-xs"
+                          placeholder="例: ❤️🥰😘多め"
+                          value={personaForm.emoji_style || ''}
+                          onChange={e => setPersonaForm(prev => ({ ...prev, emoji_style: e.target.value }))}
+                        />
+                      </div>
+
+                      {/* BYAF */}
+                      <div className="md:col-span-2">
+                        <label className="text-[10px] font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>
+                          BYAF（DM末尾の自由選択文）
+                        </label>
+                        <input
+                          className="input-glass w-full text-xs"
+                          placeholder="例: 来てくれたら嬉しいな💕でも無理しないでね！"
+                          value={personaForm.byaf_style || ''}
+                          onChange={e => setPersonaForm(prev => ({ ...prev, byaf_style: e.target.value }))}
+                        />
+                      </div>
+
+                      {/* 禁止話題 */}
+                      <div className="md:col-span-2">
+                        <label className="text-[10px] font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>
+                          禁止話題
+                        </label>
+                        <textarea
+                          className="input-glass w-full text-xs"
+                          rows={2}
+                          placeholder="触れてはいけない話題（改行区切り）"
+                          value={personaForm.taboo_topics || ''}
+                          onChange={e => setPersonaForm(prev => ({ ...prev, taboo_topics: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+
+                    {/* 保存ボタン */}
+                    <div className="mt-4 flex justify-end">
+                      <button
+                        onClick={handlePersonaSave}
+                        disabled={personaSaving}
+                        className="btn-primary text-xs px-6 py-2 disabled:opacity-50"
+                      >
+                        {personaSaving ? '保存中...' : '💾 保存'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* System Prompt 3層 */}
+                  <div className="glass-card p-5">
+                    <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                      🧠 System Prompt 3層
+                    </h3>
+
+                    {/* L1: プラットフォーム共通ルール */}
+                    <div className="mb-4">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                          style={{ background: 'rgba(56,189,248,0.15)', color: 'var(--accent-primary)' }}>
+                          L1
+                        </span>
+                        <label className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+                          プラットフォーム共通ルール（読み取り専用）
+                        </label>
+                      </div>
+                      <div className="glass-panel rounded-lg p-3 max-h-32 overflow-y-auto">
+                        <pre className="text-[10px] whitespace-pre-wrap font-mono" style={{ color: 'var(--text-muted)' }}>
+                          {personaForm.system_prompt_base || '（デフォルトの安藤式7原則が適用されます）'}
+                        </pre>
+                      </div>
+                    </div>
+
+                    {/* L2: キャスト固有 */}
+                    <div className="mb-4">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                          style={{ background: 'rgba(168,85,247,0.15)', color: 'var(--accent-purple)' }}>
+                          L2
+                        </span>
+                        <label className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+                          キャスト固有ルール（編集可）
+                        </label>
+                      </div>
+                      <textarea
+                        className="input-glass w-full text-xs font-mono"
+                        rows={4}
+                        placeholder="このキャスト固有の指示（例: 「関西弁を使う」「英語ユーザーには英語で返す」）"
+                        value={personaForm.system_prompt_cast || ''}
+                        onChange={e => setPersonaForm(prev => ({ ...prev, system_prompt_cast: e.target.value }))}
+                      />
+                    </div>
+
+                    {/* L3: 動的コンテキスト */}
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                          style={{ background: 'rgba(34,197,94,0.15)', color: 'var(--accent-green)' }}>
+                          L3
+                        </span>
+                        <label className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
+                          動的コンテキスト（自動生成）
+                        </label>
+                      </div>
+                      <div className="glass-panel rounded-lg p-3 max-h-32 overflow-y-auto">
+                        <pre className="text-[10px] whitespace-pre-wrap font-mono" style={{ color: 'var(--text-muted)' }}>
+                          {personaForm.system_prompt_context || '（配信データから自動生成されます）'}
+                        </pre>
+                      </div>
+                    </div>
+
+                    {/* 保存ボタン */}
+                    <div className="mt-4 flex justify-end">
+                      <button
+                        onClick={handlePersonaSave}
+                        disabled={personaSaving}
+                        className="btn-primary text-xs px-6 py-2 disabled:opacity-50"
+                      >
+                        {personaSaving ? '保存中...' : '💾 保存'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* DM文面テスト生成 */}
+                  <div className="glass-card p-5">
+                    <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                      💬 テストDM生成
+                    </h3>
+                    <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>
+                      ペルソナ設定を使ってDM文面を生成します。テスト宛先: TestUser123
+                    </p>
+
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      {[
+                        { key: 'thank', label: 'お礼DM', icon: '💕' },
+                        { key: 'follow', label: 'フォローDM', icon: '👋' },
+                        { key: 'pre_broadcast', label: '配信前DM', icon: '📡' },
+                        { key: 'vip', label: 'VIP DM', icon: '💎' },
+                        { key: 'churn', label: '離脱復帰DM', icon: '😢' },
+                      ].map(t => (
+                        <button
+                          key={t.key}
+                          onClick={() => handlePersonaTestDm(t.key)}
+                          disabled={personaTestLoading}
+                          className="text-[11px] px-3 py-1.5 rounded-lg font-semibold transition-all hover:brightness-110 disabled:opacity-40"
+                          style={{
+                            background: 'rgba(168,85,247,0.1)',
+                            color: 'var(--accent-purple)',
+                            border: '1px solid rgba(168,85,247,0.2)',
+                          }}
+                        >
+                          {t.icon} {t.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {personaTestLoading && (
+                      <div className="text-center py-4">
+                        <div className="inline-block w-5 h-5 border-2 rounded-full animate-spin"
+                          style={{ borderColor: 'var(--accent-purple)', borderTopColor: 'transparent' }} />
+                        <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>生成中...</p>
+                      </div>
+                    )}
+
+                    {personaTestResult && !personaTestLoading && (
+                      <div className="glass-panel rounded-lg p-4">
+                        <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>生成結果</p>
+                        <p className="text-xs whitespace-pre-wrap" style={{ color: 'var(--text-primary)' }}>
+                          {personaTestResult}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
