@@ -97,6 +97,18 @@ interface CastTranscript {
   created_at: string;
 }
 
+interface TimelineEvent {
+  event_time: string;
+  event_type: 'transcript' | 'chat' | 'tip' | 'enter' | 'leave' | 'coin';
+  user_name: string | null;
+  message: string | null;
+  tokens: number;
+  coin_type: string | null;
+  confidence: number | null;
+  elapsed_sec: number;
+  is_highlight: boolean;
+}
+
 type BroadcastMode = 'pre' | 'live' | 'post';
 
 /* ============================================================
@@ -213,6 +225,16 @@ const LABELS = {
   transcribing: '文字起こし処理中...',
   transcribeComplete: '文字起こし完了',
   transcribeFailed: '文字起こし失敗',
+  // Timeline labels
+  timelineTitle: '時刻突合タイムライン',
+  timelineDesc: '文字起こし・チャット・課金を時刻順に統合',
+  timelineLoading: 'タイムラインを読み込み中...',
+  timelineEmpty: '文字起こしデータがないためタイムラインを表示できません',
+  timelineHighlight: '課金30秒以内の発言',
+  filterAll: 'すべて',
+  filterTranscript: '発言',
+  filterPayment: '課金',
+  filterChat: 'チャット',
 } as const;
 
 const COIN_RATE = 7.7;
@@ -395,6 +417,36 @@ export default function SessionDetailPage() {
   const [expandedDmUser, setExpandedDmUser] = useState<string | null>(null);
   const [userDmHistory, setUserDmHistory] = useState<{ message: string; status: string; campaign: string | null; sent_at: string | null; queued_at: string }[]>([]);
   const [userDmLoading, setUserDmLoading] = useState(false);
+
+  // AI Analysis state
+  const [analyzing, setAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<{
+    summary: {
+      total_events: number;
+      transcript_segments: number;
+      total_tips: number;
+      total_tickets: number;
+      total_privates: number;
+      total_groups: number;
+      total_enters: number;
+      total_chats: number;
+      total_tokens: number;
+      tip_tokens: number;
+      ticket_tokens: number;
+      private_tokens: number;
+      group_tokens: number;
+    };
+    triggers: { transcript_text: string; time: string; tokens_after: number; users_who_paid: string[] }[];
+    phases: { start: string; end: string; type: string; events: number; tokens: number }[];
+    feedback: string[];
+  } | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+
+  // Timeline state
+  const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineFilter, setTimelineFilter] = useState<'all' | 'transcript' | 'payment' | 'chat'>('all');
+  const [timelineOpen, setTimelineOpen] = useState(false);
 
   // Computed: total send targets
   const sendTargetCount = SEGMENT_GROUPS
@@ -720,6 +772,46 @@ export default function SessionDetailPage() {
   useEffect(() => {
     if (resolvedMode === 'post') loadTranscripts();
   }, [resolvedMode, loadTranscripts]);
+
+  // Load timeline (transcript + chat + coin correlation)
+  const loadTimeline = useCallback(async () => {
+    if (!accountId) return;
+    setTimelineLoading(true);
+    try {
+      const { data, error: err } = await sb.rpc('get_transcript_timeline', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_session_id: sessionId,
+      });
+      if (!err && data) setTimeline(data as TimelineEvent[]);
+    } catch {
+      /* ignore */
+    }
+    setTimelineLoading(false);
+  }, [accountId, castName, sessionId, sb]);
+
+  // AI Analysis handler
+  const handleAnalyze = useCallback(async () => {
+    if (!accountId || analyzing) return;
+    setAnalyzing(true);
+    setAnalysisError(null);
+    setAnalysisResult(null);
+    try {
+      const res = await fetch('/api/analyze-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, cast_name: castName, account_id: accountId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || '分析に失敗しました');
+      setAnalysisResult(json.analysis);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '分析に失敗しました';
+      setAnalysisError(msg);
+    } finally {
+      setAnalyzing(false);
+    }
+  }, [accountId, sessionId, castName, analyzing]);
 
   // Load DM history for a specific user (inline expand)
   const loadUserDmHistory = useCallback(async (userName: string) => {
@@ -2414,6 +2506,335 @@ export default function SessionDetailPage() {
                           )}
                         </>
                       )}
+                    </div>
+
+                    {/* ⏱ 時刻突合タイムライン */}
+                    {transcripts.length > 0 && transcripts.some(t => t.processing_status === 'completed') && (
+                      <div className="glass-card p-5">
+                        <div className="flex items-center justify-between mb-1">
+                          <h3 className="text-xs font-bold flex items-center gap-2" style={{ color: '#22c55e' }}>
+                            {'⏱ ' + LABELS.timelineTitle}
+                          </h3>
+                          <button
+                            onClick={() => {
+                              if (!timelineOpen && timeline.length === 0) loadTimeline();
+                              setTimelineOpen(prev => !prev);
+                            }}
+                            className="text-[11px] px-3 py-1 rounded-lg font-semibold transition-all hover:brightness-110"
+                            style={{
+                              background: timelineOpen ? 'rgba(34,197,94,0.15)' : 'rgba(34,197,94,0.08)',
+                              color: '#22c55e',
+                              border: '1px solid rgba(34,197,94,0.2)',
+                            }}
+                          >
+                            {timelineOpen ? '▲ 閉じる' : '▼ 展開'}
+                          </button>
+                        </div>
+                        <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>
+                          {LABELS.timelineDesc}
+                        </p>
+
+                        {timelineOpen && (
+                          <>
+                            {timelineLoading ? (
+                              <div className="text-center py-6">
+                                <div className="inline-block w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: '#22c55e', borderTopColor: 'transparent' }} />
+                                <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>{LABELS.timelineLoading}</p>
+                              </div>
+                            ) : timeline.length === 0 ? (
+                              <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>{LABELS.timelineEmpty}</p>
+                            ) : (
+                              <>
+                                {/* Filter buttons */}
+                                <div className="flex items-center gap-2 mb-3 flex-wrap">
+                                  {([
+                                    { key: 'all' as const, label: LABELS.filterAll, color: '#94a3b8' },
+                                    { key: 'transcript' as const, label: LABELS.filterTranscript, color: 'rgb(192,132,252)' },
+                                    { key: 'payment' as const, label: LABELS.filterPayment, color: '#f59e0b' },
+                                    { key: 'chat' as const, label: LABELS.filterChat, color: '#94a3b8' },
+                                  ]).map(f => (
+                                    <button
+                                      key={f.key}
+                                      onClick={() => setTimelineFilter(f.key)}
+                                      className="text-[10px] px-2.5 py-1 rounded-full font-semibold transition-all"
+                                      style={{
+                                        background: timelineFilter === f.key ? `${f.color}22` : 'transparent',
+                                        color: timelineFilter === f.key ? f.color : 'var(--text-muted)',
+                                        border: `1px solid ${timelineFilter === f.key ? `${f.color}44` : 'rgba(255,255,255,0.06)'}`,
+                                      }}
+                                    >
+                                      {f.label}
+                                    </button>
+                                  ))}
+                                  {/* Highlight legend */}
+                                  <span className="ml-auto text-[9px] flex items-center gap-1" style={{ color: 'var(--text-muted)' }}>
+                                    <span className="inline-block w-2 h-2 rounded-full" style={{ background: 'rgba(245,158,11,0.4)' }} />
+                                    {LABELS.timelineHighlight}
+                                  </span>
+                                </div>
+
+                                {/* Timeline list */}
+                                <div className="space-y-0.5 max-h-[500px] overflow-y-auto">
+                                  {timeline
+                                    .filter(ev => {
+                                      if (timelineFilter === 'all') return true;
+                                      if (timelineFilter === 'transcript') return ev.event_type === 'transcript';
+                                      if (timelineFilter === 'payment') return ev.event_type === 'tip' || ev.event_type === 'coin';
+                                      if (timelineFilter === 'chat') return ev.event_type === 'chat';
+                                      return true;
+                                    })
+                                    .map((ev, i) => {
+                                      const isTranscript = ev.event_type === 'transcript';
+                                      const isTip = ev.event_type === 'tip';
+                                      const isCoin = ev.event_type === 'coin';
+                                      const isEnter = ev.event_type === 'enter';
+                                      const isLeave = ev.event_type === 'leave';
+                                      const isPayment = isTip || isCoin;
+
+                                      // Colors per type
+                                      const typeConfig: Record<string, { icon: string; color: string }> = {
+                                        transcript: { icon: '🎤', color: 'rgb(192,132,252)' },
+                                        chat: { icon: '💬', color: '#94a3b8' },
+                                        tip: { icon: '💰', color: '#f59e0b' },
+                                        coin: { icon: '🎫', color: '#22c55e' },
+                                        enter: { icon: '➡️', color: '#475569' },
+                                        leave: { icon: '⬅️', color: '#475569' },
+                                      };
+                                      const cfg = typeConfig[ev.event_type] || typeConfig.chat;
+
+                                      // Elapsed time formatting
+                                      const elapsedH = Math.floor(Math.abs(ev.elapsed_sec) / 3600);
+                                      const elapsedM = Math.floor((Math.abs(ev.elapsed_sec) % 3600) / 60);
+                                      const elapsedS = Math.abs(ev.elapsed_sec) % 60;
+                                      const elapsedStr = `${elapsedH}:${String(elapsedM).padStart(2, '0')}:${String(elapsedS).padStart(2, '0')}`;
+
+                                      return (
+                                        <div
+                                          key={`${ev.event_time}-${ev.event_type}-${i}`}
+                                          className="flex items-start gap-2 px-3 py-1.5 rounded-lg transition-colors"
+                                          style={{
+                                            background: ev.is_highlight
+                                              ? 'rgba(245,158,11,0.08)'
+                                              : isPayment
+                                                ? 'rgba(245,158,11,0.04)'
+                                                : 'rgba(0,0,0,0.08)',
+                                            borderLeft: ev.is_highlight ? '2px solid rgba(245,158,11,0.5)' : '2px solid transparent',
+                                          }}
+                                        >
+                                          {/* Elapsed time */}
+                                          <span className="text-[9px] font-mono whitespace-nowrap pt-0.5 w-14 shrink-0 text-right" style={{ color: cfg.color }}>
+                                            {elapsedStr}
+                                          </span>
+
+                                          {/* Icon */}
+                                          <span className="text-[10px] shrink-0 pt-0.5">{cfg.icon}</span>
+
+                                          {/* Content */}
+                                          <div className="flex-1 min-w-0">
+                                            {isTranscript ? (
+                                              <p className="text-xs leading-relaxed" style={{ color: ev.is_highlight ? 'rgb(192,132,252)' : 'var(--text-secondary)' }}>
+                                                {ev.message}
+                                                {ev.confidence != null && (
+                                                  <span className="ml-2 text-[9px]" style={{ color: 'var(--text-muted)' }}>{`${Math.round(ev.confidence * 100)}%`}</span>
+                                                )}
+                                              </p>
+                                            ) : isPayment ? (
+                                              <p className="text-xs font-semibold" style={{ color: cfg.color }}>
+                                                <span style={{ color: 'var(--accent-primary)' }}>{ev.user_name}</span>
+                                                <span className="ml-2">{formatTokens(ev.tokens)}</span>
+                                                {isCoin && ev.coin_type && (
+                                                  <span className="ml-1.5 text-[10px] font-normal" style={{ color: 'var(--text-muted)' }}>({ev.coin_type})</span>
+                                                )}
+                                                {ev.message && (
+                                                  <span className="ml-2 font-normal text-[10px]" style={{ color: 'var(--text-muted)' }}>{ev.message}</span>
+                                                )}
+                                              </p>
+                                            ) : isEnter || isLeave ? (
+                                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                                <span style={{ color: 'var(--text-secondary)' }}>{ev.user_name}</span>
+                                                {` ${isEnter ? '入室' : '退室'}`}
+                                              </p>
+                                            ) : (
+                                              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                                                <span className="font-semibold" style={{ color: ev.tokens > 0 ? '#f59e0b' : 'var(--text-secondary)' }}>{ev.user_name}</span>
+                                                {ev.message && <span className="ml-2">{ev.message}</span>}
+                                                {ev.tokens > 0 && <span className="ml-2 font-bold" style={{ color: '#f59e0b' }}>{formatTokens(ev.tokens)}</span>}
+                                              </p>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+
+                                {/* Summary stats */}
+                                {(() => {
+                                  const transcriptCount = timeline.filter(e => e.event_type === 'transcript').length;
+                                  const highlightCount = timeline.filter(e => e.is_highlight).length;
+                                  const paymentCount = timeline.filter(e => e.event_type === 'tip' || e.event_type === 'coin').length;
+                                  const totalTokens = timeline
+                                    .filter(e => e.event_type === 'tip' || e.event_type === 'coin')
+                                    .reduce((sum, e) => sum + e.tokens, 0);
+                                  return (
+                                    <div className="flex items-center gap-4 mt-3 pt-3 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                        {'🎤 ' + transcriptCount + 'セグメント'}
+                                      </span>
+                                      <span className="text-[10px]" style={{ color: '#f59e0b' }}>
+                                        {'💰 ' + paymentCount + '件 / ' + formatTokens(totalTokens)}
+                                      </span>
+                                      {highlightCount > 0 && (
+                                        <span className="text-[10px]" style={{ color: 'rgb(192,132,252)' }}>
+                                          {'⚡ ' + highlightCount + '件ハイライト'}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+                              </>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {/* 🧠 AI Analysis Section */}
+                    <div className="glass-card p-5">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-xs font-bold flex items-center gap-2" style={{ color: '#38bdf8' }}>
+                          {'🧠 AI分析'}
+                        </h3>
+                        <button
+                          onClick={handleAnalyze}
+                          disabled={analyzing}
+                          className="text-[11px] px-4 py-1.5 rounded-lg font-semibold transition-all hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+                          style={{
+                            background: 'linear-gradient(135deg, rgba(56,189,248,0.2), rgba(99,102,241,0.2))',
+                            color: '#38bdf8',
+                            border: '1px solid rgba(56,189,248,0.3)',
+                          }}
+                        >
+                          {analyzing ? (
+                            <span className="flex items-center gap-2">
+                              <span className="inline-block w-3 h-3 border-2 rounded-full animate-spin" style={{ borderColor: '#38bdf8', borderTopColor: 'transparent' }} />
+                              分析中...
+                            </span>
+                          ) : analysisResult ? '🔄 再分析' : '▶ 配信を分析'}
+                        </button>
+                      </div>
+
+                      {analysisError && (
+                        <div className="px-3 py-2 rounded-lg text-xs mb-3" style={{ background: 'rgba(244,63,94,0.1)', color: 'var(--accent-pink)' }}>
+                          {analysisError}
+                        </div>
+                      )}
+
+                      {analysisResult ? (
+                        <div className="space-y-4">
+                          {/* Summary Stats */}
+                          <div>
+                            <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{'📊 サマリー'}</p>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                              {[
+                                { label: 'イベント数', value: analysisResult.summary.total_events.toLocaleString() },
+                                { label: '文字起こし', value: `${analysisResult.summary.transcript_segments}セグメント` },
+                                { label: 'チップ', value: `${analysisResult.summary.total_tips}回 / ${formatTokens(analysisResult.summary.tip_tokens)}` },
+                                { label: 'チケット', value: `${analysisResult.summary.total_tickets}回 / ${formatTokens(analysisResult.summary.ticket_tokens)}` },
+                                { label: 'プライベート', value: `${analysisResult.summary.total_privates}回 / ${formatTokens(analysisResult.summary.private_tokens)}` },
+                                { label: 'グループ', value: `${analysisResult.summary.total_groups}回 / ${formatTokens(analysisResult.summary.group_tokens)}` },
+                                { label: '入室', value: `${analysisResult.summary.total_enters}回` },
+                                { label: '総売上', value: `${formatTokens(analysisResult.summary.total_tokens)} (${tokensToJPY(analysisResult.summary.total_tokens)})` },
+                              ].map(({ label, value }) => (
+                                <div key={label} className="px-3 py-2 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                  <p className="text-[9px] font-semibold" style={{ color: 'var(--text-muted)' }}>{label}</p>
+                                  <p className="text-xs font-bold mt-0.5" style={{ color: 'var(--text-primary)' }}>{value}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Phase Classification */}
+                          {analysisResult.phases.length > 0 && (
+                            <div>
+                              <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{'📋 配信構成'}</p>
+                              <div className="flex gap-1 flex-wrap">
+                                {analysisResult.phases.map((phase, i) => {
+                                  const phaseColors: Record<string, { bg: string; color: string; label: string }> = {
+                                    free_chat: { bg: 'rgba(148,163,184,0.12)', color: '#94a3b8', label: 'フリーチャット' },
+                                    tip_rush: { bg: 'rgba(245,158,11,0.12)', color: '#f59e0b', label: 'チップラッシュ' },
+                                    ticket_show: { bg: 'rgba(168,85,247,0.12)', color: '#a78bfa', label: 'チケットショー' },
+                                    private: { bg: 'rgba(244,63,94,0.12)', color: '#f43f5e', label: 'プライベート' },
+                                    group_show: { bg: 'rgba(34,197,94,0.12)', color: '#22c55e', label: 'グループ' },
+                                    mixed: { bg: 'rgba(56,189,248,0.12)', color: '#38bdf8', label: '混合' },
+                                  };
+                                  const pc = phaseColors[phase.type] || phaseColors.mixed;
+                                  const startTime = new Date(phase.start);
+                                  const endTime = new Date(phase.end);
+                                  const durationMin = Math.round((endTime.getTime() - startTime.getTime()) / 60000);
+                                  return (
+                                    <div key={i} className="px-2.5 py-1.5 rounded-lg text-[10px] font-semibold" style={{ background: pc.bg, color: pc.color }}>
+                                      <span>{pc.label}</span>
+                                      <span className="ml-1.5 opacity-70">{`${durationMin}分`}</span>
+                                      {phase.tokens > 0 && <span className="ml-1 opacity-70">{`${formatTokens(phase.tokens)}`}</span>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Payment Triggers */}
+                          {analysisResult.triggers.length > 0 && (
+                            <div>
+                              <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{'🎯 課金トリガー発言ランキング'}</p>
+                              <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                                {analysisResult.triggers.map((trigger, i) => (
+                                  <div key={i} className="flex items-start gap-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                    <span className="text-[10px] font-mono whitespace-nowrap pt-0.5 font-bold" style={{ color: '#f59e0b' }}>
+                                      {`#${i + 1}`}
+                                    </span>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                                        {`「${trigger.transcript_text}」`}
+                                      </p>
+                                      <div className="flex items-center gap-3 mt-1">
+                                        <span className="text-[10px] font-mono" style={{ color: 'rgb(192,132,252)' }}>
+                                          {new Date(trigger.time).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                                        </span>
+                                        <span className="text-[10px] font-bold" style={{ color: '#f59e0b' }}>
+                                          {`${formatTokens(trigger.tokens_after)}`}
+                                        </span>
+                                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                          {`${trigger.users_who_paid.length}人が課金`}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Feedback */}
+                          {analysisResult.feedback.length > 0 && (
+                            <div>
+                              <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{'💡 フィードバック'}</p>
+                              <div className="space-y-1">
+                                {analysisResult.feedback.map((point, i) => (
+                                  <div key={i} className="flex gap-2 px-3 py-1.5 rounded-lg text-xs" style={{ background: 'rgba(56,189,248,0.05)', color: 'var(--text-secondary)' }}>
+                                    <span style={{ color: '#38bdf8' }}>{'•'}</span>
+                                    <span>{point}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ) : !analyzing && !analysisError ? (
+                        <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>
+                          「配信を分析」ボタンを押すと、タイムラインデータを元に配信構成・課金トリガーを分析します
+                        </p>
+                      ) : null}
                     </div>
                   </>
                 )}

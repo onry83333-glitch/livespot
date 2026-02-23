@@ -290,6 +290,18 @@ function CastDetailInner() {
   const [sendUnlocked, setSendUnlocked] = useState(false);
   const unlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // DM Queue status
+  const [dmQueueCounts, setDmQueueCounts] = useState({ queued: 0, sending: 0, success: 0, error: 0, total: 0 });
+
+  // DM User-level history
+  const [dmUserSearch, setDmUserSearch] = useState('');
+  const [dmExpandedUser, setDmExpandedUser] = useState<string | null>(null);
+  const [dmUserHistory, setDmUserHistory] = useState<DMLogItem[]>([]);
+  const [dmUserHistoryLoading, setDmUserHistoryLoading] = useState(false);
+
+  // DM Section toggle (A/B/C/D)
+  const [dmSection, setDmSection] = useState<'users' | 'send' | 'campaigns'>('users');
+
   // Sales state
   const [coinTxs, setCoinTxs] = useState<CoinTxItem[]>([]);
   const [paidUsers, setPaidUsers] = useState<PaidUserItem[]>([]);
@@ -671,7 +683,19 @@ function CastDetailInner() {
       .eq('cast_name', castName)
       .order('created_at', { ascending: false })
       .limit(200)
-      .then(({ data }) => setDmLogs((data || []) as DMLogItem[]));
+      .then(({ data }) => {
+        const logs = (data || []) as DMLogItem[];
+        setDmLogs(logs);
+        // Queue counts computation
+        const counts = { queued: 0, sending: 0, success: 0, error: 0, total: logs.length };
+        logs.forEach(l => {
+          if (l.status === 'queued') counts.queued++;
+          else if (l.status === 'sending') counts.sending++;
+          else if (l.status === 'success') counts.success++;
+          else if (l.status === 'error') counts.error++;
+        });
+        setDmQueueCounts(counts);
+      });
 
     // スケジュール一覧取得
     sb.from('dm_schedules')
@@ -720,6 +744,22 @@ function CastDetailInner() {
       }
     };
   }, [accountId, castName]); // dmBatchIdはRefで参照、depsから除外
+
+  // DM: load individual user history (accordion expand)
+  const loadDmUserHistory = useCallback(async (userName: string) => {
+    if (dmExpandedUser === userName) { setDmExpandedUser(null); return; }
+    setDmExpandedUser(userName);
+    setDmUserHistoryLoading(true);
+    const { data } = await sb.from('dm_send_log')
+      .select('id, user_name, message, status, error, campaign, queued_at, sent_at')
+      .eq('account_id', accountId!)
+      .eq('cast_name', castName)
+      .eq('user_name', userName)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    setDmUserHistory((data || []) as DMLogItem[]);
+    setDmUserHistoryLoading(false);
+  }, [dmExpandedUser, accountId, castName, sb]);
 
   // DM send
   const handleDmSend = useCallback(async () => {
@@ -2038,274 +2078,526 @@ function CastDetailInner() {
 
           {/* ============ DM ============ */}
           {activeTab === 'dm' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <div className="lg:col-span-2 space-y-4">
-                {/* Send form */}
-                <div className="glass-card p-5">
-                  <h3 className="text-sm font-bold mb-4">💬 DM送信</h3>
+            <div className="space-y-4">
 
-                  <div className="grid grid-cols-2 gap-3 mb-3">
-                    <div>
-                      <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>キャンペーンタグ</label>
-                      <input type="text" value={dmCampaign} onChange={e => setDmCampaign(e.target.value)}
-                        className="input-glass text-xs w-full" placeholder="例: バレンタイン復帰DM" />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>送信モード</label>
-                      <div className="flex gap-2">
-                        <button onClick={() => setDmSendMode('pipeline')}
-                          className={`text-[10px] px-3 py-1.5 rounded-lg ${dmSendMode === 'pipeline' ? 'btn-primary' : 'btn-ghost'}`}>
-                          パイプライン ({dmTabs}tab)
-                        </button>
-                        <button onClick={() => setDmSendMode('sequential')}
-                          className={`text-[10px] px-3 py-1.5 rounded-lg ${dmSendMode === 'sequential' ? 'btn-primary' : 'btn-ghost'}`}>
-                          順次
-                        </button>
-                        {dmSendMode === 'pipeline' && (
-                          <select value={dmTabs} onChange={e => setDmTabs(Number(e.target.value))}
-                            className="input-glass text-[10px] py-1 px-2 w-16">
-                            {[2, 3, 4, 5].map(n => <option key={n} value={n}>{n}tab</option>)}
-                          </select>
-                        )}
-                      </div>
-                    </div>
+              {/* Section A: DM送信キュー状況 */}
+              <div className="glass-card p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-bold">📨 DM送信状況</h3>
+                  <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    全{dmQueueCounts.total.toLocaleString()}件
+                  </span>
+                </div>
+                {(dmQueueCounts.queued > 0 || dmQueueCounts.sending > 0) && (
+                  <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.08)' }}>
+                    <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: 'var(--accent-amber)' }} />
+                    <span className="text-xs" style={{ color: 'var(--accent-amber)' }}>
+                      Chrome拡張が {dmQueueCounts.queued + dmQueueCounts.sending}件 の送信待ち
+                    </span>
                   </div>
-
-                  <div className="mb-3">
-                    <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                      メッセージ <span style={{ color: 'var(--accent-pink)' }}>*</span>
-                    </label>
-                    <textarea value={dmMessage} onChange={e => setDmMessage(e.target.value)}
-                      className="input-glass text-xs w-full h-24 resize-none"
-                      placeholder="メッセージを入力... {username}でユーザー名置換" />
-                  </div>
-
-                  {/* 送信モード: 即時 / スケジュール */}
-                  <div className="mb-3 flex items-center gap-3">
-                    <label className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>送信タイミング</label>
-                    <button onClick={() => setDmScheduleMode(false)}
-                      className={`text-[10px] px-3 py-1.5 rounded-lg ${!dmScheduleMode ? 'btn-primary' : 'btn-ghost'}`}>
-                      即時送信
-                    </button>
-                    <button onClick={() => setDmScheduleMode(true)}
-                      className={`text-[10px] px-3 py-1.5 rounded-lg ${dmScheduleMode ? 'btn-primary' : 'btn-ghost'}`}>
-                      🕐 スケジュール
-                    </button>
-                  </div>
-
-                  {dmScheduleMode && (
-                    <div className="mb-3 flex items-center gap-3">
-                      <input type="date" value={dmScheduleDate} onChange={e => setDmScheduleDate(e.target.value)}
-                        className="input-glass text-xs py-1.5 px-3"
-                        min={new Date().toISOString().split('T')[0]} />
-                      <input type="time" value={dmScheduleTime} onChange={e => setDmScheduleTime(e.target.value)}
-                        className="input-glass text-xs py-1.5 px-3" />
-                      {dmScheduleDate && dmScheduleTime && (
-                        <span className="text-[10px]" style={{ color: 'var(--accent-primary)' }}>
-                          {new Date(`${dmScheduleDate}T${dmScheduleTime}`).toLocaleString('ja-JP')} に送信予約
-                        </span>
+                )}
+                {dmQueueCounts.total > 0 ? (
+                  <div className="space-y-2">
+                    {/* Status bar */}
+                    <div className="h-3 rounded-full overflow-hidden flex" style={{ background: 'rgba(0,0,0,0.2)' }}>
+                      {dmQueueCounts.success > 0 && (
+                        <div style={{ width: `${(dmQueueCounts.success / dmQueueCounts.total) * 100}%`, background: 'var(--accent-green)' }} />
+                      )}
+                      {dmQueueCounts.sending > 0 && (
+                        <div style={{ width: `${(dmQueueCounts.sending / dmQueueCounts.total) * 100}%`, background: 'var(--accent-amber)' }} />
+                      )}
+                      {dmQueueCounts.queued > 0 && (
+                        <div style={{ width: `${(dmQueueCounts.queued / dmQueueCounts.total) * 100}%`, background: 'var(--accent-primary)' }} />
+                      )}
+                      {dmQueueCounts.error > 0 && (
+                        <div style={{ width: `${(dmQueueCounts.error / dmQueueCounts.total) * 100}%`, background: 'var(--accent-pink)' }} />
                       )}
                     </div>
-                  )}
+                    <div className="flex gap-4 text-[10px]">
+                      <span style={{ color: 'var(--accent-green)' }}>成功: {dmQueueCounts.success}</span>
+                      <span style={{ color: 'var(--accent-amber)' }}>送信中: {dmQueueCounts.sending}</span>
+                      <span style={{ color: 'var(--accent-primary)' }}>待機: {dmQueueCounts.queued}</span>
+                      <span style={{ color: 'var(--accent-pink)' }}>エラー: {dmQueueCounts.error}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>DM送信履歴なし</p>
+                )}
+              </div>
 
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-                      選択中: <span className="font-bold text-white">{dmTargets.size}</span> 名
+              {/* Section tabs: ユーザー / 送信 / キャンペーン */}
+              <div className="flex gap-1.5">
+                {([
+                  { key: 'users' as const, icon: '👥', label: 'ユーザー別' },
+                  { key: 'send' as const, icon: '✉️', label: 'DM送信' },
+                  { key: 'campaigns' as const, icon: '📊', label: 'キャンペーン' },
+                ] as const).map(t => (
+                  <button key={t.key} onClick={() => setDmSection(t.key)}
+                    className={`text-[11px] px-4 py-2 rounded-lg font-medium transition-all ${
+                      dmSection === t.key ? 'text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
+                    }`}
+                    style={dmSection === t.key ? {
+                      background: 'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(56,189,248,0.05))',
+                      border: '1px solid rgba(56,189,248,0.2)',
+                    } : {}}>
+                    {t.icon} {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Section B: ユーザー別DM履歴 */}
+              {dmSection === 'users' && (
+                <div className="glass-card p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold">👥 ユーザー別DM履歴</h3>
+                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      {(() => {
+                        const userSet = new Set(dmLogs.map(l => l.user_name));
+                        return `${userSet.size}名にDM送信済み`;
+                      })()}
                     </span>
-                    {dmScheduleMode ? (
-                      <button onClick={handleScheduleDm}
-                        disabled={dmScheduleSaving || dmTargets.size === 0 || !dmMessage.trim() || !dmScheduleDate || !dmScheduleTime}
-                        className="text-xs py-1.5 px-5 rounded-xl font-semibold disabled:opacity-50 transition-all"
-                        style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple, #a855f7))', color: 'white' }}>
-                        {dmScheduleSaving ? '予約中...' : '🕐 送信予約'}
-                      </button>
-                    ) : (
-                      <button onClick={() => setShowConfirmModal(true)}
-                        disabled={dmSending || dmTargets.size === 0 || !dmMessage.trim()}
-                        className="btn-primary text-xs py-1.5 px-5 disabled:opacity-50">
-                        {dmSending ? '送信中...' : '送信確認'}
-                      </button>
+                  </div>
+
+                  {/* Search */}
+                  <div className="mb-3">
+                    <input
+                      type="text"
+                      value={dmUserSearch}
+                      onChange={e => setDmUserSearch(e.target.value)}
+                      className="input-glass text-xs w-full"
+                      placeholder="ユーザー名で検索..."
+                    />
+                  </div>
+
+                  {dmLogs.length === 0 ? (
+                    <p className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>DM送信履歴なし</p>
+                  ) : (
+                    <div className="space-y-1 max-h-[500px] overflow-auto">
+                      {(() => {
+                        // Group dmLogs by user_name
+                        const userMap = new Map<string, { lastLog: DMLogItem; count: number; successCount: number }>();
+                        for (const log of dmLogs) {
+                          if (!userMap.has(log.user_name)) {
+                            userMap.set(log.user_name, { lastLog: log, count: 1, successCount: log.status === 'success' ? 1 : 0 });
+                          } else {
+                            const entry = userMap.get(log.user_name)!;
+                            entry.count++;
+                            if (log.status === 'success') entry.successCount++;
+                          }
+                        }
+                        const filtered = dmUserSearch.trim()
+                          ? Array.from(userMap.entries()).filter(([name]) => name.toLowerCase().includes(dmUserSearch.toLowerCase()))
+                          : Array.from(userMap.entries());
+
+                        return filtered.map(([userName, info]) => {
+                          const isExpanded = dmExpandedUser === userName;
+                          const fan = fans.find(f => f.user_name === userName);
+                          return (
+                            <div key={userName}>
+                              <button
+                                onClick={() => loadDmUserHistory(userName)}
+                                className={`w-full text-left px-3 py-2.5 rounded-lg text-[11px] transition-all ${
+                                  isExpanded ? 'border' : 'hover:bg-white/[0.03]'
+                                }`}
+                                style={isExpanded ? { background: 'rgba(56,189,248,0.05)', borderColor: 'rgba(56,189,248,0.15)' } : {}}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="font-semibold truncate">{userName}</span>
+                                    {fan && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded font-bold tabular-nums"
+                                        style={{ background: 'rgba(245,158,11,0.1)', color: 'var(--accent-amber)' }}>
+                                        {fan.total_tokens.toLocaleString()}tk
+                                      </span>
+                                    )}
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded"
+                                      style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
+                                      {info.count}件
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    <span className={`text-[10px] font-bold ${
+                                      info.lastLog.status === 'success' ? 'text-emerald-400' :
+                                      info.lastLog.status === 'error' ? 'text-rose-400' :
+                                      info.lastLog.status === 'sending' ? 'text-amber-400' : 'text-slate-400'
+                                    }`}>
+                                      {info.lastLog.status}
+                                    </span>
+                                    <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                      {info.lastLog.sent_at
+                                        ? new Date(info.lastLog.sent_at).toLocaleDateString('ja-JP')
+                                        : timeAgo(info.lastLog.queued_at)}
+                                    </span>
+                                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                      {isExpanded ? '▲' : '▼'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </button>
+
+                              {/* Expanded: DM timeline */}
+                              {isExpanded && (
+                                <div className="ml-4 mt-1 mb-2 pl-3 border-l-2 space-y-1.5" style={{ borderColor: 'rgba(56,189,248,0.15)' }}>
+                                  {dmUserHistoryLoading ? (
+                                    <div className="py-3 text-center">
+                                      <div className="inline-block w-4 h-4 border-2 rounded-full animate-spin"
+                                        style={{ borderColor: 'var(--accent-primary)', borderTopColor: 'transparent' }} />
+                                    </div>
+                                  ) : dmUserHistory.length === 0 ? (
+                                    <p className="text-[10px] py-2" style={{ color: 'var(--text-muted)' }}>履歴なし</p>
+                                  ) : (
+                                    dmUserHistory.map(log => (
+                                      <div key={log.id} className="px-3 py-2 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                        <div className="flex items-center justify-between mb-1">
+                                          <div className="flex items-center gap-2">
+                                            <span className="text-[10px] font-mono" style={{ color: 'var(--text-muted)' }}>
+                                              {log.sent_at
+                                                ? new Date(log.sent_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                                : new Date(log.queued_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                            </span>
+                                            {log.campaign && (
+                                              <span className="text-[9px] px-1.5 py-0.5 rounded"
+                                                style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
+                                                {log.campaign}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <span className={`text-[9px] font-bold ${
+                                            log.status === 'success' ? 'text-emerald-400' :
+                                            log.status === 'error' ? 'text-rose-400' :
+                                            log.status === 'sending' ? 'text-amber-400' : 'text-slate-400'
+                                          }`}>{log.status}</span>
+                                        </div>
+                                        {log.message && (
+                                          <p className="text-[10px] whitespace-pre-wrap break-words" style={{ color: 'var(--text-secondary)' }}>
+                                            {log.message}
+                                          </p>
+                                        )}
+                                        {log.error && (
+                                          <p className="text-[9px] mt-1" style={{ color: 'var(--accent-pink)' }}>{log.error}</p>
+                                        )}
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        });
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Section C: DM送信 */}
+              {dmSection === 'send' && (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="lg:col-span-2 space-y-4">
+                    {/* Send form */}
+                    <div className="glass-card p-5">
+                      <h3 className="text-sm font-bold mb-4">✉️ DM送信</h3>
+
+                      <div className="grid grid-cols-2 gap-3 mb-3">
+                        <div>
+                          <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>キャンペーンタグ</label>
+                          <input type="text" value={dmCampaign} onChange={e => setDmCampaign(e.target.value)}
+                            className="input-glass text-xs w-full" placeholder="例: バレンタイン復帰DM" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>送信モード</label>
+                          <div className="flex gap-2">
+                            <button onClick={() => setDmSendMode('pipeline')}
+                              className={`text-[10px] px-3 py-1.5 rounded-lg ${dmSendMode === 'pipeline' ? 'btn-primary' : 'btn-ghost'}`}>
+                              パイプライン ({dmTabs}tab)
+                            </button>
+                            <button onClick={() => setDmSendMode('sequential')}
+                              className={`text-[10px] px-3 py-1.5 rounded-lg ${dmSendMode === 'sequential' ? 'btn-primary' : 'btn-ghost'}`}>
+                              順次
+                            </button>
+                            {dmSendMode === 'pipeline' && (
+                              <select value={dmTabs} onChange={e => setDmTabs(Number(e.target.value))}
+                                className="input-glass text-[10px] py-1 px-2 w-16">
+                                {[2, 3, 4, 5].map(n => <option key={n} value={n}>{n}tab</option>)}
+                              </select>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mb-3">
+                        <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                          メッセージ <span style={{ color: 'var(--accent-pink)' }}>*</span>
+                        </label>
+                        <textarea value={dmMessage} onChange={e => setDmMessage(e.target.value)}
+                          className="input-glass text-xs w-full h-24 resize-none"
+                          placeholder="メッセージを入力... {username}でユーザー名置換" />
+                      </div>
+
+                      {/* 送信モード: 即時 / スケジュール */}
+                      <div className="mb-3 flex items-center gap-3">
+                        <label className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>送信タイミング</label>
+                        <button onClick={() => setDmScheduleMode(false)}
+                          className={`text-[10px] px-3 py-1.5 rounded-lg ${!dmScheduleMode ? 'btn-primary' : 'btn-ghost'}`}>
+                          即時送信
+                        </button>
+                        <button onClick={() => setDmScheduleMode(true)}
+                          className={`text-[10px] px-3 py-1.5 rounded-lg ${dmScheduleMode ? 'btn-primary' : 'btn-ghost'}`}>
+                          🕐 スケジュール
+                        </button>
+                      </div>
+
+                      {dmScheduleMode && (
+                        <div className="mb-3 flex items-center gap-3">
+                          <input type="date" value={dmScheduleDate} onChange={e => setDmScheduleDate(e.target.value)}
+                            className="input-glass text-xs py-1.5 px-3"
+                            min={new Date().toISOString().split('T')[0]} />
+                          <input type="time" value={dmScheduleTime} onChange={e => setDmScheduleTime(e.target.value)}
+                            className="input-glass text-xs py-1.5 px-3" />
+                          {dmScheduleDate && dmScheduleTime && (
+                            <span className="text-[10px]" style={{ color: 'var(--accent-primary)' }}>
+                              {new Date(`${dmScheduleDate}T${dmScheduleTime}`).toLocaleString('ja-JP')} に送信予約
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                          選択中: <span className="font-bold text-white">{dmTargets.size}</span> 名
+                        </span>
+                        {dmScheduleMode ? (
+                          <button onClick={handleScheduleDm}
+                            disabled={dmScheduleSaving || dmTargets.size === 0 || !dmMessage.trim() || !dmScheduleDate || !dmScheduleTime}
+                            className="text-xs py-1.5 px-5 rounded-xl font-semibold disabled:opacity-50 transition-all"
+                            style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple, #a855f7))', color: 'white' }}>
+                            {dmScheduleSaving ? '予約中...' : '🕐 送信予約'}
+                          </button>
+                        ) : (
+                          <button onClick={() => setShowConfirmModal(true)}
+                            disabled={dmSending || dmTargets.size === 0 || !dmMessage.trim()}
+                            className="btn-primary text-xs py-1.5 px-5 disabled:opacity-50">
+                            {dmSending ? '送信中...' : '送信確認'}
+                          </button>
+                        )}
+                      </div>
+
+                      {dmError && <p className="mt-2 text-xs" style={{ color: 'var(--accent-pink)' }}>{dmError}</p>}
+                      {dmResult && (
+                        <p className="mt-2 text-xs" style={{ color: 'var(--accent-green)' }}>
+                          {dmResult.count}件をキューに登録 (batch: {dmResult.batch_id})
+                        </p>
+                      )}
+                      {dmBatchId && dmStatusCounts.total > 0 && (
+                        <div className="mt-2 flex gap-3 text-[10px]">
+                          <span style={{ color: 'var(--text-muted)' }}>待機: {dmStatusCounts.queued}</span>
+                          <span style={{ color: 'var(--accent-amber)' }}>送信中: {dmStatusCounts.sending}</span>
+                          <span style={{ color: 'var(--accent-green)' }}>成功: {dmStatusCounts.success}</span>
+                          <span style={{ color: 'var(--accent-pink)' }}>エラー: {dmStatusCounts.error}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Scheduled DMs */}
+                    {dmSchedules.length > 0 && (
+                      <div className="glass-card p-4">
+                        <h3 className="text-sm font-bold mb-3">📋 予約済みDM</h3>
+                        <div className="space-y-2 max-h-60 overflow-auto">
+                          {dmSchedules.map(sched => {
+                            const statusIcon = sched.status === 'pending' ? '⏳' : sched.status === 'sending' ? '📤' :
+                              sched.status === 'completed' ? '✅' : sched.status === 'cancelled' ? '🚫' : '❌';
+                            const statusColor = sched.status === 'pending' ? 'var(--accent-amber)' : sched.status === 'sending' ? 'var(--accent-primary)' :
+                              sched.status === 'completed' ? 'var(--accent-green)' : 'var(--text-muted)';
+                            return (
+                              <div key={sched.id} className="glass-panel px-3 py-2.5 rounded-xl">
+                                <div className="flex items-start justify-between">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex items-center gap-2 text-[11px]">
+                                      <span>{statusIcon}</span>
+                                      <span className="font-semibold">{new Date(sched.scheduled_at).toLocaleString('ja-JP')}</span>
+                                      <span style={{ color: 'var(--text-muted)' }}>
+                                        対象: {sched.target_usernames ? `${sched.target_usernames.length}名` : sched.target_segment || '--'}
+                                      </span>
+                                    </div>
+                                    <p className="text-[10px] mt-1 truncate" style={{ color: 'var(--text-secondary)' }}>
+                                      {sched.message}
+                                    </p>
+                                    {sched.campaign && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded mt-1 inline-block"
+                                        style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
+                                        {sched.campaign}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex-shrink-0 ml-2 text-right">
+                                    <span className="text-[10px] font-bold" style={{ color: statusColor }}>
+                                      {sched.status === 'completed' ? `${sched.sent_count}/${sched.total_count}` : sched.status}
+                                    </span>
+                                    {sched.status === 'pending' && (
+                                      <button onClick={() => handleCancelSchedule(sched.id)}
+                                        className="block text-[9px] mt-1 px-2 py-0.5 rounded-lg hover:bg-rose-500/10 transition-all"
+                                        style={{ color: 'var(--accent-pink)' }}>
+                                        キャンセル
+                                      </button>
+                                    )}
+                                    {sched.error_message && (
+                                      <p className="text-[9px] mt-1" style={{ color: 'var(--accent-pink)' }}>{sched.error_message}</p>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     )}
                   </div>
 
-                  {dmError && <p className="mt-2 text-xs" style={{ color: 'var(--accent-pink)' }}>{dmError}</p>}
-                  {dmResult && (
-                    <p className="mt-2 text-xs" style={{ color: 'var(--accent-green)' }}>
-                      {dmResult.count}件をキューに登録 (batch: {dmResult.batch_id})
-                    </p>
-                  )}
-                  {dmBatchId && dmStatusCounts.total > 0 && (
-                    <div className="mt-2 flex gap-3 text-[10px]">
-                      <span style={{ color: 'var(--text-muted)' }}>待機: {dmStatusCounts.queued}</span>
-                      <span style={{ color: 'var(--accent-amber)' }}>送信中: {dmStatusCounts.sending}</span>
-                      <span style={{ color: 'var(--accent-green)' }}>成功: {dmStatusCounts.success}</span>
-                      <span style={{ color: 'var(--accent-pink)' }}>エラー: {dmStatusCounts.error}</span>
+                  {/* Target selection */}
+                  <div className="space-y-4">
+                    {/* Text input for targets */}
+                    <div className="glass-card p-4">
+                      <h3 className="text-sm font-bold mb-2">テキスト入力</h3>
+                      <p className="text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
+                        URLまたはユーザー名を1行ずつ入力
+                      </p>
+                      <textarea
+                        value={dmTargetsText}
+                        onChange={e => setDmTargetsText(e.target.value)}
+                        className="input-glass font-mono text-[11px] leading-relaxed w-full h-28 resize-none"
+                        placeholder={'https://ja.stripchat.com/user/username\nまたはユーザー名を1行ずつ'}
+                      />
+                      <button onClick={handleAddTextTargets}
+                        disabled={!dmTargetsText.trim()}
+                        className="btn-primary text-[10px] py-1.5 px-4 mt-2 w-full disabled:opacity-50">
+                        ターゲットに追加 ({dmTargetsText.split('\n').filter(l => l.trim()).length}件)
+                      </button>
                     </div>
-                  )}
-                </div>
 
-                {/* DM History */}
-                <div className="glass-card p-4">
-                  <h3 className="text-sm font-bold mb-3">送信履歴</h3>
-                  {dmLogs.length === 0 ? (
-                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>DM送信履歴なし</p>
-                  ) : (
-                    <div className="space-y-1.5 max-h-80 overflow-auto">
-                      {dmLogs.map(log => (
-                        <div key={log.id} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
-                          <div className="min-w-0 flex-1">
-                            <span className="font-semibold">{log.user_name}</span>
-                            {log.campaign && (
-                              <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded"
-                                style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
-                                {log.campaign}
-                              </span>
-                            )}
-                            <p className="text-[10px] truncate" style={{ color: 'var(--text-muted)' }}>{log.message}</p>
-                          </div>
-                          <div className="flex-shrink-0 ml-2 text-right">
-                            <span className={`text-[10px] font-bold ${
-                              log.status === 'success' ? 'text-emerald-400' : log.status === 'error' ? 'text-rose-400' :
-                              log.status === 'sending' ? 'text-amber-400' : 'text-slate-400'
-                            }`}>{log.status}</span>
-                            <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgo(log.queued_at)}</p>
-                          </div>
+                    {/* Confirmed targets */}
+                    {dmTargets.size > 0 && (
+                      <div className="glass-card p-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <h3 className="text-sm font-bold">確定ターゲット ({dmTargets.size}名)</h3>
+                          <button onClick={() => setDmTargets(new Set())}
+                            className="text-[9px] px-2 py-1 rounded-lg hover:bg-rose-500/10 transition-all"
+                            style={{ color: 'var(--accent-pink)' }}>全クリア</button>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                        <div className="space-y-0.5 max-h-40 overflow-auto">
+                          {Array.from(dmTargets).map(un => (
+                            <div key={un} className="flex items-center justify-between px-2 py-1.5 rounded-lg text-[11px] hover:bg-white/[0.03]">
+                              <span className="font-medium truncate">{un}</span>
+                              <button onClick={() => removeTarget(un)}
+                                className="text-slate-500 hover:text-rose-400 transition-colors text-xs flex-shrink-0 ml-2"
+                                title="削除">x</button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
-                {/* Scheduled DMs */}
-                {dmSchedules.length > 0 && (
-                  <div className="glass-card p-4">
-                    <h3 className="text-sm font-bold mb-3">📋 予約済みDM</h3>
-                    <div className="space-y-2 max-h-60 overflow-auto">
-                      {dmSchedules.map(sched => {
-                        const statusIcon = sched.status === 'pending' ? '⏳' : sched.status === 'sending' ? '📤' :
-                          sched.status === 'completed' ? '✅' : sched.status === 'cancelled' ? '🚫' : '❌';
-                        const statusColor = sched.status === 'pending' ? 'var(--accent-amber)' : sched.status === 'sending' ? 'var(--accent-primary)' :
-                          sched.status === 'completed' ? 'var(--accent-green)' : 'var(--text-muted)';
-                        return (
-                          <div key={sched.id} className="glass-panel px-3 py-2.5 rounded-xl">
-                            <div className="flex items-start justify-between">
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2 text-[11px]">
-                                  <span>{statusIcon}</span>
-                                  <span className="font-semibold">{new Date(sched.scheduled_at).toLocaleString('ja-JP')}</span>
-                                  <span style={{ color: 'var(--text-muted)' }}>
-                                    対象: {sched.target_usernames ? `${sched.target_usernames.length}名` : sched.target_segment || '--'}
-                                  </span>
+                    {/* Fan list selection */}
+                    <div className="glass-card p-4">
+                      <h3 className="text-sm font-bold mb-2">ファン選択</h3>
+                      <div className="flex gap-1.5 mb-3 flex-wrap">
+                        <button onClick={() => addFansAsTargets('all')} className="btn-ghost text-[9px] py-1 px-2">全ファン</button>
+                        <button onClick={() => addFansAsTargets('vip')} className="btn-ghost text-[9px] py-1 px-2">VIP (100tk+)</button>
+                        <button onClick={() => addFansAsTargets('regular')} className="btn-ghost text-[9px] py-1 px-2">常連 (3回+)</button>
+                      </div>
+                      {fans.length === 0 ? (
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ファンデータなし</p>
+                      ) : (
+                        <div className="space-y-1 max-h-60 overflow-auto">
+                          {fans.map(f => {
+                            const checked = dmTargets.has(f.user_name);
+                            return (
+                              <button key={f.user_name} onClick={() => toggleTarget(f.user_name)}
+                                className={`w-full text-left p-2 rounded-lg text-[11px] transition-all ${checked ? 'border' : 'hover:bg-white/[0.03]'}`}
+                                style={checked ? { background: 'rgba(56,189,248,0.08)', borderColor: 'rgba(56,189,248,0.2)' } : {}}>
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`w-3 h-3 rounded-sm border ${checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'}`} />
+                                    <span className="font-medium">{f.user_name}</span>
+                                  </div>
+                                  <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{f.total_tokens.toLocaleString()} tk</span>
                                 </div>
-                                <p className="text-[10px] mt-1 truncate" style={{ color: 'var(--text-secondary)' }}>
-                                  {sched.message}
-                                </p>
-                                {sched.campaign && (
-                                  <span className="text-[9px] px-1.5 py-0.5 rounded mt-1 inline-block"
-                                    style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
-                                    {sched.campaign}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Section D: キャンペーン履歴 */}
+              {dmSection === 'campaigns' && (
+                <div className="glass-card p-4">
+                  <h3 className="text-sm font-bold mb-3">📊 キャンペーン別集計</h3>
+                  {dmLogs.length === 0 ? (
+                    <p className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>DM送信履歴なし</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {(() => {
+                        const campMap = new Map<string, { total: number; success: number; error: number; sending: number; queued: number; lastSent: string | null }>();
+                        for (const log of dmLogs) {
+                          const c = log.campaign || '(タグなし)';
+                          if (!campMap.has(c)) {
+                            campMap.set(c, { total: 0, success: 0, error: 0, sending: 0, queued: 0, lastSent: null });
+                          }
+                          const entry = campMap.get(c)!;
+                          entry.total++;
+                          if (log.status === 'success') { entry.success++; if (!entry.lastSent || (log.sent_at && log.sent_at > entry.lastSent)) entry.lastSent = log.sent_at; }
+                          else if (log.status === 'error') entry.error++;
+                          else if (log.status === 'sending') entry.sending++;
+                          else if (log.status === 'queued') entry.queued++;
+                        }
+                        return Array.from(campMap.entries())
+                          .sort((a, b) => b[1].total - a[1].total)
+                          .map(([campaign, stats]) => (
+                            <div key={campaign} className="glass-panel px-4 py-3 rounded-xl">
+                              <div className="flex items-center justify-between mb-2">
+                                <span className="text-[11px] font-bold truncate">{campaign}</span>
+                                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                  {stats.lastSent ? new Date(stats.lastSent).toLocaleDateString('ja-JP') : ''}
+                                </span>
+                              </div>
+                              {/* Progress bar */}
+                              <div className="h-2 rounded-full overflow-hidden flex mb-2" style={{ background: 'rgba(0,0,0,0.2)' }}>
+                                {stats.success > 0 && (
+                                  <div style={{ width: `${(stats.success / stats.total) * 100}%`, background: 'var(--accent-green)' }} />
+                                )}
+                                {stats.sending > 0 && (
+                                  <div style={{ width: `${(stats.sending / stats.total) * 100}%`, background: 'var(--accent-amber)' }} />
+                                )}
+                                {stats.queued > 0 && (
+                                  <div style={{ width: `${(stats.queued / stats.total) * 100}%`, background: 'var(--accent-primary)' }} />
+                                )}
+                                {stats.error > 0 && (
+                                  <div style={{ width: `${(stats.error / stats.total) * 100}%`, background: 'var(--accent-pink)' }} />
+                                )}
+                              </div>
+                              <div className="flex gap-3 text-[10px]">
+                                <span style={{ color: 'var(--text-muted)' }}>全{stats.total}件</span>
+                                <span style={{ color: 'var(--accent-green)' }}>成功 {stats.success}</span>
+                                {stats.error > 0 && <span style={{ color: 'var(--accent-pink)' }}>失敗 {stats.error}</span>}
+                                {(stats.queued + stats.sending) > 0 && (
+                                  <span style={{ color: 'var(--accent-amber)' }}>処理中 {stats.queued + stats.sending}</span>
+                                )}
+                                {stats.total > 0 && (
+                                  <span style={{ color: 'var(--accent-primary)' }}>
+                                    成功率 {Math.round((stats.success / stats.total) * 1000) / 10}%
                                   </span>
                                 )}
                               </div>
-                              <div className="flex-shrink-0 ml-2 text-right">
-                                <span className="text-[10px] font-bold" style={{ color: statusColor }}>
-                                  {sched.status === 'completed' ? `${sched.sent_count}/${sched.total_count}` : sched.status}
-                                </span>
-                                {sched.status === 'pending' && (
-                                  <button onClick={() => handleCancelSchedule(sched.id)}
-                                    className="block text-[9px] mt-1 px-2 py-0.5 rounded-lg hover:bg-rose-500/10 transition-all"
-                                    style={{ color: 'var(--accent-pink)' }}>
-                                    キャンセル
-                                  </button>
-                                )}
-                                {sched.error_message && (
-                                  <p className="text-[9px] mt-1" style={{ color: 'var(--accent-pink)' }}>{sched.error_message}</p>
-                                )}
-                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Target selection */}
-              <div className="space-y-4">
-                {/* Text input for targets */}
-                <div className="glass-card p-4">
-                  <h3 className="text-sm font-bold mb-2">テキスト入力</h3>
-                  <p className="text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
-                    URLまたはユーザー名を1行ずつ入力
-                  </p>
-                  <textarea
-                    value={dmTargetsText}
-                    onChange={e => setDmTargetsText(e.target.value)}
-                    className="input-glass font-mono text-[11px] leading-relaxed w-full h-28 resize-none"
-                    placeholder={'https://ja.stripchat.com/user/username\nまたはユーザー名を1行ずつ'}
-                  />
-                  <button onClick={handleAddTextTargets}
-                    disabled={!dmTargetsText.trim()}
-                    className="btn-primary text-[10px] py-1.5 px-4 mt-2 w-full disabled:opacity-50">
-                    ターゲットに追加 ({dmTargetsText.split('\n').filter(l => l.trim()).length}件)
-                  </button>
-                </div>
-
-                {/* Confirmed targets */}
-                {dmTargets.size > 0 && (
-                  <div className="glass-card p-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <h3 className="text-sm font-bold">確定ターゲット ({dmTargets.size}名)</h3>
-                      <button onClick={() => setDmTargets(new Set())}
-                        className="text-[9px] px-2 py-1 rounded-lg hover:bg-rose-500/10 transition-all"
-                        style={{ color: 'var(--accent-pink)' }}>全クリア</button>
-                    </div>
-                    <div className="space-y-0.5 max-h-40 overflow-auto">
-                      {Array.from(dmTargets).map(un => (
-                        <div key={un} className="flex items-center justify-between px-2 py-1.5 rounded-lg text-[11px] hover:bg-white/[0.03]">
-                          <span className="font-medium truncate">{un}</span>
-                          <button onClick={() => removeTarget(un)}
-                            className="text-slate-500 hover:text-rose-400 transition-colors text-xs flex-shrink-0 ml-2"
-                            title="削除">x</button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Fan list selection */}
-                <div className="glass-card p-4">
-                  <h3 className="text-sm font-bold mb-2">ファン選択</h3>
-                  <div className="flex gap-1.5 mb-3 flex-wrap">
-                    <button onClick={() => addFansAsTargets('all')} className="btn-ghost text-[9px] py-1 px-2">全ファン</button>
-                    <button onClick={() => addFansAsTargets('vip')} className="btn-ghost text-[9px] py-1 px-2">VIP (100tk+)</button>
-                    <button onClick={() => addFansAsTargets('regular')} className="btn-ghost text-[9px] py-1 px-2">常連 (3回+)</button>
-                  </div>
-                  {fans.length === 0 ? (
-                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ファンデータなし</p>
-                  ) : (
-                    <div className="space-y-1 max-h-60 overflow-auto">
-                      {fans.map(f => {
-                        const checked = dmTargets.has(f.user_name);
-                        return (
-                          <button key={f.user_name} onClick={() => toggleTarget(f.user_name)}
-                            className={`w-full text-left p-2 rounded-lg text-[11px] transition-all ${checked ? 'border' : 'hover:bg-white/[0.03]'}`}
-                            style={checked ? { background: 'rgba(56,189,248,0.08)', borderColor: 'rgba(56,189,248,0.2)' } : {}}>
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className={`w-3 h-3 rounded-sm border ${checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'}`} />
-                                <span className="font-medium">{f.user_name}</span>
-                              </div>
-                              <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{f.total_tokens.toLocaleString()} tk</span>
-                            </div>
-                          </button>
-                        );
-                      })}
+                          ));
+                      })()}
                     </div>
                   )}
                 </div>
-              </div>
+              )}
             </div>
           )}
 
