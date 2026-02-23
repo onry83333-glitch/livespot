@@ -250,9 +250,28 @@ export default function SessionListPage() {
               📺 {castName} — 配信セッション一覧
             </h1>
           </div>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            全 {totalCount} セッション
-          </span>
+          <div className="flex items-center gap-3">
+            {/* 配信準備ボタン: 最新終了セッションに ?mode=pre で遷移 */}
+            {sessions.length > 0 && !sessions[0]?.is_active && (
+              <button
+                onClick={() => {
+                  const latest = sessions[0];
+                  router.push(`/casts/${encodeURIComponent(castName)}/sessions/${encodeURIComponent(latest.session_id)}?mode=pre`);
+                }}
+                className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:scale-105"
+                style={{
+                  background: 'rgba(245,158,11,0.15)',
+                  border: '1px solid rgba(245,158,11,0.3)',
+                  color: 'rgb(251,191,36)',
+                }}
+              >
+                📡 配信準備
+              </button>
+            )}
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              全 {totalCount} セッション
+            </span>
+          </div>
         </div>
 
         {/* ============ Summary KPI ============ */}

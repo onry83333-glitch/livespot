@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, formatJST } from '@/lib/utils';
@@ -38,10 +38,16 @@ interface SessionActions {
   segment_breakdown: { segment: string; dm_sent: number; visited: number; paid: number }[];
 }
 
+interface DmTemplate {
+  id: string;
+  name: string;
+  message: string;
+}
+
 type BroadcastMode = 'pre' | 'live' | 'post';
 
 /* ============================================================
-   Labels — all UI text in one place to avoid encoding issues
+   Labels
    ============================================================ */
 const LABELS = {
   min: '分',
@@ -87,9 +93,40 @@ const LABELS = {
   visited: '来訪',
   paid: '課金',
   total: '合計',
+  // Pre-broadcast labels
+  preBroadcastPrep: '配信準備',
+  prevBroadcast: '前回配信',
+  prevAttendance: '前回来場',
+  prevNewUsers: '前回新規',
+  preDm: '配信前DM',
+  segmentSelect: 'セグメント選択',
+  sendTarget: '送信対象',
+  templateSelect: 'テンプレート選択',
+  preview: 'プレビュー',
+  bulkSend: '一括送信',
+  byafLabel: 'BYAF文末（自動付与）',
+  byafText: '来てくれたら嬉しいけど、無理しないでね！',
+  defaultTemplateText: '今日21時から配信するよ！\n楽しみに待っててね💕',
+  prevResult: '前回の結果',
+  attendance: '来場',
+  newPayers: '新規課金',
+  unhandledAlert: '初課金{n}人にお礼DM未送信',
+  goToPostMode: '配信後モードへ',
+  dataNotAvailable: 'データなし',
+  loadingPreData: '配信準備データを読み込み中...',
+  unhandledLabel: '未対応',
+  thanksDmUnsent: 'お礼DM未送信',
 } as const;
 
 const COIN_RATE = 7.7;
+
+const SEGMENT_GROUPS = [
+  { id: 'whale_vip', label: 'Whale/VIP', segments: ['whale', 'vip'], defaultOn: true },
+  { id: 'regular', label: 'Regular', segments: ['regular'], defaultOn: true },
+  { id: 'light', label: 'Light', segments: ['light'], defaultOn: false },
+  { id: 'churned', label: 'Churned', segments: ['churned'], defaultOn: false },
+  { id: 'new', label: 'New', segments: ['new'], defaultOn: false },
+] as const;
 
 /* ============================================================
    Helpers
@@ -101,6 +138,16 @@ function formatDuration(minutes: number): string {
   const rem = m % 60;
   if (h === 0) return `${rem}${LABELS.min}`;
   return `${h}${LABELS.hours}${rem > 0 ? `${rem}${LABELS.min}` : ''}`;
+}
+
+function formatDateCompact(dateStr: string): string {
+  const d = new Date(dateStr);
+  const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+  const mm = jst.getUTCMonth() + 1;
+  const dd = jst.getUTCDate();
+  const hh = String(jst.getUTCHours()).padStart(2, '0');
+  const mi = String(jst.getUTCMinutes()).padStart(2, '0');
+  return `${mm}/${dd} ${hh}:${mi}`;
 }
 
 function groupBySegmentRange(items: { segment: string }[]): { label: string; count: number }[] {
@@ -121,9 +168,11 @@ function groupBySegmentRange(items: { segment: string }[]): { label: string; cou
    ============================================================ */
 export default function SessionDetailPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const { user } = useAuth();
   const castName = decodeURIComponent(params.castName as string);
   const sessionId = decodeURIComponent(params.sessionId as string);
+  const urlMode = searchParams.get('mode') as BroadcastMode | null;
 
   const supabaseRef = useRef(createClient());
   const sb = supabaseRef.current;
@@ -133,11 +182,34 @@ export default function SessionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [mode, setMode] = useState<BroadcastMode>('post');
+  const [mode, setMode] = useState<BroadcastMode>(urlMode === 'pre' ? 'pre' : 'post');
   const [actions, setActions] = useState<SessionActions | null>(null);
   const [actionsLoading, setActionsLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [showFormula, setShowFormula] = useState<string | null>(null);
+
+  // Pre-broadcast state
+  const [segmentCounts, setSegmentCounts] = useState<Map<string, number>>(new Map());
+  const [selectedGroups, setSelectedGroups] = useState<Set<string>>(
+    new Set(SEGMENT_GROUPS.filter(g => g.defaultOn).map(g => g.id))
+  );
+  const [templates, setTemplates] = useState<DmTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [preLoading, setPreLoading] = useState(false);
+
+  // Computed: total send targets
+  const sendTargetCount = SEGMENT_GROUPS
+    .filter(g => selectedGroups.has(g.id))
+    .reduce((sum, g) => sum + g.segments.reduce((s, seg) => s + (segmentCounts.get(seg) || 0), 0), 0);
+
+  const selectedTemplateMsg = selectedTemplateId
+    ? templates.find(t => t.id === selectedTemplateId)?.message || ''
+    : LABELS.defaultTemplateText;
+
+  // Unhandled count (first_time_payers with dm_sent=false)
+  const unhandledCount = actions
+    ? actions.first_time_payers.filter(u => !u.dm_sent).length
+    : 0;
 
   useEffect(() => {
     if (!user) return;
@@ -146,6 +218,7 @@ export default function SessionDetailPage() {
     });
   }, [user, sb]);
 
+  // Load session summary
   useEffect(() => {
     if (!accountId) return;
     setLoading(true);
@@ -156,11 +229,9 @@ export default function SessionDetailPage() {
       p_session_id: sessionId,
     }).then(async ({ data, error: rpcError }) => {
       if (rpcError) {
-        console.warn('[Session] RPC error, fallback:', rpcError.message);
         await loadFallback();
         return;
       }
-
       const rows = Array.isArray(data) ? data : data ? [data] : [];
       if (rows.length > 0) {
         const row = rows[0] as SessionSummary;
@@ -174,7 +245,6 @@ export default function SessionDetailPage() {
         setLoading(false);
         return;
       }
-
       await loadFallback();
     });
   }, [accountId, sessionId, sb]);
@@ -197,14 +267,10 @@ export default function SessionDetailPage() {
     const users = new Set(msgs.filter(m => m.user_name).map(m => m.user_name));
     const totalTk = msgs.reduce((s, m) => s + (m.tokens > 0 ? m.tokens : 0), 0);
     const tips = msgs.filter(m => m.tokens > 0);
-
     const typeMap: Record<string, number> = {};
     for (const m of msgs) {
-      if (m.tokens > 0 && m.msg_type) {
-        typeMap[m.msg_type] = (typeMap[m.msg_type] || 0) + m.tokens;
-      }
+      if (m.tokens > 0 && m.msg_type) typeMap[m.msg_type] = (typeMap[m.msg_type] || 0) + m.tokens;
     }
-
     const userMap = new Map<string, { tokens: number; count: number }>();
     for (const m of tips) {
       if (!m.user_name) continue;
@@ -219,35 +285,28 @@ export default function SessionDetailPage() {
       .map(([name, v]) => ({ user_name: name, tokens: v.tokens, tip_count: v.count }));
 
     setSummary({
-      session_id: sessionId,
-      cast_name: msgs[0].cast_name,
-      session_title: msgs[0].session_title,
-      started_at: new Date(Math.min(...times)).toISOString(),
-      ended_at: new Date(Math.max(...times)).toISOString(),
+      session_id: sessionId, cast_name: msgs[0].cast_name, session_title: msgs[0].session_title,
+      started_at: new Date(Math.min(...times)).toISOString(), ended_at: new Date(Math.max(...times)).toISOString(),
       duration_minutes: Math.round((Math.max(...times) - Math.min(...times)) / 60000),
-      msg_count: msgs.length,
-      unique_users: users.size,
-      total_tokens: totalTk,
-      tip_count: tips.length,
-      tokens_by_type: typeMap,
-      top_users: top5,
-      prev_session_id: null,
-      prev_total_tokens: null,
-      prev_started_at: null,
-      change_pct: null,
+      msg_count: msgs.length, unique_users: users.size, total_tokens: totalTk, tip_count: tips.length,
+      tokens_by_type: typeMap, top_users: top5,
+      prev_session_id: null, prev_total_tokens: null, prev_started_at: null, change_pct: null,
     });
     setLoading(false);
   };
 
+  // Auto-detect mode (respect URL param)
   useEffect(() => {
+    if (urlMode === 'pre') { setMode('pre'); return; }
     if (!summary) return;
     const endedAt = new Date(summary.ended_at).getTime();
     const tenMinAgo = Date.now() - 10 * 60 * 1000;
     setMode(endedAt < tenMinAgo ? 'post' : 'live');
-  }, [summary]);
+  }, [summary, urlMode]);
 
+  // Load actions for post AND pre modes
   const loadActions = useCallback(async () => {
-    if (!accountId || mode !== 'post') return;
+    if (!accountId || mode === 'live') return;
     setActionsLoading(true);
     const { data, error: actErr } = await sb.rpc('get_session_actions', {
       p_account_id: accountId,
@@ -265,16 +324,65 @@ export default function SessionDetailPage() {
 
   useEffect(() => { loadActions(); }, [loadActions]);
 
+  // Load pre-broadcast data (segments + templates)
+  useEffect(() => {
+    if (mode !== 'pre' || !accountId) return;
+    const loadPreData = async () => {
+      setPreLoading(true);
+      // Load segment counts
+      const { data: segData } = await sb
+        .from('paid_users')
+        .select('segment')
+        .eq('account_id', accountId);
+      if (segData) {
+        const counts = new Map<string, number>();
+        segData.forEach(r => {
+          const s = r.segment || 'unknown';
+          counts.set(s, (counts.get(s) || 0) + 1);
+        });
+        setSegmentCounts(counts);
+      }
+      // Load templates
+      const { data: tplData } = await sb
+        .from('dm_templates')
+        .select('id, name, message')
+        .eq('account_id', accountId)
+        .order('created_at', { ascending: false });
+      if (tplData && tplData.length > 0) {
+        setTemplates(tplData);
+        if (!selectedTemplateId) setSelectedTemplateId(tplData[0].id);
+      }
+      setPreLoading(false);
+    };
+    loadPreData();
+  }, [mode, accountId, sb]);
+
+  // Toast auto-clear
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
 
+  const toggleGroup = (groupId: string) => {
+    setSelectedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
+      return next;
+    });
+  };
+
   const modeLabels: Record<BroadcastMode, string> = {
     pre: LABELS.preBroadcast,
     live: LABELS.duringBroadcast,
     post: LABELS.postBroadcast,
+  };
+
+  // Mode colors: pre=amber, live=red(disabled), post=emerald
+  const modeColors: Record<BroadcastMode, { bg: string; border: string; text: string }> = {
+    pre:  { bg: 'rgba(245,158,11,0.1)', border: 'rgb(245,158,11)', text: 'rgb(251,191,36)' },
+    live: { bg: 'rgba(239,68,68,0.1)', border: 'rgb(239,68,68)', text: 'rgb(248,113,113)' },
+    post: { bg: 'rgba(16,185,129,0.1)', border: 'rgb(16,185,129)', text: 'rgb(52,211,153)' },
   };
 
   return (
@@ -286,11 +394,9 @@ export default function SessionDetailPage() {
             href={`/casts/${encodeURIComponent(castName)}/sessions`}
             className="text-xs px-2 py-1 rounded hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-muted)' }}
-          >
-            {`← ${LABELS.backToList}`}
-          </Link>
+          >{`← ${LABELS.backToList}`}</Link>
           <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-            {`📺 ${LABELS.sessionDetail}`}
+            {mode === 'pre' ? `📡 ${LABELS.preBroadcastPrep}` : `📺 ${LABELS.sessionDetail}`}
           </h1>
         </div>
 
@@ -299,27 +405,23 @@ export default function SessionDetailPage() {
           <div className="flex gap-1">
             {(['pre', 'live', 'post'] as BroadcastMode[]).map(m => {
               const isActive = mode === m;
-              const isPost = m === 'post';
+              const isLive = m === 'live';
+              const colors = modeColors[m];
               return (
                 <button
                   key={m}
                   onClick={() => {
-                    if (isPost) {
-                      setMode('post');
-                    } else {
-                      setToast(LABELS.developing);
-                    }
+                    if (isLive) { setToast(LABELS.developing); return; }
+                    setMode(m);
                   }}
                   className="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all"
                   style={{
-                    background: isActive ? 'rgba(16,185,129,0.1)' : 'transparent',
-                    borderBottom: isActive ? '2px solid rgb(16,185,129)' : '2px solid transparent',
-                    color: isActive ? 'rgb(52,211,153)' : 'var(--text-muted)',
-                    opacity: isPost ? 1 : 0.6,
+                    background: isActive ? colors.bg : 'transparent',
+                    borderBottom: isActive ? `2px solid ${colors.border}` : '2px solid transparent',
+                    color: isActive ? colors.text : 'var(--text-muted)',
+                    opacity: isLive ? 0.6 : 1,
                   }}
-                >
-                  {modeLabels[m]}
-                </button>
+                >{modeLabels[m]}</button>
               );
             })}
           </div>
@@ -338,314 +440,466 @@ export default function SessionDetailPage() {
           </div>
         ) : summary ? (
           <>
-            {/* Session Info */}
-            <div className="glass-card p-5">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h2 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
-                    {summary.session_title || summary.cast_name}
+            {/* ============================================================
+               PRE-BROADCAST MODE
+               ============================================================ */}
+            {mode === 'pre' && (
+              <>
+                {/* Summary Bar */}
+                <div className="rounded-xl p-5 border-2" style={{ borderColor: 'rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.05)' }}>
+                  <h2 className="text-sm font-bold mb-2" style={{ color: 'rgb(251,191,36)' }}>
+                    {`📡 ${castName} ${LABELS.preBroadcastPrep}`}
                   </h2>
-                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                    {formatJST(summary.started_at)} ~ {formatJST(summary.ended_at)}
-                    <span className="ml-3">{`⏱ ${formatDuration(summary.duration_minutes)}`}</span>
-                  </p>
+                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                    <span>{`${LABELS.prevBroadcast}: ${formatDateCompact(summary.started_at)}~${formatDateCompact(summary.ended_at).split(' ')[1]}`}</span>
+                    <span>{`${LABELS.sales}: ${tokensToJPY(summary.total_tokens, COIN_RATE)}`}</span>
+                    <span>{`${LABELS.prevAttendance}: ${summary.unique_users}${LABELS.personSuffix}`}</span>
+                    <span>{`${LABELS.prevNewUsers}: ${actions ? actions.first_time_payers.length : '-'}${LABELS.personSuffix}`}</span>
+                  </div>
                 </div>
-                {summary.change_pct !== null && (
-                  <div className="text-right">
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.prevCompare}</p>
-                    <p className="text-sm font-bold" style={{
-                      color: summary.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)',
-                    }}>
-                      {summary.change_pct >= 0 ? '+' : ''}{summary.change_pct}%
-                    </p>
+
+                {/* DM Section */}
+                {preLoading ? (
+                  <div className="glass-card p-8 text-center">
+                    <div className="inline-block w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                    <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>{LABELS.loadingPreData}</p>
+                  </div>
+                ) : (
+                  <div className="glass-card p-5 space-y-5">
+                    <h3 className="text-sm font-bold" style={{ color: 'rgb(251,191,36)' }}>{`📨 ${LABELS.preDm}`}</h3>
+
+                    {/* Segment Selection */}
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text-muted)' }}>{LABELS.segmentSelect}</p>
+                      {segmentCounts.size === 0 ? (
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.dataNotAvailable}</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {SEGMENT_GROUPS.map(g => {
+                            const count = g.segments.reduce((s, seg) => s + (segmentCounts.get(seg) || 0), 0);
+                            const checked = selectedGroups.has(g.id);
+                            return (
+                              <label
+                                key={g.id}
+                                className="flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer transition-all"
+                                style={{
+                                  background: checked ? 'rgba(245,158,11,0.08)' : 'rgba(0,0,0,0.1)',
+                                  border: `1px solid ${checked ? 'rgba(245,158,11,0.3)' : 'rgba(255,255,255,0.04)'}`,
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleGroup(g.id)}
+                                  className="w-4 h-4 rounded accent-amber-500"
+                                />
+                                <span className="text-xs font-semibold flex-1" style={{ color: checked ? 'rgb(251,191,36)' : 'var(--text-secondary)' }}>
+                                  {g.label}
+                                </span>
+                                <span className="text-xs font-bold" style={{ color: 'var(--text-muted)' }}>
+                                  {count}{LABELS.personSuffix}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {segmentCounts.size > 0 && (
+                        <div className="mt-3 px-4 py-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.06)' }}>
+                          <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>{LABELS.sendTarget}: </span>
+                          <span className="text-sm font-bold" style={{ color: 'rgb(251,191,36)' }}>{sendTargetCount}{LABELS.personSuffix}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Template Selection */}
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>{LABELS.templateSelect}</p>
+                      {templates.length > 0 && (
+                        <select
+                          value={selectedTemplateId || ''}
+                          onChange={e => setSelectedTemplateId(e.target.value || null)}
+                          className="input-glass w-full text-xs mb-3"
+                        >
+                          <option value="">---</option>
+                          {templates.map(t => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                        </select>
+                      )}
+                      <div className="rounded-lg p-4 text-xs whitespace-pre-wrap" style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', lineHeight: '1.8' }}>
+                        {selectedTemplateMsg}
+                      </div>
+                    </div>
+
+                    {/* BYAF */}
+                    <div className="rounded-lg px-4 py-3 border" style={{ borderColor: 'rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.04)' }}>
+                      <p className="text-[10px] font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>{LABELS.byafLabel}</p>
+                      <p className="text-xs italic" style={{ color: 'rgb(251,191,36)' }}>{`「${LABELS.byafText}」`}</p>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex items-center gap-3 pt-2">
+                      <button
+                        onClick={() => setToast(LABELS.notImplemented)}
+                        className="btn-ghost text-xs px-4 py-2"
+                      >{LABELS.preview}</button>
+                      <button
+                        onClick={() => setToast(LABELS.notImplemented)}
+                        className="text-xs px-5 py-2.5 rounded-lg font-bold transition-all"
+                        style={{ background: 'linear-gradient(135deg, rgb(245,158,11), rgb(217,119,6))', color: '#fff' }}
+                      >{`📤 ${LABELS.bulkSend}`}</button>
+                    </div>
                   </div>
                 )}
-              </div>
 
-              {/* KPI Grid */}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {[
-                  { label: LABELS.sales, value: formatTokens(summary.total_tokens), sub: tokensToJPY(summary.total_tokens, COIN_RATE), color: 'var(--accent-amber)' },
-                  { label: LABELS.tipCount, value: `${summary.tip_count}`, sub: `${summary.tip_count > 0 ? `${Math.round(summary.total_tokens / summary.tip_count)} tk/tip` : ''}`, color: 'var(--accent-primary)' },
-                  { label: LABELS.users, value: `${summary.unique_users}`, sub: '', color: 'var(--accent-purple)' },
-                  { label: LABELS.messages, value: `${summary.msg_count}`, sub: '', color: 'var(--text-primary)' },
-                ].map(kpi => (
-                  <div key={kpi.label} className="glass-panel px-4 py-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>{kpi.label}</p>
-                    <p className="text-base font-bold" style={{ color: kpi.color }}>{kpi.value}</p>
-                    {kpi.sub && <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{kpi.sub}</p>}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Tokens by msg_type */}
-            {summary.tokens_by_type && Object.keys(summary.tokens_by_type).length > 0 && (
-              <div className="glass-card p-5">
-                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`💰 ${LABELS.salesBreakdown}`}</h3>
-                <div className="space-y-2">
-                  {(() => {
-                    const typeTotal = Object.values(summary.tokens_by_type).reduce((s, v) => s + v, 0);
-                    return Object.entries(summary.tokens_by_type)
-                    .sort(([, a], [, b]) => b - a)
-                    .map(([type, tokens]) => {
-                      const pct = typeTotal > 0 ? Math.round(tokens / typeTotal * 100) : 0;
-                      return (
-                        <div key={type} className="flex items-center gap-3">
-                          <span className="text-xs w-24 text-right" style={{ color: 'var(--text-secondary)' }}>{type}</span>
-                          <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                            <div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'linear-gradient(90deg, var(--accent-amber), var(--accent-green))' }} />
-                          </div>
-                          <span className="text-xs font-bold min-w-[80px] text-right" style={{ color: 'var(--accent-amber)' }}>{formatTokens(tokens)}</span>
-                          <span className="text-[10px] min-w-[40px] text-right" style={{ color: 'var(--text-muted)' }}>{pct}%</span>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
-            )}
-
-            {/* Top Users */}
-            {summary.top_users && summary.top_users.length > 0 && (
-              <div className="glass-card p-5">
-                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`👑 ${LABELS.topUsers}`}</h3>
-                <div className="space-y-1.5">
-                  {summary.top_users.map((u, i) => (
-                    <div key={u.user_name} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.02]">
-                      <span className="text-xs font-bold w-6" style={{ color: i < 3 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>#{i + 1}</span>
-                      <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }} onClick={e => e.stopPropagation()}>
-                        {u.user_name}
-                      </Link>
-                      <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>{u.tip_count} tips</span>
-                      <span className="text-xs font-bold min-w-[80px] text-right" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.tokens)}</span>
-                      <span className="text-[10px] min-w-[60px] text-right" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.tokens, COIN_RATE)}</span>
+                {/* Previous Result Mini Section */}
+                <div className="glass-card p-5">
+                  <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>
+                    {`📊 ${LABELS.prevResult}（${formatDateCompact(summary.started_at).split(' ')[0]}配信）`}
+                  </h3>
+                  <div className="grid grid-cols-3 gap-4 text-center mb-4">
+                    <div>
+                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.sales}</p>
+                      <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(summary.total_tokens, COIN_RATE)}</p>
+                      {summary.change_pct !== null && (
+                        <p className="text-[10px]" style={{ color: summary.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                          {`(${LABELS.prevCompare} ${summary.change_pct >= 0 ? '+' : ''}${summary.change_pct}%) ${summary.change_pct >= 0 ? '⇑' : '⇓'}`}
+                        </p>
+                      )}
                     </div>
-                  ))}
+                    <div>
+                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.attendance}</p>
+                      <p className="text-sm font-bold" style={{ color: 'var(--accent-primary)' }}>{summary.unique_users}{LABELS.personSuffix}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.newPayers}</p>
+                      <p className="text-sm font-bold" style={{ color: 'var(--accent-purple)' }}>
+                        {actions ? actions.first_time_payers.length : '-'}{LABELS.personSuffix}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Unhandled alert */}
+                  {unhandledCount > 0 && (
+                    <div className="flex items-center justify-between px-4 py-3 rounded-lg border" style={{ background: 'rgba(239,68,68,0.06)', borderColor: 'rgba(239,68,68,0.2)' }}>
+                      <p className="text-xs" style={{ color: 'rgb(248,113,113)' }}>
+                        {`⚠️ ${LABELS.unhandledLabel}: ${LABELS.firstTimePayers.replace(/^.*/, '')}${unhandledCount}${LABELS.personSuffix}に${LABELS.thanksDmUnsent}`}
+                      </p>
+                      <button
+                        onClick={() => setMode('post')}
+                        className="text-[10px] px-3 py-1.5 rounded-lg font-semibold transition-colors"
+                        style={{ background: 'rgba(16,185,129,0.15)', color: 'rgb(52,211,153)' }}
+                      >{`→ ${LABELS.goToPostMode}`}</button>
+                    </div>
+                  )}
                 </div>
-              </div>
+              </>
             )}
 
-            {/* Previous Session Comparison */}
-            {summary.prev_session_id && summary.prev_total_tokens !== null && (
-              <div className="glass-card p-5">
-                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`📊 ${LABELS.prevComparison}`}</h3>
-                <div className="grid grid-cols-3 gap-4 text-center">
-                  <div>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.prevSales}</p>
-                    <p className="text-sm font-bold" style={{ color: 'var(--text-secondary)' }}>{formatTokens(summary.prev_total_tokens)}</p>
-                    {summary.prev_started_at && (
-                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatJST(summary.prev_started_at).split(' ')[0]}</p>
-                    )}
-                  </div>
-                  <div>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.currentSales}</p>
-                    <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(summary.total_tokens)}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.changeRate}</p>
-                    <p className="text-sm font-bold" style={{
-                      color: (summary.change_pct ?? 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)',
-                    }}>
-                      {summary.change_pct !== null ? `${summary.change_pct >= 0 ? '+' : ''}${summary.change_pct}%` : '-'}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Post-broadcast mode: Action Panel + Segment Breakdown */}
-            {mode === 'post' && (
+            {/* ============================================================
+               POST-BROADCAST MODE (and session info for non-pre modes)
+               ============================================================ */}
+            {mode !== 'pre' && (
               <>
-                {actionsLoading ? (
-                  <div className="glass-card p-8 text-center">
-                    <div className="inline-block w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-                    <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>{LABELS.analyzingActions}</p>
-                  </div>
-                ) : actions ? (
-                  <>
-                    {/* Action Panel Header */}
-                    <div className="flex items-center gap-2 pt-2">
-                      <span className="text-base">{'⚡'}</span>
-                      <h3 className="text-sm font-bold" style={{ color: 'rgb(52,211,153)' }}>{LABELS.actionHeader}</h3>
+                {/* Session Info */}
+                <div className="glass-card p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h2 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+                        {summary.session_title || summary.cast_name}
+                      </h2>
+                      <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                        {formatJST(summary.started_at)} ~ {formatJST(summary.ended_at)}
+                        <span className="ml-3">{`⏱ ${formatDuration(summary.duration_minutes)}`}</span>
+                      </p>
                     </div>
-
-                    {/* 1. First-time Payers */}
-                    <div className="rounded-xl p-5 border" style={{ background: 'rgba(249,115,22,0.08)', borderColor: 'rgba(249,115,22,0.25)' }}>
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="text-xs font-bold" style={{ color: 'rgb(251,146,60)' }}>
-                          {`🟠 ${LABELS.firstTimePayers} (${actions.first_time_payers.length}${LABELS.personSuffix})`}
-                        </h4>
-                        {actions.first_time_payers.length > 0 && (
-                          <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold transition-colors" style={{ background: 'rgba(249,115,22,0.2)', color: 'rgb(251,146,60)' }}>
-                            {LABELS.sendTemplate}
-                          </button>
-                        )}
-                      </div>
-                      {actions.first_time_payers.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
-                      ) : (
-                        <div className="space-y-1.5">
-                          {actions.first_time_payers.map(u => (
-                            <div key={u.user_name} className="flex items-center gap-3 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
-                              <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
-                              <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
-                              <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
-                              {u.dm_sent && (
-                                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: 'rgb(74,222,128)' }}>{`✅${LABELS.dmSentBadge}`}</span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 2. High Spenders */}
-                    <div className="rounded-xl p-5 border" style={{ background: 'rgba(59,130,246,0.08)', borderColor: 'rgba(59,130,246,0.25)' }}>
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="text-xs font-bold" style={{ color: 'rgb(96,165,250)' }}>
-                          {`🔵 ${LABELS.highSpenders} (${actions.high_spenders.length}${LABELS.personSuffix})`}
-                        </h4>
-                        {actions.high_spenders.length > 0 && (
-                          <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold transition-colors" style={{ background: 'rgba(59,130,246,0.2)', color: 'rgb(96,165,250)' }}>
-                            {LABELS.createDm}
-                          </button>
-                        )}
-                      </div>
-                      {actions.high_spenders.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
-                      ) : (
-                        <div className="space-y-1.5">
-                          {actions.high_spenders.map(u => (
-                            <div key={u.user_name} className="flex items-center gap-3 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
-                              <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
-                              <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
-                              <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 3. Visited No Action */}
-                    <div className="rounded-xl p-5 border" style={{ background: 'rgba(234,179,8,0.08)', borderColor: 'rgba(234,179,8,0.25)' }}>
-                      <div className="flex items-center justify-between mb-3">
-                        <h4 className="text-xs font-bold" style={{ color: 'rgb(250,204,21)' }}>
-                          {`🟡 ${LABELS.visitedNoAction} (${actions.visited_no_action.length}${LABELS.personSuffix})`}
-                        </h4>
-                        {actions.visited_no_action.length > 0 && (
-                          <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold transition-colors" style={{ background: 'rgba(234,179,8,0.2)', color: 'rgb(250,204,21)' }}>
-                            {LABELS.followDm}
-                          </button>
-                        )}
-                      </div>
-                      {actions.visited_no_action.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
-                      ) : (
-                        <div className="flex flex-wrap gap-2">
-                          {groupBySegmentRange(actions.visited_no_action).map(g => (
-                            <span key={g.label} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)' }}>
-                              {g.label}: <span className="font-bold" style={{ color: 'rgb(250,204,21)' }}>{g.count}{LABELS.personSuffix}</span>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 4. DM No Visit */}
-                    <div className="rounded-xl p-5 border" style={{ background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.25)' }}>
-                      <h4 className="text-xs font-bold mb-3" style={{ color: 'rgb(248,113,113)' }}>
-                        {`🔴 ${LABELS.dmNoVisit} (${actions.dm_no_visit.length}${LABELS.personSuffix})`}
-                      </h4>
-                      {actions.dm_no_visit.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
-                      ) : (
-                        <>
-                          <div className="flex flex-wrap gap-2 mb-3">
-                            {groupBySegmentRange(actions.dm_no_visit).map(g => (
-                              <span key={g.label} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)' }}>
-                                {g.label}: <span className="font-bold" style={{ color: 'rgb(248,113,113)' }}>{g.count}{LABELS.personSuffix}</span>
-                              </span>
-                            ))}
-                          </div>
-                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.reviewDmTarget}</p>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Segment Breakdown Table */}
-                    {actions.segment_breakdown && actions.segment_breakdown.length > 0 && (
-                      <div className="glass-card p-5">
-                        <h3 className="text-xs font-bold mb-4" style={{ color: 'var(--text-secondary)' }}>{`📊 ${LABELS.segmentBreakdown}`}</h3>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr style={{ color: 'var(--text-muted)' }}>
-                                <th className="text-left pb-2 pr-4 font-semibold">{LABELS.segment}</th>
-                                <th className="text-right pb-2 px-2 font-semibold">{LABELS.dmSentCol}</th>
-                                <th className="text-right pb-2 px-2 font-semibold">{LABELS.visited}</th>
-                                <th className="text-right pb-2 px-2 font-semibold">{LABELS.paid}</th>
-                                <th className="text-right pb-2 px-2 font-semibold">Visit CVR</th>
-                                <th className="text-right pb-2 pl-2 font-semibold">Payment CVR</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {actions.segment_breakdown.map(row => {
-                                const visitCvr = row.dm_sent > 0 ? (row.visited / row.dm_sent * 100).toFixed(1) : '-';
-                                const payCvr = row.visited > 0 ? (row.paid / row.visited * 100).toFixed(1) : '-';
-                                return (
-                                  <tr key={row.segment} className="border-t" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
-                                    <td className="py-2 pr-4 font-bold" style={{ color: 'var(--accent-primary)' }}>{row.segment}</td>
-                                    <td className="py-2 px-2 text-right" style={{ color: 'var(--text-secondary)' }}>{row.dm_sent}</td>
-                                    <td className="py-2 px-2 text-right" style={{ color: 'var(--text-secondary)' }}>{row.visited}</td>
-                                    <td className="py-2 px-2 text-right" style={{ color: 'var(--accent-amber)' }}>{row.paid}</td>
-                                    <td className="py-2 px-2 text-right">
-                                      <span style={{ color: 'var(--accent-green)' }}>{visitCvr !== '-' ? `${visitCvr}%` : '-'}</span>
-                                      {visitCvr !== '-' && (
-                                        <button onClick={() => setShowFormula(showFormula === `${row.segment}-visit` ? null : `${row.segment}-visit`)} className="ml-1 opacity-50 hover:opacity-100 transition-opacity" title={LABELS.showFormulaTitle}>{'📐'}</button>
-                                      )}
-                                      {showFormula === `${row.segment}-visit` && (
-                                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--accent-amber)' }}>{`${row.visited}${LABELS.personSuffix} / ${row.dm_sent}${LABELS.personSuffix} = ${visitCvr}%`}</div>
-                                      )}
-                                    </td>
-                                    <td className="py-2 pl-2 text-right">
-                                      <span style={{ color: 'var(--accent-purple)' }}>{payCvr !== '-' ? `${payCvr}%` : '-'}</span>
-                                      {payCvr !== '-' && (
-                                        <button onClick={() => setShowFormula(showFormula === `${row.segment}-pay` ? null : `${row.segment}-pay`)} className="ml-1 opacity-50 hover:opacity-100 transition-opacity" title={LABELS.showFormulaTitle}>{'📐'}</button>
-                                      )}
-                                      {showFormula === `${row.segment}-pay` && (
-                                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--accent-amber)' }}>{`${row.paid}${LABELS.personSuffix} / ${row.visited}${LABELS.personSuffix} = ${payCvr}%`}</div>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                              {/* Totals row */}
-                              {(() => {
-                                const totals = actions.segment_breakdown.reduce(
-                                  (acc, r) => ({ dm: acc.dm + r.dm_sent, vis: acc.vis + r.visited, pay: acc.pay + r.paid }),
-                                  { dm: 0, vis: 0, pay: 0 }
-                                );
-                                const totalVisitCvr = totals.dm > 0 ? (totals.vis / totals.dm * 100).toFixed(1) : '-';
-                                const totalPayCvr = totals.vis > 0 ? (totals.pay / totals.vis * 100).toFixed(1) : '-';
-                                return (
-                                  <tr className="border-t-2" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
-                                    <td className="py-2 pr-4 font-bold" style={{ color: 'var(--text-primary)' }}>{LABELS.total}</td>
-                                    <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--text-primary)' }}>{totals.dm}</td>
-                                    <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--text-primary)' }}>{totals.vis}</td>
-                                    <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--accent-amber)' }}>{totals.pay}</td>
-                                    <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--accent-green)' }}>{totalVisitCvr !== '-' ? `${totalVisitCvr}%` : '-'}</td>
-                                    <td className="py-2 pl-2 text-right font-bold" style={{ color: 'var(--accent-purple)' }}>{totalPayCvr !== '-' ? `${totalPayCvr}%` : '-'}</td>
-                                  </tr>
-                                );
-                              })()}
-                            </tbody>
-                          </table>
-                        </div>
+                    {summary.change_pct !== null && (
+                      <div className="text-right">
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.prevCompare}</p>
+                        <p className="text-sm font-bold" style={{
+                          color: summary.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)',
+                        }}>
+                          {summary.change_pct >= 0 ? '+' : ''}{summary.change_pct}%
+                        </p>
                       </div>
                     )}
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {[
+                      { label: LABELS.sales, value: formatTokens(summary.total_tokens), sub: tokensToJPY(summary.total_tokens, COIN_RATE), color: 'var(--accent-amber)' },
+                      { label: LABELS.tipCount, value: `${summary.tip_count}`, sub: `${summary.tip_count > 0 ? `${Math.round(summary.total_tokens / summary.tip_count)} tk/tip` : ''}`, color: 'var(--accent-primary)' },
+                      { label: LABELS.users, value: `${summary.unique_users}`, sub: '', color: 'var(--accent-purple)' },
+                      { label: LABELS.messages, value: `${summary.msg_count}`, sub: '', color: 'var(--text-primary)' },
+                    ].map(kpi => (
+                      <div key={kpi.label} className="glass-panel px-4 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>{kpi.label}</p>
+                        <p className="text-base font-bold" style={{ color: kpi.color }}>{kpi.value}</p>
+                        {kpi.sub && <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{kpi.sub}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Tokens by msg_type */}
+                {summary.tokens_by_type && Object.keys(summary.tokens_by_type).length > 0 && (
+                  <div className="glass-card p-5">
+                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`💰 ${LABELS.salesBreakdown}`}</h3>
+                    <div className="space-y-2">
+                      {(() => {
+                        const typeTotal = Object.values(summary.tokens_by_type).reduce((s, v) => s + v, 0);
+                        return Object.entries(summary.tokens_by_type)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([type, tokens]) => {
+                            const pct = typeTotal > 0 ? Math.round(tokens / typeTotal * 100) : 0;
+                            return (
+                              <div key={type} className="flex items-center gap-3">
+                                <span className="text-xs w-24 text-right" style={{ color: 'var(--text-secondary)' }}>{type}</span>
+                                <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                  <div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'linear-gradient(90deg, var(--accent-amber), var(--accent-green))' }} />
+                                </div>
+                                <span className="text-xs font-bold min-w-[80px] text-right" style={{ color: 'var(--accent-amber)' }}>{formatTokens(tokens)}</span>
+                                <span className="text-[10px] min-w-[40px] text-right" style={{ color: 'var(--text-muted)' }}>{pct}%</span>
+                              </div>
+                            );
+                          });
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                {/* Top Users */}
+                {summary.top_users && summary.top_users.length > 0 && (
+                  <div className="glass-card p-5">
+                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`👑 ${LABELS.topUsers}`}</h3>
+                    <div className="space-y-1.5">
+                      {summary.top_users.map((u, i) => (
+                        <div key={u.user_name} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.02]">
+                          <span className="text-xs font-bold w-6" style={{ color: i < 3 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>#{i + 1}</span>
+                          <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }} onClick={e => e.stopPropagation()}>{u.user_name}</Link>
+                          <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>{u.tip_count} tips</span>
+                          <span className="text-xs font-bold min-w-[80px] text-right" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.tokens)}</span>
+                          <span className="text-[10px] min-w-[60px] text-right" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.tokens, COIN_RATE)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Previous Session Comparison */}
+                {summary.prev_session_id && summary.prev_total_tokens !== null && (
+                  <div className="glass-card p-5">
+                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`📊 ${LABELS.prevComparison}`}</h3>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div>
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.prevSales}</p>
+                        <p className="text-sm font-bold" style={{ color: 'var(--text-secondary)' }}>{formatTokens(summary.prev_total_tokens)}</p>
+                        {summary.prev_started_at && (
+                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatJST(summary.prev_started_at).split(' ')[0]}</p>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.currentSales}</p>
+                        <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(summary.total_tokens)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.changeRate}</p>
+                        <p className="text-sm font-bold" style={{
+                          color: (summary.change_pct ?? 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)',
+                        }}>
+                          {summary.change_pct !== null ? `${summary.change_pct >= 0 ? '+' : ''}${summary.change_pct}%` : '-'}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Post-broadcast actions */}
+                {mode === 'post' && (
+                  <>
+                    {actionsLoading ? (
+                      <div className="glass-card p-8 text-center">
+                        <div className="inline-block w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                        <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>{LABELS.analyzingActions}</p>
+                      </div>
+                    ) : actions ? (
+                      <>
+                        <div className="flex items-center gap-2 pt-2">
+                          <span className="text-base">{'⚡'}</span>
+                          <h3 className="text-sm font-bold" style={{ color: 'rgb(52,211,153)' }}>{LABELS.actionHeader}</h3>
+                        </div>
+
+                        {/* 1. First-time Payers */}
+                        <div className="rounded-xl p-5 border" style={{ background: 'rgba(249,115,22,0.08)', borderColor: 'rgba(249,115,22,0.25)' }}>
+                          <div className="flex items-center justify-between mb-3">
+                            <h4 className="text-xs font-bold" style={{ color: 'rgb(251,146,60)' }}>
+                              {`🟠 ${LABELS.firstTimePayers} (${actions.first_time_payers.length}${LABELS.personSuffix})`}
+                            </h4>
+                            {actions.first_time_payers.length > 0 && (
+                              <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold" style={{ background: 'rgba(249,115,22,0.2)', color: 'rgb(251,146,60)' }}>{LABELS.sendTemplate}</button>
+                            )}
+                          </div>
+                          {actions.first_time_payers.length === 0 ? (
+                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {actions.first_time_payers.map(u => (
+                                <div key={u.user_name} className="flex items-center gap-3 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                  <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
+                                  <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
+                                  <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
+                                  {u.dm_sent && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: 'rgb(74,222,128)' }}>{`✅${LABELS.dmSentBadge}`}</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 2. High Spenders */}
+                        <div className="rounded-xl p-5 border" style={{ background: 'rgba(59,130,246,0.08)', borderColor: 'rgba(59,130,246,0.25)' }}>
+                          <div className="flex items-center justify-between mb-3">
+                            <h4 className="text-xs font-bold" style={{ color: 'rgb(96,165,250)' }}>
+                              {`🔵 ${LABELS.highSpenders} (${actions.high_spenders.length}${LABELS.personSuffix})`}
+                            </h4>
+                            {actions.high_spenders.length > 0 && (
+                              <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold" style={{ background: 'rgba(59,130,246,0.2)', color: 'rgb(96,165,250)' }}>{LABELS.createDm}</button>
+                            )}
+                          </div>
+                          {actions.high_spenders.length === 0 ? (
+                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {actions.high_spenders.map(u => (
+                                <div key={u.user_name} className="flex items-center gap-3 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                  <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
+                                  <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
+                                  <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 3. Visited No Action */}
+                        <div className="rounded-xl p-5 border" style={{ background: 'rgba(234,179,8,0.08)', borderColor: 'rgba(234,179,8,0.25)' }}>
+                          <div className="flex items-center justify-between mb-3">
+                            <h4 className="text-xs font-bold" style={{ color: 'rgb(250,204,21)' }}>
+                              {`🟡 ${LABELS.visitedNoAction} (${actions.visited_no_action.length}${LABELS.personSuffix})`}
+                            </h4>
+                            {actions.visited_no_action.length > 0 && (
+                              <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold" style={{ background: 'rgba(234,179,8,0.2)', color: 'rgb(250,204,21)' }}>{LABELS.followDm}</button>
+                            )}
+                          </div>
+                          {actions.visited_no_action.length === 0 ? (
+                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
+                          ) : (
+                            <div className="flex flex-wrap gap-2">
+                              {groupBySegmentRange(actions.visited_no_action).map(g => (
+                                <span key={g.label} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)' }}>
+                                  {g.label}: <span className="font-bold" style={{ color: 'rgb(250,204,21)' }}>{g.count}{LABELS.personSuffix}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 4. DM No Visit */}
+                        <div className="rounded-xl p-5 border" style={{ background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.25)' }}>
+                          <h4 className="text-xs font-bold mb-3" style={{ color: 'rgb(248,113,113)' }}>
+                            {`🔴 ${LABELS.dmNoVisit} (${actions.dm_no_visit.length}${LABELS.personSuffix})`}
+                          </h4>
+                          {actions.dm_no_visit.length === 0 ? (
+                            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
+                          ) : (
+                            <>
+                              <div className="flex flex-wrap gap-2 mb-3">
+                                {groupBySegmentRange(actions.dm_no_visit).map(g => (
+                                  <span key={g.label} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)' }}>
+                                    {g.label}: <span className="font-bold" style={{ color: 'rgb(248,113,113)' }}>{g.count}{LABELS.personSuffix}</span>
+                                  </span>
+                                ))}
+                              </div>
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.reviewDmTarget}</p>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Segment Breakdown Table */}
+                        {actions.segment_breakdown && actions.segment_breakdown.length > 0 && (
+                          <div className="glass-card p-5">
+                            <h3 className="text-xs font-bold mb-4" style={{ color: 'var(--text-secondary)' }}>{`📊 ${LABELS.segmentBreakdown}`}</h3>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr style={{ color: 'var(--text-muted)' }}>
+                                    <th className="text-left pb-2 pr-4 font-semibold">{LABELS.segment}</th>
+                                    <th className="text-right pb-2 px-2 font-semibold">{LABELS.dmSentCol}</th>
+                                    <th className="text-right pb-2 px-2 font-semibold">{LABELS.visited}</th>
+                                    <th className="text-right pb-2 px-2 font-semibold">{LABELS.paid}</th>
+                                    <th className="text-right pb-2 px-2 font-semibold">Visit CVR</th>
+                                    <th className="text-right pb-2 pl-2 font-semibold">Payment CVR</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {actions.segment_breakdown.map(row => {
+                                    const visitCvr = row.dm_sent > 0 ? (row.visited / row.dm_sent * 100).toFixed(1) : '-';
+                                    const payCvr = row.visited > 0 ? (row.paid / row.visited * 100).toFixed(1) : '-';
+                                    return (
+                                      <tr key={row.segment} className="border-t" style={{ borderColor: 'rgba(255,255,255,0.04)' }}>
+                                        <td className="py-2 pr-4 font-bold" style={{ color: 'var(--accent-primary)' }}>{row.segment}</td>
+                                        <td className="py-2 px-2 text-right" style={{ color: 'var(--text-secondary)' }}>{row.dm_sent}</td>
+                                        <td className="py-2 px-2 text-right" style={{ color: 'var(--text-secondary)' }}>{row.visited}</td>
+                                        <td className="py-2 px-2 text-right" style={{ color: 'var(--accent-amber)' }}>{row.paid}</td>
+                                        <td className="py-2 px-2 text-right">
+                                          <span style={{ color: 'var(--accent-green)' }}>{visitCvr !== '-' ? `${visitCvr}%` : '-'}</span>
+                                          {visitCvr !== '-' && (
+                                            <button onClick={() => setShowFormula(showFormula === `${row.segment}-visit` ? null : `${row.segment}-visit`)} className="ml-1 opacity-50 hover:opacity-100 transition-opacity" title={LABELS.showFormulaTitle}>{'📐'}</button>
+                                          )}
+                                          {showFormula === `${row.segment}-visit` && (
+                                            <div className="text-[10px] mt-0.5" style={{ color: 'var(--accent-amber)' }}>{`${row.visited}${LABELS.personSuffix} / ${row.dm_sent}${LABELS.personSuffix} = ${visitCvr}%`}</div>
+                                          )}
+                                        </td>
+                                        <td className="py-2 pl-2 text-right">
+                                          <span style={{ color: 'var(--accent-purple)' }}>{payCvr !== '-' ? `${payCvr}%` : '-'}</span>
+                                          {payCvr !== '-' && (
+                                            <button onClick={() => setShowFormula(showFormula === `${row.segment}-pay` ? null : `${row.segment}-pay`)} className="ml-1 opacity-50 hover:opacity-100 transition-opacity" title={LABELS.showFormulaTitle}>{'📐'}</button>
+                                          )}
+                                          {showFormula === `${row.segment}-pay` && (
+                                            <div className="text-[10px] mt-0.5" style={{ color: 'var(--accent-amber)' }}>{`${row.paid}${LABELS.personSuffix} / ${row.visited}${LABELS.personSuffix} = ${payCvr}%`}</div>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                  {(() => {
+                                    const totals = actions.segment_breakdown.reduce(
+                                      (acc, r) => ({ dm: acc.dm + r.dm_sent, vis: acc.vis + r.visited, pay: acc.pay + r.paid }),
+                                      { dm: 0, vis: 0, pay: 0 }
+                                    );
+                                    const totalVisitCvr = totals.dm > 0 ? (totals.vis / totals.dm * 100).toFixed(1) : '-';
+                                    const totalPayCvr = totals.vis > 0 ? (totals.pay / totals.vis * 100).toFixed(1) : '-';
+                                    return (
+                                      <tr className="border-t-2" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+                                        <td className="py-2 pr-4 font-bold" style={{ color: 'var(--text-primary)' }}>{LABELS.total}</td>
+                                        <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--text-primary)' }}>{totals.dm}</td>
+                                        <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--text-primary)' }}>{totals.vis}</td>
+                                        <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--accent-amber)' }}>{totals.pay}</td>
+                                        <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--accent-green)' }}>{totalVisitCvr !== '-' ? `${totalVisitCvr}%` : '-'}</td>
+                                        <td className="py-2 pl-2 text-right font-bold" style={{ color: 'var(--accent-purple)' }}>{totalPayCvr !== '-' ? `${totalPayCvr}%` : '-'}</td>
+                                      </tr>
+                                    );
+                                  })()}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : null}
                   </>
-                ) : null}
+                )}
               </>
             )}
           </>
