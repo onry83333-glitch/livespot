@@ -99,6 +99,28 @@ interface DmCvrItem {
   last_sent: string;
 }
 
+interface DmEffItem {
+  campaign: string;
+  segment: string;
+  sent_count: number;
+  visited_count: number;
+  paid_count: number;
+  visit_cvr: number;
+  payment_cvr: number;
+  total_tokens: number;
+  avg_tokens_per_payer: number;
+}
+
+interface HourlyPerfItem {
+  hour_jst: number;
+  session_count: number;
+  avg_duration_min: number;
+  avg_viewers: number;
+  avg_tokens: number;
+  total_tokens: number;
+  avg_tokens_per_hour: number;
+}
+
 interface ScreenshotItem {
   id: string;
   cast_name: string;
@@ -317,8 +339,16 @@ function CastDetailInner() {
   const [dmUserHistory, setDmUserHistory] = useState<DMLogItem[]>([]);
   const [dmUserHistoryLoading, setDmUserHistoryLoading] = useState(false);
 
-  // DM Section toggle (A/B/C/D)
-  const [dmSection, setDmSection] = useState<'users' | 'send' | 'campaigns' | 'scenarios'>('users');
+  // DM Section toggle (A/B/C/D/E)
+  const [dmSection, setDmSection] = useState<'users' | 'send' | 'campaigns' | 'scenarios' | 'effectiveness'>('users');
+
+  // DM Effectiveness state
+  const [dmEffectiveness, setDmEffectiveness] = useState<DmEffItem[]>([]);
+  const [dmEffLoading, setDmEffLoading] = useState(false);
+
+  // Hourly Performance state
+  const [hourlyPerf, setHourlyPerf] = useState<HourlyPerfItem[]>([]);
+  const [hourlyPerfLoading, setHourlyPerfLoading] = useState(false);
 
   // Scenario state
   interface ScenarioItem {
@@ -778,6 +808,34 @@ function CastDetailInner() {
         }
         setScenariosLoading(false);
       });
+  }, [accountId, castName, activeTab, sb]);
+
+  // DM Effectiveness by segment
+  useEffect(() => {
+    if (!accountId || activeTab !== 'dm' || dmSection !== 'effectiveness') return;
+    setDmEffLoading(true);
+    sb.rpc('get_dm_effectiveness_by_segment', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_days: 30,
+    }).then(({ data, error }) => {
+      if (!error && data) setDmEffectiveness(data as DmEffItem[]);
+      setDmEffLoading(false);
+    });
+  }, [accountId, castName, activeTab, dmSection, sb]);
+
+  // Hourly Performance
+  useEffect(() => {
+    if (!accountId || activeTab !== 'analytics') return;
+    setHourlyPerfLoading(true);
+    sb.rpc('get_cast_hourly_performance', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_days: 30,
+    }).then(({ data, error }) => {
+      if (!error && data) setHourlyPerf(data as HourlyPerfItem[]);
+      setHourlyPerfLoading(false);
+    });
   }, [accountId, castName, activeTab, sb]);
 
   // DM Realtime status polling
@@ -2296,6 +2354,7 @@ function CastDetailInner() {
                   { key: 'send' as const, icon: '✉️', label: 'DM送信' },
                   { key: 'campaigns' as const, icon: '📊', label: 'キャンペーン' },
                   { key: 'scenarios' as const, icon: '📋', label: 'シナリオ' },
+                  { key: 'effectiveness' as const, icon: '📈', label: '効果測定' },
                 ] as const).map(t => (
                   <button key={t.key} onClick={() => setDmSection(t.key)}
                     className={`text-[11px] px-4 py-2 rounded-lg font-medium transition-all ${
@@ -2971,6 +3030,141 @@ function CastDetailInner() {
                         );
                       })}
                     </div>
+                  )}
+                </div>
+              )}
+
+              {/* Section E: 効果測定 */}
+              {dmSection === 'effectiveness' && (
+                <div className="glass-card p-4">
+                  <h3 className="text-sm font-bold mb-3">📈 DM効果測定（セグメント別）</h3>
+                  {dmEffLoading ? (
+                    <div className="space-y-2">
+                      {[...Array(4)].map((_, i) => (
+                        <div key={i} className="h-10 rounded-lg animate-pulse" style={{ background: 'rgba(255,255,255,0.03)' }} />
+                      ))}
+                    </div>
+                  ) : dmEffectiveness.length === 0 ? (
+                    <p className="text-xs py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                      直近30日間のDM送信データがありません
+                    </p>
+                  ) : (
+                    <>
+                      {/* サマリーカード */}
+                      {(() => {
+                        const segMap = new Map<string, { sent: number; paid: number; tokens: number }>();
+                        dmEffectiveness.forEach(r => {
+                          const prev = segMap.get(r.segment) || { sent: 0, paid: 0, tokens: 0 };
+                          segMap.set(r.segment, {
+                            sent: prev.sent + r.sent_count,
+                            paid: prev.paid + r.paid_count,
+                            tokens: prev.tokens + r.total_tokens,
+                          });
+                        });
+                        const segArr = Array.from(segMap.entries())
+                          .map(([seg, v]) => ({ seg, ...v, cvr: v.sent > 0 ? (v.paid / v.sent) * 100 : 0 }))
+                          .sort((a, b) => b.cvr - a.cvr);
+                        const best = segArr[0];
+                        const totalSent = segArr.reduce((s, v) => s + v.sent, 0);
+                        const totalPaid = segArr.reduce((s, v) => s + v.paid, 0);
+                        const totalTk = segArr.reduce((s, v) => s + v.tokens, 0);
+                        return (
+                          <div className="grid grid-cols-4 gap-2 mb-4">
+                            <div className="glass-panel rounded-lg p-2 text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>送信数</p>
+                              <p className="text-lg font-bold">{totalSent.toLocaleString()}</p>
+                            </div>
+                            <div className="glass-panel rounded-lg p-2 text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>課金CVR</p>
+                              <p className="text-lg font-bold" style={{ color: 'var(--accent-green)' }}>
+                                {totalSent > 0 ? ((totalPaid / totalSent) * 100).toFixed(1) : '0'}%
+                              </p>
+                            </div>
+                            <div className="glass-panel rounded-lg p-2 text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>売上貢献</p>
+                              <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>
+                                {formatTokens(totalTk)}
+                              </p>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{tokensToJPY(totalTk)}</p>
+                            </div>
+                            <div className="glass-panel rounded-lg p-2 text-center" style={{ border: '1px solid rgba(34,197,94,0.3)' }}>
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>最高ROIセグメント</p>
+                              <p className="text-sm font-bold" style={{ color: 'var(--accent-green)' }}>
+                                {best ? best.seg : '-'}
+                              </p>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                CVR {best ? best.cvr.toFixed(1) : 0}%
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* テーブル */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-[11px]">
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                              <th className="text-left py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>キャンペーン</th>
+                              <th className="text-left py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>セグメント</th>
+                              <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>送信</th>
+                              <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>来訪CVR</th>
+                              <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>課金CVR</th>
+                              <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>売上</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {dmEffectiveness.map((r, i) => {
+                              const segColors: Record<string, string> = {
+                                whale: '#f59e0b', vip: '#a78bfa', regular: '#38bdf8',
+                                light: '#94a3b8', new: '#22c55e', churned: '#f43f5e', unknown: '#475569',
+                              };
+                              return (
+                                <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                                  <td className="py-1.5 px-2 font-mono text-[10px]">{r.campaign || '-'}</td>
+                                  <td className="py-1.5 px-2">
+                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                                      style={{
+                                        background: `${segColors[r.segment] || '#475569'}20`,
+                                        color: segColors[r.segment] || '#475569',
+                                      }}>
+                                      {r.segment}
+                                    </span>
+                                  </td>
+                                  <td className="py-1.5 px-2 text-right">{r.sent_count}</td>
+                                  <td className="py-1.5 px-2 text-right">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <div className="w-12 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                        <div className="h-full rounded-full" style={{
+                                          width: `${Math.min(r.visit_cvr || 0, 100)}%`,
+                                          background: 'var(--accent-primary)',
+                                        }} />
+                                      </div>
+                                      <span>{(r.visit_cvr || 0).toFixed(1)}%</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-1.5 px-2 text-right">
+                                    <div className="flex items-center justify-end gap-1">
+                                      <div className="w-12 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                        <div className="h-full rounded-full" style={{
+                                          width: `${Math.min(r.payment_cvr || 0, 100)}%`,
+                                          background: 'var(--accent-green)',
+                                        }} />
+                                      </div>
+                                      <span style={{ color: 'var(--accent-green)' }}>{(r.payment_cvr || 0).toFixed(1)}%</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-1.5 px-2 text-right">
+                                    <span>{formatTokens(r.total_tokens)}</span>
+                                    <span className="text-[9px] ml-1" style={{ color: 'var(--text-muted)' }}>{tokensToJPY(r.total_tokens)}</span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
                   )}
                 </div>
               )}
@@ -3859,6 +4053,131 @@ function CastDetailInner() {
                   </div>
                 </>
               )}
+
+              {/* 時間帯別パフォーマンス */}
+              <div className="glass-card p-4">
+                <h3 className="text-sm font-bold mb-3">⏰ 時間帯別パフォーマンス（直近30日）</h3>
+                {hourlyPerfLoading ? (
+                  <div className="h-40 rounded-lg animate-pulse" style={{ background: 'rgba(255,255,255,0.03)' }} />
+                ) : hourlyPerf.length === 0 ? (
+                  <p className="text-xs py-6 text-center" style={{ color: 'var(--text-muted)' }}>
+                    配信データがありません（SPYログから自動推定）
+                  </p>
+                ) : (
+                  <>
+                    {/* 24時間バーチャート */}
+                    {(() => {
+                      const maxTph = Math.max(...hourlyPerf.map(h => h.avg_tokens_per_hour || 0), 1);
+                      const top3Hours = [...hourlyPerf]
+                        .sort((a, b) => (b.avg_tokens_per_hour || 0) - (a.avg_tokens_per_hour || 0))
+                        .slice(0, 3)
+                        .map(h => h.hour_jst);
+                      const allHours = Array.from({ length: 24 }, (_, i) => i);
+                      return (
+                        <div className="mb-4">
+                          <div className="flex items-end gap-[2px]" style={{ height: '120px' }}>
+                            {allHours.map(h => {
+                              const item = hourlyPerf.find(p => p.hour_jst === h);
+                              const tph = item?.avg_tokens_per_hour || 0;
+                              const pct = maxTph > 0 ? (tph / maxTph) * 100 : 0;
+                              const isTop = top3Hours.includes(h);
+                              return (
+                                <div key={h} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+                                  <div
+                                    className="w-full rounded-t transition-all"
+                                    style={{
+                                      height: `${Math.max(pct, 2)}%`,
+                                      background: isTop
+                                        ? 'linear-gradient(180deg, rgba(34,197,94,0.8), rgba(34,197,94,0.3))'
+                                        : item?.session_count
+                                          ? 'linear-gradient(180deg, rgba(56,189,248,0.6), rgba(56,189,248,0.2))'
+                                          : 'rgba(255,255,255,0.03)',
+                                      minHeight: '2px',
+                                    }}
+                                  />
+                                  <span className="text-[8px] mt-0.5" style={{ color: isTop ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                                    {h}
+                                  </span>
+                                  {/* ツールチップ */}
+                                  {item && item.session_count > 0 && (
+                                    <div className="absolute bottom-full mb-1 hidden group-hover:block z-10 glass-panel rounded p-1.5 text-[9px] whitespace-nowrap"
+                                      style={{ minWidth: '100px' }}>
+                                      <p>{h}時台 (JST)</p>
+                                      <p>配信{item.session_count}回 / 平均{item.avg_duration_min}分</p>
+                                      <p>時給: {formatTokens(item.avg_tokens_per_hour)} ({tokensToJPY(item.avg_tokens_per_hour)})</p>
+                                      <p>平均視聴者: {item.avg_viewers}人</p>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="flex items-center gap-3 mt-2 text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                            <span className="flex items-center gap-1">
+                              <span className="w-2 h-2 rounded-sm" style={{ background: 'rgba(34,197,94,0.6)' }} /> 推奨時間帯（TOP3）
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <span className="w-2 h-2 rounded-sm" style={{ background: 'rgba(56,189,248,0.4)' }} /> その他
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* 詳細テーブル */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-[11px]">
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                            <th className="text-left py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>時間(JST)</th>
+                            <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>配信回数</th>
+                            <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>平均時間</th>
+                            <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>平均視聴者</th>
+                            <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>平均売上</th>
+                            <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>時給換算</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {hourlyPerf
+                            .filter(h => h.session_count > 0)
+                            .sort((a, b) => a.hour_jst - b.hour_jst)
+                            .map(h => {
+                              const maxTph = Math.max(...hourlyPerf.map(p => p.avg_tokens_per_hour || 0), 1);
+                              const top3 = [...hourlyPerf]
+                                .sort((a, b) => (b.avg_tokens_per_hour || 0) - (a.avg_tokens_per_hour || 0))
+                                .slice(0, 3)
+                                .map(p => p.hour_jst);
+                              const isTop = top3.includes(h.hour_jst);
+                              return (
+                                <tr key={h.hour_jst}
+                                  style={{
+                                    borderBottom: '1px solid rgba(255,255,255,0.03)',
+                                    background: isTop ? 'rgba(34,197,94,0.05)' : undefined,
+                                  }}>
+                                  <td className="py-1.5 px-2 font-mono">
+                                    {isTop && <span className="mr-1">🏆</span>}
+                                    {h.hour_jst}:00
+                                  </td>
+                                  <td className="py-1.5 px-2 text-right">{h.session_count}回</td>
+                                  <td className="py-1.5 px-2 text-right">{h.avg_duration_min}分</td>
+                                  <td className="py-1.5 px-2 text-right">{h.avg_viewers}人</td>
+                                  <td className="py-1.5 px-2 text-right">
+                                    {formatTokens(h.avg_tokens)}
+                                    <span className="text-[9px] ml-1" style={{ color: 'var(--text-muted)' }}>{tokensToJPY(h.avg_tokens)}</span>
+                                  </td>
+                                  <td className="py-1.5 px-2 text-right font-bold" style={{ color: isTop ? 'var(--accent-green)' : 'var(--text-primary)' }}>
+                                    {formatTokens(h.avg_tokens_per_hour)}/h
+                                    <span className="text-[9px] ml-1 font-normal" style={{ color: 'var(--text-muted)' }}>{tokensToJPY(h.avg_tokens_per_hour)}/h</span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           )}
 
