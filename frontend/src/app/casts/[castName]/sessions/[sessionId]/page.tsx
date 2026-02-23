@@ -70,6 +70,21 @@ interface DmVisitBanner {
   dm_sent_at: string;
 }
 
+interface CastTranscript {
+  id: string;
+  session_id: string | null;
+  cast_name: string;
+  segment_start_seconds: number | null;
+  segment_end_seconds: number | null;
+  text: string;
+  language: string;
+  confidence: number | null;
+  source_file: string | null;
+  processing_status: 'pending' | 'processing' | 'completed' | 'failed';
+  error_message: string | null;
+  created_at: string;
+}
+
 type BroadcastMode = 'pre' | 'live' | 'post';
 
 /* ============================================================
@@ -145,10 +160,11 @@ const LABELS = {
   // Live mode labels
   liveStatus: 'LIVE',
   broadcasting: '配信中',
-  viewerCount: '視聴者',
-  revenueLabel: '売上',
+  viewerCount: 'チャット参加',
+  revenueLabel: 'チャット売上（チップ）',
   newUsersLabel: '新規',
-  viewerPanel: '視聴者',
+  viewerPanel: 'チャット参加者',
+  dmManagePage: 'DM管理画面へ',
   chatFeed: 'チャット',
   statsPanel: 'リアルタイム集計',
   revenueTrend: '売上推移',
@@ -171,6 +187,14 @@ const LABELS = {
   noMessagesYet: 'メッセージなし',
   liveDataPast: '過去データ表示中',
   whisperLabel: 'ささやき',
+  recordingSection: '配信録画',
+  uploadRecording: 'ファイルを選択またはドラッグ&ドロップ',
+  uploadHint: 'MP4 / WebM / MKV（最大2GB）',
+  selectedFile: '選択済み',
+  startTranscription: '文字起こし開始',
+  noRecordingHint: '配信録画ファイルをアップロードすると、自動で文字起こしされます',
+  processingTranscript: '文字起こし中...',
+  nextPhase: '次フェーズで実装予定',
 } as const;
 
 const COIN_RATE = 7.7;
@@ -317,6 +341,13 @@ export default function SessionDetailPage() {
   const isUserScrolledUp = useRef(false);
   const lastMessageTimeRef = useRef<string | null>(null);
   const dmSentUsersRef = useRef<Map<string, { sent_at: string; segment: string | null }>>(new Map());
+  const sessionPayersRef = useRef<Set<string>>(new Set());
+
+  // Recording / Transcript state
+  const [transcripts, setTranscripts] = useState<CastTranscript[]>([]);
+  const [transcriptsLoading, setTranscriptsLoading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   // Computed: total send targets
   const sendTargetCount = SEGMENT_GROUPS
@@ -455,7 +486,8 @@ export default function SessionDetailPage() {
       const { data: segData } = await sb
         .from('paid_users')
         .select('segment')
-        .eq('account_id', accountId);
+        .eq('account_id', accountId)
+        .eq('cast_name', castName);
       if (segData) {
         const counts = new Map<string, number>();
         segData.forEach(r => {
@@ -485,6 +517,21 @@ export default function SessionDetailPage() {
     const t = setTimeout(() => setToast(null), 3000);
     return () => clearTimeout(t);
   }, [toast]);
+
+  // Load transcripts for this session (post mode only)
+  useEffect(() => {
+    if (!accountId || mode !== 'post') return;
+    setTranscriptsLoading(true);
+    sb.from('cast_transcripts')
+      .select('id, session_id, cast_name, segment_start_seconds, segment_end_seconds, text, language, confidence, source_file, processing_status, error_message, created_at')
+      .eq('account_id', accountId)
+      .eq('session_id', sessionId)
+      .order('segment_start_seconds', { ascending: true, nullsFirst: false })
+      .then(({ data, error: err }) => {
+        if (!err && data) setTranscripts(data as CastTranscript[]);
+        setTranscriptsLoading(false);
+      });
+  }, [accountId, sessionId, mode, sb]);
 
   // ============================================================
   // LIVE MODE: Data loading + Realtime + Polling
@@ -518,24 +565,42 @@ export default function SessionDetailPage() {
       dmSentUsersRef.current.delete(msg.user_name!);
     }
 
-    // Update viewer list
+    // Update viewer list + paying user counts
     if (msg.user_name) {
       setLiveViewers(prev => {
         const idx = prev.findIndex(v => v.user_name === msg.user_name);
         if (idx >= 0) {
           if (msg.tokens > 0) {
+            // Existing viewer tipping — check if first tip this session
+            if (!sessionPayersRef.current.has(msg.user_name!)) {
+              sessionPayersRef.current.add(msg.user_name!);
+              setLivePayingCount(p => p + 1);
+              // First-time payer for this cast (lifetime was 0 before)
+              if (prev[idx].lifetime_tokens === 0) {
+                setLiveNewPayerCount(p => p + 1);
+              }
+            }
             const updated = [...prev];
             updated[idx] = { ...updated[idx], lifetime_tokens: updated[idx].lifetime_tokens + msg.tokens };
             return updated.sort((a, b) => b.lifetime_tokens - a.lifetime_tokens);
           }
           return prev;
         }
+        // New viewer
+        if (msg.tokens > 0) {
+          if (!sessionPayersRef.current.has(msg.user_name!)) {
+            sessionPayersRef.current.add(msg.user_name!);
+            setLivePayingCount(p => p + 1);
+          }
+          // New viewer with tip → first-time for this cast
+          setLiveNewPayerCount(p => p + 1);
+        }
         return [...prev, {
           user_name: msg.user_name!,
           segment: null,
           lifetime_tokens: msg.tokens > 0 ? msg.tokens : 0,
           first_seen: msg.message_time,
-          is_new_payer: false,
+          is_new_payer: msg.tokens > 0,
         }].sort((a, b) => b.lifetime_tokens - a.lifetime_tokens);
       });
     }
@@ -572,6 +637,7 @@ export default function SessionDetailPage() {
       setLiveTotalTokens(totalTk);
       setLiveRevenueByType(typeMap);
       setLivePayingCount(payerSet.size);
+      sessionPayersRef.current = new Set(payerSet);
     }
 
     // 2. Build viewer list from session messages
@@ -613,7 +679,8 @@ export default function SessionDetailPage() {
       const { data: puData } = await sb
         .from('paid_users')
         .select('username, segment')
-        .eq('account_id', accountId);
+        .eq('account_id', accountId)
+        .eq('cast_name', castName);
       if (puData) {
         for (const row of puData as { username?: string; user_name?: string; segment: string }[]) {
           const uname = row.username || row.user_name;
@@ -1361,7 +1428,11 @@ export default function SessionDetailPage() {
                               {`🟠 ${LABELS.firstTimePayers} (${actions.first_time_payers.length}${LABELS.personSuffix})`}
                             </h4>
                             {actions.first_time_payers.length > 0 && (
-                              <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold" style={{ background: 'rgba(249,115,22,0.2)', color: 'rgb(251,146,60)' }}>{LABELS.sendTemplate}</button>
+                              <Link
+                                href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
+                                className="text-[10px] px-3 py-1.5 rounded-lg font-semibold hover:opacity-80 transition-opacity"
+                                style={{ background: 'rgba(249,115,22,0.2)', color: 'rgb(251,146,60)' }}
+                              >{`${LABELS.sendTemplate} →`}</Link>
                             )}
                           </div>
                           {actions.first_time_payers.length === 0 ? (
@@ -1373,8 +1444,14 @@ export default function SessionDetailPage() {
                                   <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
                                   <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
                                   <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
-                                  {u.dm_sent && (
+                                  {u.dm_sent ? (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: 'rgb(74,222,128)' }}>{`✅${LABELS.dmSentBadge}`}</span>
+                                  ) : (
+                                    <Link
+                                      href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
+                                      className="text-[10px] px-1.5 py-0.5 rounded hover:opacity-80 transition-opacity"
+                                      style={{ background: 'rgba(56,189,248,0.15)', color: 'var(--accent-primary)' }}
+                                    >{`💬 DM`}</Link>
                                   )}
                                 </div>
                               ))}
@@ -1389,7 +1466,11 @@ export default function SessionDetailPage() {
                               {`🔵 ${LABELS.highSpenders} (${actions.high_spenders.length}${LABELS.personSuffix})`}
                             </h4>
                             {actions.high_spenders.length > 0 && (
-                              <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold" style={{ background: 'rgba(59,130,246,0.2)', color: 'rgb(96,165,250)' }}>{LABELS.createDm}</button>
+                              <Link
+                                href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
+                                className="text-[10px] px-3 py-1.5 rounded-lg font-semibold hover:opacity-80 transition-opacity"
+                                style={{ background: 'rgba(59,130,246,0.2)', color: 'rgb(96,165,250)' }}
+                              >{`${LABELS.createDm} →`}</Link>
                             )}
                           </div>
                           {actions.high_spenders.length === 0 ? (
@@ -1414,7 +1495,11 @@ export default function SessionDetailPage() {
                               {`🟡 ${LABELS.visitedNoAction} (${actions.visited_no_action.length}${LABELS.personSuffix})`}
                             </h4>
                             {actions.visited_no_action.length > 0 && (
-                              <button onClick={() => setToast(LABELS.notImplemented)} className="text-[10px] px-3 py-1.5 rounded-lg font-semibold" style={{ background: 'rgba(234,179,8,0.2)', color: 'rgb(250,204,21)' }}>{LABELS.followDm}</button>
+                              <Link
+                                href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
+                                className="text-[10px] px-3 py-1.5 rounded-lg font-semibold hover:opacity-80 transition-opacity"
+                                style={{ background: 'rgba(234,179,8,0.2)', color: 'rgb(250,204,21)' }}
+                              >{`${LABELS.followDm} →`}</Link>
                             )}
                           </div>
                           {actions.visited_no_action.length === 0 ? (
@@ -1523,6 +1608,126 @@ export default function SessionDetailPage() {
                         )}
                       </>
                     ) : null}
+
+                    {/* 🎬 Recording & Transcript Section */}
+                    <div className="glass-card p-5">
+                      <h3 className="text-xs font-bold mb-3 flex items-center gap-2" style={{ color: 'rgb(192,132,252)' }}>
+                        {`🎬 ${LABELS.recordingSection}`}
+                      </h3>
+
+                      {transcriptsLoading ? (
+                        <div className="text-center py-4">
+                          <div className="inline-block w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgb(168,85,247)', borderTopColor: 'transparent' }} />
+                        </div>
+                      ) : transcripts.length > 0 && transcripts.some(t => t.processing_status === 'completed') ? (
+                        /* Completed transcripts timeline */
+                        <div className="space-y-1.5 max-h-80 overflow-y-auto">
+                          {transcripts
+                            .filter(t => t.processing_status === 'completed')
+                            .map(t => (
+                              <div key={t.id} className="flex gap-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                <span className="text-[10px] font-mono whitespace-nowrap pt-0.5" style={{ color: 'rgb(192,132,252)' }}>
+                                  {t.segment_start_seconds != null
+                                    ? `${Math.floor(t.segment_start_seconds / 60).toString().padStart(2, '0')}:${Math.floor(t.segment_start_seconds % 60).toString().padStart(2, '0')}`
+                                    : '--:--'}
+                                </span>
+                                <p className="text-xs flex-1" style={{ color: 'var(--text-secondary)' }}>{t.text}</p>
+                                {t.confidence != null && (
+                                  <span className="text-[10px] whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>
+                                    {`${Math.round(t.confidence * 100)}%`}
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                        </div>
+                      ) : transcripts.some(t => t.processing_status === 'processing' || t.processing_status === 'pending') ? (
+                        <div className="text-center py-4">
+                          <div className="inline-block w-5 h-5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgb(168,85,247)', borderTopColor: 'transparent' }} />
+                          <p className="text-xs mt-2" style={{ color: 'rgb(192,132,252)' }}>{LABELS.processingTranscript}</p>
+                        </div>
+                      ) : (
+                        /* Upload area */
+                        <>
+                          <div
+                            className="rounded-xl border-2 border-dashed p-6 text-center cursor-pointer transition-all"
+                            style={{
+                              borderColor: isDragOver ? 'rgba(168,85,247,0.6)' : 'rgba(168,85,247,0.2)',
+                              background: isDragOver ? 'rgba(168,85,247,0.08)' : 'transparent',
+                            }}
+                            onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                            onDragLeave={() => setIsDragOver(false)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              setIsDragOver(false);
+                              const file = e.dataTransfer.files[0];
+                              if (file && /\.(mp4|webm|mkv)$/i.test(file.name) && file.size <= 2 * 1024 * 1024 * 1024) {
+                                setSelectedFile(file);
+                              } else {
+                                setToast('MP4/WebM/MKV（2GB以下）を選択してください');
+                              }
+                            }}
+                            onClick={() => {
+                              const input = document.createElement('input');
+                              input.type = 'file';
+                              input.accept = '.mp4,.webm,.mkv';
+                              input.onchange = () => {
+                                const file = input.files?.[0];
+                                if (file && file.size <= 2 * 1024 * 1024 * 1024) {
+                                  setSelectedFile(file);
+                                } else if (file) {
+                                  setToast('ファイルサイズは2GB以下にしてください');
+                                }
+                              };
+                              input.click();
+                            }}
+                          >
+                            {selectedFile ? (
+                              <div>
+                                <p className="text-xs font-bold" style={{ color: 'rgb(192,132,252)' }}>
+                                  {`✅ ${LABELS.selectedFile}`}
+                                </p>
+                                <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                                  {selectedFile.name}
+                                </p>
+                                <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                  {`${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`}
+                                </p>
+                              </div>
+                            ) : (
+                              <div>
+                                <p className="text-3xl mb-2" style={{ opacity: 0.4 }}>📁</p>
+                                <p className="text-xs" style={{ color: 'rgb(192,132,252)' }}>
+                                  {LABELS.uploadRecording}
+                                </p>
+                                <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                                  {LABELS.uploadHint}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+
+                          {selectedFile && (
+                            <button
+                              onClick={() => setToast(LABELS.nextPhase)}
+                              className="mt-3 w-full text-xs px-4 py-2.5 rounded-lg font-bold transition-all hover:brightness-110"
+                              style={{
+                                background: 'linear-gradient(135deg, rgba(168,85,247,0.3), rgba(139,92,246,0.3))',
+                                color: 'rgb(192,132,252)',
+                                border: '1px solid rgba(168,85,247,0.3)',
+                              }}
+                            >
+                              {`🎙 ${LABELS.startTranscription}`}
+                            </button>
+                          )}
+
+                          {!selectedFile && (
+                            <p className="text-[10px] mt-3 text-center" style={{ color: 'var(--text-muted)' }}>
+                              {LABELS.noRecordingHint}
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </>
                 )}
               </>
