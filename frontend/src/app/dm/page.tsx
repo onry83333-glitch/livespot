@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
@@ -30,6 +30,7 @@ export default function DmPage() {
   const [casts, setCasts] = useState<CastInfo[]>([]);
   const [dmStats, setDmStats] = useState<Map<string, CastDmStats>>(new Map());
   const [loading, setLoading] = useState(true);
+  const redirected = useRef(false);
 
   useEffect(() => {
     if (!user) return;
@@ -46,8 +47,9 @@ export default function DmPage() {
       const castList = (castData || []) as CastInfo[];
       setCasts(castList);
 
-      // キャスト1人 → 自動リダイレクト
-      if (castList.length === 1) {
+      // キャスト1人 → 自動リダイレクト（二重実行防止）
+      if (castList.length === 1 && !redirected.current) {
+        redirected.current = true;
         router.replace(`/casts/${encodeURIComponent(castList[0].cast_name)}?tab=dm`);
         return;
       }

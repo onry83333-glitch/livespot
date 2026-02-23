@@ -26,6 +26,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
 
+  // Server-side file size check (Whisper API limit: 25MB)
+  if (audioFile.size > 25 * 1024 * 1024) {
+    return NextResponse.json({ error: 'ファイルサイズが大きすぎます（上限25MB）' }, { status: 413 });
+  }
+
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey) {
     return NextResponse.json({ error: 'OPENAI_API_KEY not configured' }, { status: 500 });

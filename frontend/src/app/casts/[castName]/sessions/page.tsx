@@ -776,7 +776,7 @@ export default function SessionListPage() {
                               key={c.label}
                               title={`${c.label}: ${formatTokens(c.val)}`}
                               style={{
-                                width: `${Math.max(6, Math.round(c.val / s.coin_tokens * 60))}px`,
+                                width: `${Math.max(6, Math.round(s.coin_tokens > 0 ? c.val / s.coin_tokens * 60 : 0))}px`,
                                 height: '4px',
                                 background: c.color,
                                 borderRadius: '1px',
