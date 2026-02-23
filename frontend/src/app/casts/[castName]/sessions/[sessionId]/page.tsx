@@ -46,12 +46,12 @@ const COIN_RATE = 7.7;
    Helpers
    ============================================================ */
 function formatDuration(minutes: number): string {
-  if (!minutes || minutes < 0) return '0\u5206';
+  if (!minutes || minutes < 0) return '0分';
   const m = Math.round(minutes);
   const h = Math.floor(m / 60);
   const rem = m % 60;
-  if (h === 0) return `${rem}\u5206`;
-  return `${h}\u6642\u9593${rem > 0 ? `${rem}\u5206` : ''}`;
+  if (h === 0) return `${rem}分`;
+  return `${h}時間${rem > 0 ? `${rem}分` : ''}`;
 }
 
 function groupBySegmentRange(items: { segment: string }[]): { label: string; count: number }[] {
@@ -151,7 +151,7 @@ export default function SessionDetailPage() {
     console.log('[Session] Fallback result:', { count: msgs?.length ?? 0, error: fbError?.message });
 
     if (!msgs || msgs.length === 0) {
-      setError(`\u30BB\u30C3\u30B7\u30E7\u30F3\u304C\u898B\u3064\u304B\u308A\u307E\u305B\u3093 (session_id: ${sessionId.slice(0, 8)}...)`);
+      setError(`セッションが見つかりません (session_id: ${sessionId.slice(0, 8)}...)`);
       setLoading(false);
       return;
     }
@@ -237,12 +237,10 @@ export default function SessionDetailPage() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  const totalPages = 0; // not paginated
-
   const modeLabels: Record<BroadcastMode, string> = {
-    pre: '\u914D\u4FE1\u524D',
-    live: '\u914D\u4FE1\u4E2D',
-    post: '\u914D\u4FE1\u5F8C',
+    pre: '配信前',
+    live: '配信中',
+    post: '配信後',
   };
 
   return (
@@ -255,10 +253,10 @@ export default function SessionDetailPage() {
             className="text-xs px-2 py-1 rounded hover:bg-white/5 transition-colors"
             style={{ color: 'var(--text-muted)' }}
           >
-            \u2190 \u30BB\u30C3\u30B7\u30E7\u30F3\u4E00\u89A7
+            ← セッション一覧
           </Link>
           <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-            \uD83D\uDCFA \u30BB\u30C3\u30B7\u30E7\u30F3\u8A73\u7D30
+            📺 セッション詳細
           </h1>
         </div>
 
@@ -275,7 +273,7 @@ export default function SessionDetailPage() {
                     if (isPost) {
                       setMode('post');
                     } else {
-                      setToast('\u958B\u767A\u4E2D');
+                      setToast('開発中');
                     }
                   }}
                   className="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all"
@@ -297,13 +295,13 @@ export default function SessionDetailPage() {
         {loading ? (
           <div className="glass-card p-12 text-center">
             <div className="inline-block w-6 h-6 border-2 border-sky-400 border-t-transparent rounded-full animate-spin" />
-            <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>\u8AAD\u307F\u8FBC\u307F\u4E2D...</p>
+            <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>読み込み中...</p>
           </div>
         ) : error ? (
           <div className="glass-card p-8 text-center">
             <p className="text-sm" style={{ color: 'var(--accent-pink)' }}>{error}</p>
             <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>
-              \u30D6\u30E9\u30A6\u30B6\u306E\u958B\u767A\u8005\u30B3\u30F3\u30BD\u30FC\u30EB\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044
+              ブラウザの開発者コンソールを確認してください
             </p>
           </div>
         ) : summary ? (
@@ -316,13 +314,13 @@ export default function SessionDetailPage() {
                     {summary.session_title || summary.cast_name}
                   </h2>
                   <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                    {formatJST(summary.started_at)} \u301C {formatJST(summary.ended_at)}
-                    <span className="ml-3">\u23F1 {formatDuration(summary.duration_minutes)}</span>
+                    {formatJST(summary.started_at)} 〜 {formatJST(summary.ended_at)}
+                    <span className="ml-3">⏱ {formatDuration(summary.duration_minutes)}</span>
                   </p>
                 </div>
                 {summary.change_pct !== null && (
                   <div className="text-right">
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>\u524D\u56DE\u6BD4</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>前回比</p>
                     <p className="text-sm font-bold" style={{
                       color: summary.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)',
                     }}>
@@ -335,10 +333,10 @@ export default function SessionDetailPage() {
               {/* KPI Grid */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 {[
-                  { label: '\u58F2\u4E0A', value: formatTokens(summary.total_tokens), sub: tokensToJPY(summary.total_tokens, COIN_RATE), color: 'var(--accent-amber)' },
-                  { label: '\u30C1\u30C3\u30D7\u6570', value: `${summary.tip_count}`, sub: `${formatTokens(summary.total_tokens)} tk`, color: 'var(--accent-primary)' },
-                  { label: '\u30E6\u30FC\u30B6\u30FC', value: `${summary.unique_users}`, sub: '', color: 'var(--accent-purple)' },
-                  { label: '\u30E1\u30C3\u30BB\u30FC\u30B8', value: `${summary.msg_count}`, sub: '', color: 'var(--text-primary)' },
+                  { label: '売上', value: formatTokens(summary.total_tokens), sub: tokensToJPY(summary.total_tokens, COIN_RATE), color: 'var(--accent-amber)' },
+                  { label: 'チップ数', value: `${summary.tip_count}`, sub: `${formatTokens(summary.total_tokens)} tk`, color: 'var(--accent-primary)' },
+                  { label: 'ユーザー', value: `${summary.unique_users}`, sub: '', color: 'var(--accent-purple)' },
+                  { label: 'メッセージ', value: `${summary.msg_count}`, sub: '', color: 'var(--text-primary)' },
                 ].map(kpi => (
                   <div key={kpi.label} className="glass-panel px-4 py-3">
                     <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>{kpi.label}</p>
@@ -352,7 +350,7 @@ export default function SessionDetailPage() {
             {/* ============ Tokens by msg_type ============ */}
             {summary.tokens_by_type && Object.keys(summary.tokens_by_type).length > 0 && (
               <div className="glass-card p-5">
-                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>\uD83D\uDCB0 \u58F2\u4E0A\u5185\u8A33\uFF08msg_type\u5225\uFF09</h3>
+                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>💰 売上内訳（msg_type別）</h3>
                 <div className="space-y-2">
                   {Object.entries(summary.tokens_by_type)
                     .sort(([, a], [, b]) => b - a)
@@ -386,7 +384,7 @@ export default function SessionDetailPage() {
             {/* ============ Top Users ============ */}
             {summary.top_users && summary.top_users.length > 0 && (
               <div className="glass-card p-5">
-                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>\uD83D\uDC51 \u30C8\u30C3\u30D7\u30E6\u30FC\u30B6\u30FC</h3>
+                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>👑 トップユーザー</h3>
                 <div className="space-y-1.5">
                   {summary.top_users.map((u, i) => (
                     <div key={u.user_name} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.02]">
@@ -419,21 +417,21 @@ export default function SessionDetailPage() {
             {/* ============ Previous Session Comparison ============ */}
             {summary.prev_session_id && summary.prev_total_tokens !== null && (
               <div className="glass-card p-5">
-                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>\uD83D\uDCCA \u524D\u56DE\u30BB\u30C3\u30B7\u30E7\u30F3\u6BD4\u8F03</h3>
+                <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>📊 前回セッション比較</h3>
                 <div className="grid grid-cols-3 gap-4 text-center">
                   <div>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>\u524D\u56DE\u58F2\u4E0A</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>前回売上</p>
                     <p className="text-sm font-bold" style={{ color: 'var(--text-secondary)' }}>{formatTokens(summary.prev_total_tokens)}</p>
                     {summary.prev_started_at && (
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatJST(summary.prev_started_at).split(' ')[0]}</p>
                     )}
                   </div>
                   <div>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>\u4ECA\u56DE\u58F2\u4E0A</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>今回売上</p>
                     <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(summary.total_tokens)}</p>
                   </div>
                   <div>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>\u5909\u5316\u7387</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>変化率</p>
                     <p className="text-sm font-bold" style={{
                       color: (summary.change_pct ?? 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)',
                     }}>
@@ -452,15 +450,15 @@ export default function SessionDetailPage() {
                 {actionsLoading ? (
                   <div className="glass-card p-8 text-center">
                     <div className="inline-block w-5 h-5 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
-                    <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>\u30A2\u30AF\u30B7\u30E7\u30F3\u5206\u6790\u4E2D...</p>
+                    <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>アクション分析中...</p>
                   </div>
                 ) : actions ? (
                   <>
                     {/* ============ Action Panel Header ============ */}
                     <div className="flex items-center gap-2 pt-2">
-                      <span className="text-base">\u26A1</span>
+                      <span className="text-base">⚡</span>
                       <h3 className="text-sm font-bold" style={{ color: 'rgb(52,211,153)' }}>
-                        \u4ECA\u3059\u3050\u3084\u308B\u3053\u3068
+                        今すぐやること
                       </h3>
                     </div>
 
@@ -471,20 +469,20 @@ export default function SessionDetailPage() {
                     >
                       <div className="flex items-center justify-between mb-3">
                         <h4 className="text-xs font-bold" style={{ color: 'rgb(251,146,60)' }}>
-                          \uD83D\uDFE0 \u521D\u8AB2\u91D1\u30E6\u30FC\u30B6\u30FC\u3078\u304A\u793CDM ({actions.first_time_payers.length}\u4EBA)
+                          🟠 初課金ユーザーへお礼DM ({actions.first_time_payers.length}人)
                         </h4>
                         {actions.first_time_payers.length > 0 && (
                           <button
-                            onClick={() => setToast('\u6B21\u30D5\u30A7\u30FC\u30BA\u3067\u5B9F\u88C5\u4E88\u5B9A')}
+                            onClick={() => setToast('次フェーズで実装予定')}
                             className="text-[10px] px-3 py-1.5 rounded-lg font-semibold transition-colors"
                             style={{ background: 'rgba(249,115,22,0.2)', color: 'rgb(251,146,60)' }}
                           >
-                            \u30C6\u30F3\u30D7\u30EC\u30FC\u30C8\u3067\u4E00\u62EC\u9001\u4FE1
+                            テンプレートで一括送信
                           </button>
                         )}
                       </div>
                       {actions.first_time_payers.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>\u8A72\u5F53\u306A\u3057</p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>該当なし</p>
                       ) : (
                         <div className="space-y-1.5">
                           {actions.first_time_payers.map(u => (
@@ -504,7 +502,7 @@ export default function SessionDetailPage() {
                               </span>
                               {u.dm_sent && (
                                 <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: 'rgb(74,222,128)' }}>
-                                  \u2705\u9001\u4FE1\u6E08\u307F
+                                  ✅送信済み
                                 </span>
                               )}
                             </div>
@@ -520,20 +518,20 @@ export default function SessionDetailPage() {
                     >
                       <div className="flex items-center justify-between mb-3">
                         <h4 className="text-xs font-bold" style={{ color: 'rgb(96,165,250)' }}>
-                          \uD83D\uDD35 \u9AD8\u984D\u8AB2\u91D1\u30E6\u30FC\u30B6\u30FC\u3078\u7279\u5225DM ({actions.high_spenders.length}\u4EBA)
+                          🔵 高額課金ユーザーへ特別DM ({actions.high_spenders.length}人)
                         </h4>
                         {actions.high_spenders.length > 0 && (
                           <button
-                            onClick={() => setToast('\u6B21\u30D5\u30A7\u30FC\u30BA\u3067\u5B9F\u88C5\u4E88\u5B9A')}
+                            onClick={() => setToast('次フェーズで実装予定')}
                             className="text-[10px] px-3 py-1.5 rounded-lg font-semibold transition-colors"
                             style={{ background: 'rgba(59,130,246,0.2)', color: 'rgb(96,165,250)' }}
                           >
-                            \u500B\u5225DM\u4F5C\u6210
+                            個別DM作成
                           </button>
                         )}
                       </div>
                       {actions.high_spenders.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>\u8A72\u5F53\u306A\u3057</p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>該当なし</p>
                       ) : (
                         <div className="space-y-1.5">
                           {actions.high_spenders.map(u => (
@@ -564,20 +562,20 @@ export default function SessionDetailPage() {
                     >
                       <div className="flex items-center justify-between mb-3">
                         <h4 className="text-xs font-bold" style={{ color: 'rgb(250,204,21)' }}>
-                          \uD83D\uDFE1 \u6765\u8A2A\u3057\u305F\u304C\u30A2\u30AF\u30B7\u30E7\u30F3\u306A\u3057 ({actions.visited_no_action.length}\u4EBA)
+                          🟡 来訪したがアクションなし ({actions.visited_no_action.length}人)
                         </h4>
                         {actions.visited_no_action.length > 0 && (
                           <button
-                            onClick={() => setToast('\u6B21\u30D5\u30A7\u30FC\u30BA\u3067\u5B9F\u88C5\u4E88\u5B9A')}
+                            onClick={() => setToast('次フェーズで実装予定')}
                             className="text-[10px] px-3 py-1.5 rounded-lg font-semibold transition-colors"
                             style={{ background: 'rgba(234,179,8,0.2)', color: 'rgb(250,204,21)' }}
                           >
-                            \u30D5\u30A9\u30ED\u30FCDM\u3092\u9001\u308B
+                            フォローDMを送る
                           </button>
                         )}
                       </div>
                       {actions.visited_no_action.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>\u8A72\u5F53\u306A\u3057</p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>該当なし</p>
                       ) : (
                         <div className="flex flex-wrap gap-2">
                           {groupBySegmentRange(actions.visited_no_action).map(g => (
@@ -586,7 +584,7 @@ export default function SessionDetailPage() {
                               className="text-xs px-3 py-1.5 rounded-lg"
                               style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)' }}
                             >
-                              {g.label}: <span className="font-bold" style={{ color: 'rgb(250,204,21)' }}>{g.count}\u4EBA</span>
+                              {g.label}: <span className="font-bold" style={{ color: 'rgb(250,204,21)' }}>{g.count}人</span>
                             </span>
                           ))}
                         </div>
@@ -599,10 +597,10 @@ export default function SessionDetailPage() {
                       style={{ background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.25)' }}
                     >
                       <h4 className="text-xs font-bold mb-3" style={{ color: 'rgb(248,113,113)' }}>
-                        \uD83D\uDD34 DM\u9001\u4FE1\u2192\u672A\u6765\u8A2A ({actions.dm_no_visit.length}\u4EBA)
+                        🔴 DM送信→未来訪 ({actions.dm_no_visit.length}人)
                       </h4>
                       {actions.dm_no_visit.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>\u8A72\u5F53\u306A\u3057</p>
+                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>該当なし</p>
                       ) : (
                         <>
                           <div className="flex flex-wrap gap-2 mb-3">
@@ -612,12 +610,12 @@ export default function SessionDetailPage() {
                                 className="text-xs px-3 py-1.5 rounded-lg"
                                 style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)' }}
                               >
-                                {g.label}: <span className="font-bold" style={{ color: 'rgb(248,113,113)' }}>{g.count}\u4EBA</span>
+                                {g.label}: <span className="font-bold" style={{ color: 'rgb(248,113,113)' }}>{g.count}人</span>
                               </span>
                             ))}
                           </div>
                           <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                            \u6B21\u56DE\u306EDM\u30BF\u30FC\u30B2\u30C3\u30C8\u898B\u76F4\u3057\u3092\u691C\u8A0E
+                            次回のDMターゲット見直しを検討
                           </p>
                         </>
                       )}
@@ -627,16 +625,16 @@ export default function SessionDetailPage() {
                     {actions.segment_breakdown && actions.segment_breakdown.length > 0 && (
                       <div className="glass-card p-5">
                         <h3 className="text-xs font-bold mb-4" style={{ color: 'var(--text-secondary)' }}>
-                          \uD83D\uDCCA \u30BB\u30B0\u30E1\u30F3\u30C8\u5225\u30D6\u30EC\u30A4\u30AF\u30C0\u30A6\u30F3
+                          📊 セグメント別ブレイクダウン
                         </h3>
                         <div className="overflow-x-auto">
                           <table className="w-full text-xs">
                             <thead>
                               <tr style={{ color: 'var(--text-muted)' }}>
-                                <th className="text-left pb-2 pr-4 font-semibold">\u30BB\u30B0\u30E1\u30F3\u30C8</th>
-                                <th className="text-right pb-2 px-2 font-semibold">DM\u9001\u4FE1</th>
-                                <th className="text-right pb-2 px-2 font-semibold">\u6765\u8A2A</th>
-                                <th className="text-right pb-2 px-2 font-semibold">\u8AB2\u91D1</th>
+                                <th className="text-left pb-2 pr-4 font-semibold">セグメント</th>
+                                <th className="text-right pb-2 px-2 font-semibold">DM送信</th>
+                                <th className="text-right pb-2 px-2 font-semibold">来訪</th>
+                                <th className="text-right pb-2 px-2 font-semibold">課金</th>
                                 <th className="text-right pb-2 px-2 font-semibold">Visit CVR</th>
                                 <th className="text-right pb-2 pl-2 font-semibold">Payment CVR</th>
                               </tr>
@@ -671,14 +669,14 @@ export default function SessionDetailPage() {
                                         <button
                                           onClick={() => setShowFormula(showFormula === `${row.segment}-visit` ? null : `${row.segment}-visit`)}
                                           className="ml-1 opacity-50 hover:opacity-100 transition-opacity"
-                                          title="\u8A08\u7B97\u5F0F\u3092\u8868\u793A"
+                                          title="計算式を表示"
                                         >
-                                          \uD83D\uDCD0
+                                          📐
                                         </button>
                                       )}
                                       {showFormula === `${row.segment}-visit` && (
                                         <div className="text-[10px] mt-0.5" style={{ color: 'var(--accent-amber)' }}>
-                                          {row.visited}\u4EBA / {row.dm_sent}\u4EBA = {visitCvr}%
+                                          {row.visited}人 / {row.dm_sent}人 = {visitCvr}%
                                         </div>
                                       )}
                                     </td>
@@ -690,14 +688,14 @@ export default function SessionDetailPage() {
                                         <button
                                           onClick={() => setShowFormula(showFormula === `${row.segment}-pay` ? null : `${row.segment}-pay`)}
                                           className="ml-1 opacity-50 hover:opacity-100 transition-opacity"
-                                          title="\u8A08\u7B97\u5F0F\u3092\u8868\u793A"
+                                          title="計算式を表示"
                                         >
-                                          \uD83D\uDCD0
+                                          📐
                                         </button>
                                       )}
                                       {showFormula === `${row.segment}-pay` && (
                                         <div className="text-[10px] mt-0.5" style={{ color: 'var(--accent-amber)' }}>
-                                          {row.paid}\u4EBA / {row.visited}\u4EBA = {payCvr}%
+                                          {row.paid}人 / {row.visited}人 = {payCvr}%
                                         </div>
                                       )}
                                     </td>
@@ -714,7 +712,7 @@ export default function SessionDetailPage() {
                                 const totalPayCvr = totals.vis > 0 ? (totals.pay / totals.vis * 100).toFixed(1) : '-';
                                 return (
                                   <tr className="border-t-2" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
-                                    <td className="py-2 pr-4 font-bold" style={{ color: 'var(--text-primary)' }}>\u5408\u8A08</td>
+                                    <td className="py-2 pr-4 font-bold" style={{ color: 'var(--text-primary)' }}>合計</td>
                                     <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--text-primary)' }}>{totals.dm}</td>
                                     <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--text-primary)' }}>{totals.vis}</td>
                                     <td className="py-2 px-2 text-right font-bold" style={{ color: 'var(--accent-amber)' }}>{totals.pay}</td>
