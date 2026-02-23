@@ -1,0 +1,153 @@
+[
+  {
+    "channel": "newChatMessage@213821781",
+    "data": {
+      "additionalData": {},
+      "message": {
+        "additionalData": {
+          "isKing": false,
+          "isKnight": false,
+          "isStudioAdmin": false,
+          "isStudioModerator": false
+        },
+        "cacheId": "699c63f709f4b",
+        "createdAt": "2026-02-23T14:28:07Z",
+        "details": {
+          "amount": 90,
+          "body": "",
+          "fanClubNumberMonthsOfSubscribed": 0,
+          "fanClubTier": null,
+          "isAnonymous": false,
+          "source": "",
+          "tipData": []
+        },
+        "id": 1857926607183691,
+        "modelId": 213821781,
+        "type": "tip",
+        "userData": {
+          "hasAdminBadge": false,
+          "hasVrDevice": false,
+          "id": 187023571,
+          "isAdmin": false,
+          "isBlocked": false,
+          "isDeleted": false,
+          "isExGreen": false,
+          "isGreen": true,
+          "isModel": false,
+          "isOnline": true,
+          "isPermanentlyBlocked": false,
+          "isRegular": false,
+          "isStudio": false,
+          "isSupport": false,
+          "isUltimate": false,
+          "userRanking": {
+            "isEx": false,
+            "league": "gold",
+            "level": 39
+          },
+          "username": "rio1252"
+        }
+      }
+    },
+    "receivedAt": "2026-02-23T14:28:09Z",
+    "_note": "type=tip, 90 tokens from rio1252 (gold Lv39)"
+  },
+  {
+    "channel": "newChatMessage@213821781",
+    "data": {
+      "additionalData": {},
+      "message": {
+        "additionalData": {
+          "isKing": false,
+          "isKnight": false,
+          "isStudioAdmin": false,
+          "isStudioModerator": false
+        },
+        "cacheId": "699c6364cf141",
+        "createdAt": "2026-02-23T14:28:10Z",
+        "details": {
+          "body": "復刻商品",
+          "fanClubNumberMonthsOfSubscribed": 0,
+          "fanClubTier": null
+        },
+        "id": 1857926610873023,
+        "modelId": 213821781,
+        "type": "text",
+        "userData": {
+          "hasAdminBadge": false,
+          "hasVrDevice": false,
+          "id": 72277152,
+          "isAdmin": false,
+          "isBlocked": false,
+          "isDeleted": false,
+          "isExGreen": false,
+          "isGreen": true,
+          "isModel": false,
+          "isOnline": true,
+          "isPermanentlyBlocked": false,
+          "isRegular": false,
+          "isStudio": false,
+          "isSupport": false,
+          "isUltimate": false,
+          "userRanking": {
+            "isEx": false,
+            "league": "gold",
+            "level": 50
+          },
+          "username": "herojpn"
+        }
+      }
+    },
+    "receivedAt": "2026-02-23T14:28:12Z",
+    "_note": "type=text, chat message from herojpn (gold Lv50)"
+  },
+  {
+    "channel": "newChatMessage@213821781",
+    "data": {
+      "additionalData": {},
+      "message": {
+        "additionalData": {
+          "isKing": false,
+          "isKnight": false,
+          "isStudioAdmin": false,
+          "isStudioModerator": false
+        },
+        "cacheId": "699c63fdb8bf4",
+        "createdAt": "2026-02-23T14:28:13Z",
+        "details": {
+          "body": "真っ赤",
+          "fanClubNumberMonthsOfSubscribed": 0,
+          "fanClubTier": null
+        },
+        "id": 1857926614191092,
+        "modelId": 213821781,
+        "type": "text",
+        "userData": {
+          "hasAdminBadge": false,
+          "hasVrDevice": false,
+          "id": 190619456,
+          "isAdmin": false,
+          "isBlocked": false,
+          "isDeleted": false,
+          "isExGreen": false,
+          "isGreen": true,
+          "isModel": false,
+          "isOnline": true,
+          "isPermanentlyBlocked": false,
+          "isRegular": false,
+          "isStudio": false,
+          "isSupport": false,
+          "isUltimate": false,
+          "userRanking": {
+            "isEx": false,
+            "league": "diamond",
+            "level": 66
+          },
+          "username": "ARAI_GUMA_999"
+        }
+      }
+    },
+    "receivedAt": "2026-02-23T14:28:15Z",
+    "_note": "type=text, chat message from ARAI_GUMA_999 (diamond Lv66)"
+  }
+]

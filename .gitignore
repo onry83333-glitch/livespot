@@ -11,6 +11,7 @@ out/
 .env.production
 backend/.env
 chrome-extension/.env
+collector/.env
 
 # Python
 __pycache__/
@@ -35,9 +36,16 @@ build/
 # Test
 test_livespot.py
 test_jwt_debug*.py
+frontend/tests/screenshots/
+frontend/test-results/
+frontend/playwright-report/
+.env.test
 
 # Claude Code
 .claude/
+
+# Collector logs
+collector/logs/*.log
 
 # Windows artifacts
 nul
