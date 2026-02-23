@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
 import { ChatMessage } from '@/components/chat-message';
-import { formatTokens, tokensToJPY, timeAgo, formatJST } from '@/lib/utils';
+import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 
@@ -259,7 +259,7 @@ function CastDetailInner() {
 
   const castName = decodeURIComponent(params.castName as string);
   const activeTab = (searchParams.get('tab') as TabKey) || 'overview';
-  const coinRate = 7.7;
+  const coinRate = COIN_RATE;
 
   const supabaseRef = useRef(createClient());
   const sb = supabaseRef.current;

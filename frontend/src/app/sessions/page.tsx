@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
-import { formatTokens, tokensToJPY, msgTypeLabel, getUserLeagueColor } from '@/lib/utils';
+import { formatTokens, tokensToJPY, msgTypeLabel, getUserLeagueColor, COIN_RATE } from '@/lib/utils';
 import type { SpyMessage, Account } from '@/types';
 
 interface AIReport {
@@ -86,7 +86,7 @@ export default function SessionsPage() {
   const { user } = useAuth();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<string>('');
-  const [coinRate, setCoinRate] = useState(7.7);
+  const [coinRate, setCoinRate] = useState(COIN_RATE);
   const [castUsernames, setCastUsernames] = useState<string[]>([]);
   const [sessions, setSessions] = useState<ComputedSession[]>([]);
   const [loading, setLoading] = useState(false);

@@ -11,8 +11,11 @@ export function formatTokens(tokens: number): string {
   return tokens.toLocaleString() + ' tk';
 }
 
+/** Default coin rate: 1 token ≈ ¥7.7 */
+export const COIN_RATE = 7.7;
+
 /** Format tokens to JPY estimate (default 1tk ≈ ¥7.7, configurable per account) */
-export function tokensToJPY(tokens: number, coinRate: number = 7.7): string {
+export function tokensToJPY(tokens: number, coinRate: number = COIN_RATE): string {
   return '\u00A5' + Math.round(tokens * coinRate).toLocaleString();
 }
 

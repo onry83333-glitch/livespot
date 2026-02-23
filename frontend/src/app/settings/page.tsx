@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
+import { COIN_RATE } from '@/lib/utils';
 
 interface Account {
   id: string;
@@ -28,7 +29,7 @@ export default function SettingsPage() {
   const [selectedAccount, setSelectedAccount] = useState('');
   const [settings, setSettings] = useState<AccountSettings | null>(null);
   const [castInput, setCastInput] = useState('');
-  const [coinRate, setCoinRate] = useState(7.7);
+  const [coinRate, setCoinRate] = useState(COIN_RATE);
   const [loading, setLoading] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);

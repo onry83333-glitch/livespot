@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
-import { formatTokens, tokensToJPY } from '@/lib/utils';
+import { formatTokens, tokensToJPY, COIN_RATE } from '@/lib/utils';
 import Link from 'next/link';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, Tooltip,
@@ -51,7 +51,7 @@ interface SummaryStats {
   totalMessages: number;
 }
 
-const COIN_RATE = 7.7;
+// COIN_RATE imported from @/lib/utils
 const PAGE_SIZE = 20;
 const LOAD_LIMIT = 500;
 

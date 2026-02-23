@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
-import { formatTokens, tokensToJPY, timeAgo } from '@/lib/utils';
+import { formatTokens, tokensToJPY, timeAgo, COIN_RATE } from '@/lib/utils';
 import type { Account, RegisteredCast } from '@/types';
 
 /** 週境界: 月曜03:00 JST（送金サイクル区切り）をUTCで返す。月曜0-2時台は前週扱い。 */
@@ -52,7 +52,7 @@ export default function CastsPage() {
   const [castStats, setCastStats] = useState<CastStats[]>([]);
   const [weeklyStats, setWeeklyStats] = useState<WeeklyCoinStats[]>([]);
   const [loading, setLoading] = useState(true);
-  const [coinRate] = useState(7.7);
+  const [coinRate] = useState(COIN_RATE);
 
   // 登録フォーム state
   const [showForm, setShowForm] = useState(false);

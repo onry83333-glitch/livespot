@@ -6,7 +6,7 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
-import { formatTokens, tokensToJPY, formatJST } from '@/lib/utils';
+import { formatTokens, tokensToJPY, formatJST, COIN_RATE } from '@/lib/utils';
 import Link from 'next/link';
 import { queueDmBatch } from '@/lib/dm-sender';
 import { checkAndEnroll } from '@/lib/scenario-engine';
@@ -238,7 +238,7 @@ const LABELS = {
   filterChat: 'チャット',
 } as const;
 
-const COIN_RATE = 7.7;
+// COIN_RATE imported from @/lib/utils
 
 const SEGMENT_GROUPS = [
   { id: 'whale_vip', label: 'Whale/VIP', segments: ['whale', 'vip'], defaultOn: true },
