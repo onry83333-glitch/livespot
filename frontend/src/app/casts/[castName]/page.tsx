@@ -15,7 +15,7 @@ import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 /* ============================================================
    Types
    ============================================================ */
-type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots' | 'persona';
+type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots' | 'persona' | 'overlap' | 'settings';
 
 interface CastStatsData {
   total_messages: number;
@@ -250,6 +250,8 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'realtime',  icon: '👁', label: 'リアルタイム' },
   { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
   { key: 'persona',     icon: '🎭', label: 'ペルソナ' },
+  { key: 'overlap',     icon: '🔄', label: '競合分析' },
+  { key: 'settings',    icon: '⚙', label: '設定' },
 ];
 
 /* ============================================================
@@ -481,6 +483,24 @@ function CastDetailInner() {
   const [personaTestResult, setPersonaTestResult] = useState<string | null>(null);
   const [personaTestLoading, setPersonaTestLoading] = useState(false);
 
+  // Overlap (競合分析)
+  const [overlapMatrix, setOverlapMatrix] = useState<{ own_cast: string; spy_cast: string; overlap_users: number; overlap_tokens: number; own_total_users: number }[]>([]);
+  const [spyTopUsers, setSpyTopUsers] = useState<{ user_name: string; spy_casts: string[]; spy_total_tokens: number; own_total_coins: number; own_segment: string | null; cast_count: number }[]>([]);
+  const [overlapLoading, setOverlapLoading] = useState(false);
+  const [overlapRefreshing, setOverlapRefreshing] = useState(false);
+  const [lastProfileUpdate, setLastProfileUpdate] = useState<string | null>(null);
+
+  // Settings tab
+  const [settingsModelId, setSettingsModelId] = useState<string>('');
+  const [settingsPlatform, setSettingsPlatform] = useState<string>('stripchat');
+  const [settingsAvatarUrl, setSettingsAvatarUrl] = useState<string>('');
+  const [settingsDisplayName, setSettingsDisplayName] = useState<string>('');
+  const [settingsNotes, setSettingsNotes] = useState<string>('');
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsAutoFetching, setSettingsAutoFetching] = useState(false);
+  const [settingsMsg, setSettingsMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
 
@@ -577,6 +597,16 @@ function CastDetailInner() {
 
   // データ分離: キャスト登録日以降のデータのみ表示
   const registeredAt = useMemo(() => castInfo?.created_at || null, [castInfo]);
+
+  // Settings: castInfo → form state sync
+  useEffect(() => {
+    if (!castInfo) return;
+    setSettingsModelId(castInfo.model_id?.toString() || castInfo.stripchat_model_id || '');
+    setSettingsPlatform(castInfo.platform || 'stripchat');
+    setSettingsAvatarUrl(castInfo.avatar_url || '');
+    setSettingsDisplayName(castInfo.display_name || '');
+    setSettingsNotes(castInfo.notes || '');
+  }, [castInfo]);
 
   // Alert rules loading
   useEffect(() => {
@@ -1564,6 +1594,51 @@ function CastDetailInner() {
       setPersonaLoading(false);
     })();
   }, [accountId, castName, activeTab, sb]);
+
+  // ─── Overlap (競合分析) データロード ───
+  useEffect(() => {
+    if (!accountId || activeTab !== 'overlap') return;
+    setOverlapLoading(true);
+    (async () => {
+      try {
+        const [matrixRes, topRes, tsRes] = await Promise.all([
+          sb.rpc('get_user_overlap_matrix', { p_account_id: accountId }),
+          sb.rpc('get_spy_top_users', { p_account_id: accountId, p_limit: 50 }),
+          sb.from('spy_user_profiles')
+            .select('updated_at')
+            .eq('account_id', accountId)
+            .order('updated_at', { ascending: false })
+            .limit(1),
+        ]);
+        if (matrixRes.data) setOverlapMatrix(matrixRes.data);
+        if (topRes.data) setSpyTopUsers(topRes.data);
+        if (tsRes.data?.[0]?.updated_at) setLastProfileUpdate(tsRes.data[0].updated_at);
+      } catch { /* ignore */ }
+      setOverlapLoading(false);
+    })();
+  }, [accountId, activeTab, sb]);
+
+  // ─── Overlap: プロフィール集計更新 ───
+  const handleRefreshProfiles = useCallback(async () => {
+    if (!accountId || overlapRefreshing) return;
+    setOverlapRefreshing(true);
+    try {
+      const { data, error } = await sb.rpc('refresh_spy_user_profiles', { p_account_id: accountId });
+      if (error) throw error;
+      alert(`プロフィール集計完了: ${data}件更新`);
+      // データ再ロード
+      const [matrixRes, topRes] = await Promise.all([
+        sb.rpc('get_user_overlap_matrix', { p_account_id: accountId }),
+        sb.rpc('get_spy_top_users', { p_account_id: accountId, p_limit: 50 }),
+      ]);
+      if (matrixRes.data) setOverlapMatrix(matrixRes.data);
+      if (topRes.data) setSpyTopUsers(topRes.data);
+      setLastProfileUpdate(new Date().toISOString());
+    } catch (e: any) {
+      alert(`集計エラー: ${e.message || '不明'}`);
+    }
+    setOverlapRefreshing(false);
+  }, [accountId, overlapRefreshing, sb]);
 
   const handlePersonaSave = useCallback(async () => {
     if (!accountId) return;
@@ -4900,6 +4975,522 @@ function CastDetailInner() {
                   </div>
                 </>
               )}
+            </div>
+          )}
+
+          {/* ============ OVERLAP (競合分析) ============ */}
+          {activeTab === 'overlap' && (
+            <div className="space-y-4">
+              {overlapLoading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  ))}
+                </div>
+              ) : (
+                <>
+                  {/* Section 1: データ更新 */}
+                  <div className="glass-card p-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-bold flex items-center gap-2">
+                          🔄 プロフィール集計
+                        </h3>
+                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                          spy_messages からユーザー×キャスト別にトークン・出現回数を集計
+                        </p>
+                        {lastProfileUpdate && (
+                          <p className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                            最終更新: {formatJST(lastProfileUpdate)}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={handleRefreshProfiles}
+                        disabled={overlapRefreshing}
+                        className="btn-primary text-xs px-4 py-2"
+                        style={{ opacity: overlapRefreshing ? 0.5 : 1 }}
+                      >
+                        {overlapRefreshing ? '集計中...' : '集計を更新'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Section 2: サマリーカード */}
+                  {(() => {
+                    const totalSpyUsers = new Set(spyTopUsers.map(u => u.user_name)).size;
+                    const overlapUserSet = new Set(
+                      spyTopUsers.filter(u => u.own_total_coins > 0).map(u => u.user_name)
+                    );
+                    const overlapRate = totalSpyUsers > 0
+                      ? Math.round((overlapUserSet.size / totalSpyUsers) * 100)
+                      : 0;
+                    const avgSpyTokens = spyTopUsers.length > 0
+                      ? Math.round(spyTopUsers.reduce((s, u) => s + u.spy_total_tokens, 0) / spyTopUsers.length)
+                      : 0;
+                    const prospectCount = spyTopUsers.filter(
+                      u => u.own_total_coins === 0 && u.spy_total_tokens >= 100
+                    ).length;
+                    return (
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {[
+                          { label: '他社ユーザー数', value: totalSpyUsers.toLocaleString(), icon: '👥' },
+                          { label: '自社との重複率', value: `${overlapRate}%`, icon: '🔗' },
+                          { label: '平均他社tk', value: formatTokens(avgSpyTokens), icon: '💰' },
+                          { label: '獲得候補数', value: prospectCount.toLocaleString(), icon: '🎯' },
+                        ].map((card, i) => (
+                          <div key={i} className="glass-card p-3 text-center">
+                            <p className="text-lg mb-1">{card.icon}</p>
+                            <p className="text-base font-bold" style={{ color: 'var(--text-primary)' }}>{card.value}</p>
+                            <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{card.label}</p>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {/* Section 3: 重複マトリクス */}
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                      📊 ユーザー重複マトリクス
+                    </h3>
+                    {overlapMatrix.length === 0 ? (
+                      <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>
+                        データなし — 「集計を更新」を実行してください
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                              <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>他社キャスト</th>
+                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複ユーザー</th>
+                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複tk</th>
+                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複率</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {overlapMatrix.map((row, i) => {
+                              const rate = row.own_total_users > 0
+                                ? Math.round((row.overlap_users / row.own_total_users) * 100)
+                                : 0;
+                              const heatBg = `rgba(56,189,248,${Math.min(rate / 100, 0.4).toFixed(2)})`;
+                              return (
+                                <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)', background: heatBg }}>
+                                  <td className="py-2 px-2 font-medium">{row.spy_cast}</td>
+                                  <td className="py-2 px-2 text-right">{row.overlap_users}</td>
+                                  <td className="py-2 px-2 text-right" style={{ color: 'var(--accent-amber)' }}>
+                                    {formatTokens(row.overlap_tokens)}
+                                  </td>
+                                  <td className="py-2 px-2 text-right font-bold">{rate}%</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Section 4: ユーザーランキング */}
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                      🏆 他社高額課金ユーザーランキング
+                    </h3>
+                    {spyTopUsers.length === 0 ? (
+                      <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>
+                        データなし — 「集計を更新」を実行してください
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                              <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>#</th>
+                              <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>ユーザー</th>
+                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>他社tk</th>
+                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>キャスト数</th>
+                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>自社tk</th>
+                              <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>セグメント</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {spyTopUsers.map((u, i) => {
+                              const segBadge: Record<string, { icon: string; color: string }> = {
+                                whale: { icon: '🐋', color: 'var(--accent-purple)' },
+                                vip: { icon: '👑', color: 'var(--accent-amber)' },
+                                regular: { icon: '⭐', color: 'var(--accent-green)' },
+                                light: { icon: '💡', color: 'var(--text-secondary)' },
+                                new: { icon: '🆕', color: 'var(--accent-primary)' },
+                                churned: { icon: '💤', color: 'var(--text-muted)' },
+                              };
+                              const seg = u.own_segment ? segBadge[u.own_segment] : null;
+                              return (
+                                <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                  <td className="py-2 px-2" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
+                                  <td className="py-2 px-2">
+                                    <a href={`/users/${encodeURIComponent(u.user_name)}`}
+                                      className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                                      {u.user_name}
+                                    </a>
+                                    <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                      {u.spy_casts.slice(0, 3).join(', ')}{u.spy_casts.length > 3 ? ` +${u.spy_casts.length - 3}` : ''}
+                                    </p>
+                                  </td>
+                                  <td className="py-2 px-2 text-right font-medium" style={{ color: 'var(--accent-amber)' }}>
+                                    {formatTokens(u.spy_total_tokens)}
+                                  </td>
+                                  <td className="py-2 px-2 text-right">{u.cast_count}</td>
+                                  <td className="py-2 px-2 text-right">
+                                    {u.own_total_coins > 0 ? formatTokens(u.own_total_coins) : (
+                                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-2">
+                                    {seg ? (
+                                      <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full"
+                                        style={{ background: `${seg.color}20`, color: seg.color }}>
+                                        {seg.icon} {u.own_segment}
+                                      </span>
+                                    ) : (
+                                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>未課金</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ============ SETTINGS (設定) ============ */}
+          {activeTab === 'settings' && (
+            <div className="space-y-4">
+              {/* セクション1: 基本情報 */}
+              <div className="glass-card p-5">
+                <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                  📋 基本情報
+                </h3>
+                <div className="space-y-3">
+                  {/* キャスト名（読み取り専用） */}
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                      キャスト名
+                    </label>
+                    <div className="input-glass px-3 py-2 text-sm rounded-xl" style={{ opacity: 0.6 }}>
+                      {castName}
+                    </div>
+                  </div>
+
+                  {/* 表示名 */}
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                      表示名
+                    </label>
+                    <input
+                      type="text"
+                      className="input-glass w-full px-3 py-2 text-sm rounded-xl"
+                      value={settingsDisplayName}
+                      onChange={e => setSettingsDisplayName(e.target.value)}
+                      placeholder="例: りさ"
+                    />
+                  </div>
+
+                  {/* プラットフォーム */}
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                      プラットフォーム
+                    </label>
+                    <div className="flex gap-2">
+                      {['stripchat', 'fanza', 'chatpia'].map(p => (
+                        <button
+                          key={p}
+                          onClick={() => setSettingsPlatform(p)}
+                          className="text-xs px-3 py-1.5 rounded-lg font-medium transition-all"
+                          style={{
+                            background: settingsPlatform === p ? 'rgba(56,189,248,0.15)' : 'transparent',
+                            color: settingsPlatform === p ? 'var(--accent-primary)' : 'var(--text-muted)',
+                            border: settingsPlatform === p ? '1px solid rgba(56,189,248,0.25)' : '1px solid var(--border-glass)',
+                          }}
+                        >
+                          {p === 'stripchat' ? 'Stripchat' : p === 'fanza' ? 'FANZA' : 'チャットピア'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Model ID */}
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                      Model ID
+                      <span className="ml-2 font-normal normal-case" style={{ color: 'var(--text-muted)' }}>
+                        (Collector WebSocket接続に必要)
+                      </span>
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="input-glass flex-1 px-3 py-2 text-sm rounded-xl font-mono"
+                        value={settingsModelId}
+                        onChange={e => setSettingsModelId(e.target.value.replace(/[^0-9]/g, ''))}
+                        placeholder="例: 178845750"
+                      />
+                      {settingsPlatform === 'stripchat' && (
+                        <button
+                          onClick={async () => {
+                            setSettingsAutoFetching(true);
+                            setSettingsMsg(null);
+                            try {
+                              const res = await fetch(`https://stripchat.com/api/front/v2/models/username/${encodeURIComponent(castName)}/cam`);
+                              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                              const json = await res.json();
+                              const mid = json?.user?.user?.id || json?.user?.id;
+                              if (!mid) throw new Error('レスポンスにmodel IDが見つかりません');
+                              setSettingsModelId(String(mid));
+                              // アバターURLも自動設定
+                              const avatar = json?.user?.user?.snapshotUrl || json?.user?.snapshotUrl;
+                              if (avatar) setSettingsAvatarUrl(avatar);
+                              setSettingsMsg({ type: 'ok', text: `Model ID取得成功: ${mid}` });
+                            } catch (err: unknown) {
+                              const msg = err instanceof Error ? err.message : '不明なエラー';
+                              setSettingsMsg({ type: 'err', text: `取得失敗: ${msg}` });
+                            } finally {
+                              setSettingsAutoFetching(false);
+                            }
+                          }}
+                          disabled={settingsAutoFetching}
+                          className="btn-primary text-xs px-3 py-2 whitespace-nowrap"
+                          style={{ opacity: settingsAutoFetching ? 0.5 : 1 }}
+                        >
+                          {settingsAutoFetching ? '取得中...' : '自動取得'}
+                        </button>
+                      )}
+                    </div>
+                    {settingsMsg && (
+                      <p className="text-[11px] mt-1.5" style={{ color: settingsMsg.type === 'ok' ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                        {settingsMsg.text}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* アバタープレビュー */}
+                  {(settingsAvatarUrl || settingsModelId) && (
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                        アバター
+                      </label>
+                      <div className="flex items-center gap-3">
+                        <div className="w-16 h-16 rounded-xl overflow-hidden" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-glass)' }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={settingsAvatarUrl || `https://img.doppiocdn.org/thumbs/${settingsModelId}_webp`}
+                            alt={castName}
+                            className="w-full h-full object-cover"
+                            onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          className="input-glass flex-1 px-3 py-2 text-xs rounded-xl"
+                          value={settingsAvatarUrl}
+                          onChange={e => setSettingsAvatarUrl(e.target.value)}
+                          placeholder="アバターURL（自動取得または手動入力）"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* メモ */}
+                  <div>
+                    <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                      メモ
+                    </label>
+                    <textarea
+                      className="input-glass w-full px-3 py-2 text-sm rounded-xl resize-none"
+                      rows={3}
+                      value={settingsNotes}
+                      onChange={e => setSettingsNotes(e.target.value)}
+                      placeholder="管理用メモ..."
+                    />
+                  </div>
+
+                  {/* 保存ボタン */}
+                  <div className="flex justify-end pt-2">
+                    <button
+                      onClick={async () => {
+                        if (!castInfo) return;
+                        setSettingsSaving(true);
+                        setSettingsMsg(null);
+                        const { error } = await sb
+                          .from('registered_casts')
+                          .update({
+                            model_id: settingsModelId ? parseInt(settingsModelId, 10) : null,
+                            platform: settingsPlatform,
+                            avatar_url: settingsAvatarUrl || null,
+                            display_name: settingsDisplayName || null,
+                            notes: settingsNotes || null,
+                            stripchat_model_id: settingsModelId || null,
+                            updated_at: new Date().toISOString(),
+                          })
+                          .eq('id', castInfo.id);
+                        setSettingsSaving(false);
+                        if (error) {
+                          setSettingsMsg({ type: 'err', text: `保存失敗: ${error.message}` });
+                        } else {
+                          setSettingsMsg({ type: 'ok', text: '保存しました' });
+                          // castInfo も更新
+                          setCastInfo(prev => prev ? {
+                            ...prev,
+                            model_id: settingsModelId ? parseInt(settingsModelId, 10) : null,
+                            platform: settingsPlatform,
+                            avatar_url: settingsAvatarUrl || null,
+                            display_name: settingsDisplayName || null,
+                            notes: settingsNotes || null,
+                            stripchat_model_id: settingsModelId || null,
+                          } : null);
+                        }
+                      }}
+                      disabled={settingsSaving}
+                      className="btn-primary text-xs px-6 py-2"
+                      style={{ opacity: settingsSaving ? 0.5 : 1 }}
+                    >
+                      {settingsSaving ? '保存中...' : '設定を保存'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* セクション2: Collector設定 */}
+              <div className="glass-card p-5">
+                <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                  📡 Collector設定
+                </h3>
+                <div className="space-y-3">
+                  {/* 監視対象ON/OFF */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">監視対象</p>
+                      <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        WebSocket Collectorの自動収集対象にする
+                      </p>
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!castInfo) return;
+                        const newVal = !castInfo.is_active;
+                        const { error } = await sb
+                          .from('registered_casts')
+                          .update({ is_active: newVal, updated_at: new Date().toISOString() })
+                          .eq('id', castInfo.id);
+                        if (!error) {
+                          setCastInfo(prev => prev ? { ...prev, is_active: newVal } : null);
+                        }
+                      }}
+                      className="relative w-11 h-6 rounded-full transition-colors"
+                      style={{
+                        background: castInfo?.is_active ? 'var(--accent-green)' : 'rgba(100,116,139,0.3)',
+                      }}
+                    >
+                      <div
+                        className="absolute top-0.5 w-5 h-5 rounded-full transition-transform"
+                        style={{
+                          background: 'white',
+                          transform: castInfo?.is_active ? 'translateX(22px)' : 'translateX(2px)',
+                        }}
+                      />
+                    </button>
+                  </div>
+
+                  {/* ステータス表示 */}
+                  <div className="glass-panel p-3 rounded-xl">
+                    <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div>
+                        <p className="text-[10px] mb-0.5" style={{ color: 'var(--text-muted)' }}>Model ID</p>
+                        <p className="font-mono">{castInfo?.model_id || castInfo?.stripchat_model_id || '未設定'}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] mb-0.5" style={{ color: 'var(--text-muted)' }}>ステータス</p>
+                        <p>
+                          {castInfo?.is_active ? (
+                            <span style={{ color: 'var(--accent-green)' }}>有効</span>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)' }}>無効</span>
+                          )}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] mb-0.5" style={{ color: 'var(--text-muted)' }}>プラットフォーム</p>
+                        <p>{castInfo?.platform || 'stripchat'}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] mb-0.5" style={{ color: 'var(--text-muted)' }}>最終更新</p>
+                        <p>{castInfo?.updated_at ? formatJST(castInfo.updated_at) : '—'}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* セクション3: 危険ゾーン */}
+              <div className="glass-card p-5" style={{ border: '1px solid rgba(244,63,94,0.2)' }}>
+                <h3 className="text-sm font-bold mb-4 flex items-center gap-2" style={{ color: 'var(--accent-pink)' }}>
+                  ⚠ 危険ゾーン
+                </h3>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium">キャスト削除</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      このキャストを登録解除します。配信ログやDM履歴は残ります。
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="btn-danger text-xs px-4 py-2"
+                  >
+                    削除
+                  </button>
+                </div>
+
+                {/* 削除確認モーダル */}
+                {showDeleteConfirm && (
+                  <div className="mt-4 glass-panel p-4 rounded-xl" style={{ border: '1px solid rgba(244,63,94,0.3)' }}>
+                    <p className="text-sm font-bold mb-2" style={{ color: 'var(--accent-pink)' }}>
+                      本当に「{castName}」を削除しますか？
+                    </p>
+                    <p className="text-[11px] mb-3" style={{ color: 'var(--text-secondary)' }}>
+                      is_active = false に設定されます。配信データは削除されません。
+                    </p>
+                    <div className="flex gap-2 justify-end">
+                      <button
+                        onClick={() => setShowDeleteConfirm(false)}
+                        className="btn-ghost text-xs px-4 py-1.5"
+                      >
+                        キャンセル
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (!castInfo) return;
+                          await sb
+                            .from('registered_casts')
+                            .update({ is_active: false, updated_at: new Date().toISOString() })
+                            .eq('id', castInfo.id);
+                          router.push('/casts');
+                        }}
+                        className="btn-danger text-xs px-4 py-1.5"
+                      >
+                        削除する
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
