@@ -1576,6 +1576,16 @@ function CastDetailInner() {
           {/* ============ SESSIONS ============ */}
           {activeTab === 'sessions' && (
             <div className="space-y-2">
+              {/* セッション一覧ページへのリンク */}
+              <div className="flex justify-end mb-1">
+                <a
+                  href={`/casts/${encodeURIComponent(castName)}/sessions`}
+                  className="text-[11px] px-3 py-1.5 rounded-md hover:bg-white/5 transition-colors"
+                  style={{ color: 'var(--accent-primary)', border: '1px solid var(--border-glass)' }}
+                >
+                  📺 全セッション一覧 →
+                </a>
+              </div>
               {sessions.length === 0 ? (
                 <div className="glass-card p-8 text-center" style={{ color: 'var(--text-muted)' }}>配信セッションデータなし</div>
               ) : sessions.map(s => {
