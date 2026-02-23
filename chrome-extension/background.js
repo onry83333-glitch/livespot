@@ -3308,8 +3308,11 @@ async function fetchNextDMTask() {
   await loadAuth();
   if (!accountId || !accessToken) return null;
 
+  // API送信に30秒の猶予を与える（created_atが30秒以上前のもののみ取得）
+  const graceThreshold = new Date(Date.now() - 30 * 1000).toISOString();
   const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
     + `?account_id=eq.${accountId}&status=eq.queued`
+    + `&created_at=lt.${encodeURIComponent(graceThreshold)}`
     + `&order=created_at.asc&limit=1`
     + `&select=id,user_name,profile_url,message,campaign`;
 

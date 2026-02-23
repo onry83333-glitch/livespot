@@ -382,6 +382,15 @@ export default function SessionDetailPage() {
   const [dmSending, setDmSending] = useState(false);
   const [dmSentCampaign, setDmSentCampaign] = useState<string | null>(null);
 
+  // DM confirmation modal state
+  const [dmConfirm, setDmConfirm] = useState<{
+    title: string;
+    users: { user_name: string; detail: string }[];
+    message: string;
+    onConfirm: (selectedUsers: string[]) => Promise<void>;
+  } | null>(null);
+  const [dmConfirmExcluded, setDmConfirmExcluded] = useState<Set<string>>(new Set());
+
   // User DM history (inline expand)
   const [expandedDmUser, setExpandedDmUser] = useState<string | null>(null);
   const [userDmHistory, setUserDmHistory] = useState<{ message: string; status: string; campaign: string | null; sent_at: string | null; queued_at: string }[]>([]);
@@ -729,7 +738,7 @@ export default function SessionDetailPage() {
     setUserDmLoading(false);
   }, [accountId, castName, sb, expandedDmUser]);
 
-  // Pre-broadcast: bulk DM send
+  // Pre-broadcast: bulk DM send (Step 1: show confirmation)
   const handlePreBroadcastDm = useCallback(async () => {
     if (!accountId || dmSending) return;
     const selectedSegments = SEGMENT_GROUPS
@@ -740,85 +749,110 @@ export default function SessionDetailPage() {
       return;
     }
     const msg = dmText.trim() + '\n' + LABELS.byafText;
-    if (!window.confirm(`${sendTargetCount}人に配信前DMを送信しますか？\n\nメッセージ:\n${msg.slice(0, 100)}...`)) return;
 
-    setDmSending(true);
-    try {
-      const { data: users } = await sb
-        .from('paid_users')
-        .select('user_name, segment')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .in('segment', selectedSegments);
-      if (!users || users.length === 0) {
-        setToast('対象ユーザーが見つかりませんでした');
-        setDmSending(false);
-        return;
-      }
-      const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
-      const campaign = `pre_broadcast_${sessionId.slice(0, 8)}_${ts}`;
-      const targets = users.map(u => ({ username: u.user_name, message: msg }));
-      const result = await queueDmBatch(sb, accountId, castName, targets, campaign);
-      setDmSentCampaign(campaign);
-      setToast(`${result.queued}件のDMをキューに登録しました`);
-    } catch (e: unknown) {
-      setToast(e instanceof Error ? e.message : '送信エラー');
+    // Fetch users for confirmation list
+    const { data: users } = await sb
+      .from('paid_users')
+      .select('user_name, segment')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .in('segment', selectedSegments);
+    if (!users || users.length === 0) {
+      setToast('対象ユーザーが見つかりませんでした');
+      return;
     }
-    setDmSending(false);
+
+    setDmConfirmExcluded(new Set());
+    setDmConfirm({
+      title: '配信前DM送信',
+      users: users.map(u => ({ user_name: u.user_name, detail: u.segment || '' })),
+      message: msg,
+      onConfirm: async (selectedUsers: string[]) => {
+        setDmSending(true);
+        try {
+          const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+          const campaign = `pre_broadcast_${sessionId.slice(0, 8)}_${ts}`;
+          const targets = selectedUsers.map(u => ({ username: u, message: msg }));
+          const result = await queueDmBatch(sb, accountId, castName, targets, campaign);
+          setDmSentCampaign(campaign);
+          setToast(`${result.queued}件のDMをキューに登録しました`);
+        } catch (e: unknown) {
+          setToast(e instanceof Error ? e.message : '送信エラー');
+        }
+        setDmSending(false);
+        setDmConfirm(null);
+      },
+    });
   }, [accountId, dmSending, selectedGroups, sendTargetCount, dmText, sb, castName, sessionId]);
 
-  // Post-broadcast: first-time payer thank DM
+  // Post-broadcast: first-time payer thank DM (Step 1: show confirmation)
   const handleThankDm = useCallback(async () => {
     if (!accountId || !actions || dmSending) return;
     const unsent = actions.first_time_payers.filter(u => !u.dm_sent);
     if (unsent.length === 0) { setToast('全員送信済みです'); return; }
-    if (!window.confirm(`初課金${unsent.length}人にお礼DMを送信しますか？`)) return;
 
-    setDmSending(true);
-    try {
-      const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
-      const campaign = `post_thank_${sessionId.slice(0, 8)}_${ts}`;
-      const targets = unsent.map(u => ({
-        username: u.user_name,
-        message: (dmText || LABELS.defaultTemplateText).replace('{username}', u.user_name),
-      }));
-      const result = await queueDmBatch(sb, accountId, castName, targets, campaign);
-      setDmSentCampaign(campaign);
-      setToast(`${result.queued}件のお礼DMをキューに登録しました`);
-      setActions(prev => prev ? {
-        ...prev,
-        first_time_payers: prev.first_time_payers.map(p =>
-          unsent.some(u => u.user_name === p.user_name) ? { ...p, dm_sent: true } : p
-        ),
-      } : prev);
-    } catch (e: unknown) {
-      setToast(e instanceof Error ? e.message : '送信エラー');
-    }
-    setDmSending(false);
+    setDmConfirmExcluded(new Set());
+    setDmConfirm({
+      title: '初課金ユーザーへお礼DM',
+      users: unsent.map(u => ({ user_name: u.user_name, detail: `${formatTokens(u.session_tokens)}` })),
+      message: (dmText || LABELS.defaultTemplateText).slice(0, 100) + '...',
+      onConfirm: async (selectedUsers: string[]) => {
+        setDmSending(true);
+        try {
+          const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+          const campaign = `post_thank_${sessionId.slice(0, 8)}_${ts}`;
+          const targets = selectedUsers.map(u => ({
+            username: u,
+            message: (dmText || LABELS.defaultTemplateText).replace('{username}', u),
+          }));
+          const result = await queueDmBatch(sb, accountId, castName, targets, campaign);
+          setDmSentCampaign(campaign);
+          setToast(`${result.queued}件のお礼DMをキューに登録しました`);
+          setActions(prev => prev ? {
+            ...prev,
+            first_time_payers: prev.first_time_payers.map(p =>
+              selectedUsers.includes(p.user_name) ? { ...p, dm_sent: true } : p
+            ),
+          } : prev);
+        } catch (e: unknown) {
+          setToast(e instanceof Error ? e.message : '送信エラー');
+        }
+        setDmSending(false);
+        setDmConfirm(null);
+      },
+    });
   }, [accountId, actions, dmSending, dmText, sb, castName, sessionId]);
 
-  // Post-broadcast: follow DM for visited_no_action
+  // Post-broadcast: follow DM for visited_no_action (Step 1: show confirmation)
   const handleFollowDm = useCallback(async () => {
     if (!accountId || !actions || dmSending) return;
     const followTargets = actions.visited_no_action;
     if (followTargets.length === 0) { setToast('対象ユーザーがいません'); return; }
-    if (!window.confirm(`来訪無アクション${followTargets.length}人にフォローDMを送信しますか？`)) return;
 
-    setDmSending(true);
-    try {
-      const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
-      const campaign = `post_follow_${sessionId.slice(0, 8)}_${ts}`;
-      const dmTargets = followTargets.map(u => ({
-        username: u.user_name,
-        message: `${u.user_name}さん、今日は来てくれてありがとう！\nまた気が向いたら遊びに来てくださいね😊`,
-      }));
-      const result = await queueDmBatch(sb, accountId, castName, dmTargets, campaign);
-      setDmSentCampaign(campaign);
-      setToast(`${result.queued}件のフォローDMをキューに登録しました`);
-    } catch (e: unknown) {
-      setToast(e instanceof Error ? e.message : '送信エラー');
-    }
-    setDmSending(false);
+    setDmConfirmExcluded(new Set());
+    setDmConfirm({
+      title: 'フォローDM送信',
+      users: followTargets.map(u => ({ user_name: u.user_name, detail: u.segment || '' })),
+      message: '{username}さん、今日は来てくれてありがとう！...',
+      onConfirm: async (selectedUsers: string[]) => {
+        setDmSending(true);
+        try {
+          const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+          const campaign = `post_follow_${sessionId.slice(0, 8)}_${ts}`;
+          const dmTargets = selectedUsers.map(u => ({
+            username: u,
+            message: `${u}さん、今日は来てくれてありがとう！\nまた気が向いたら遊びに来てくださいね😊`,
+          }));
+          const result = await queueDmBatch(sb, accountId, castName, dmTargets, campaign);
+          setDmSentCampaign(campaign);
+          setToast(`${result.queued}件のフォローDMをキューに登録しました`);
+        } catch (e: unknown) {
+          setToast(e instanceof Error ? e.message : '送信エラー');
+        }
+        setDmSending(false);
+        setDmConfirm(null);
+      },
+    });
   }, [accountId, actions, dmSending, sb, castName, sessionId]);
 
   // ============================================================
@@ -2388,6 +2422,99 @@ export default function SessionDetailPage() {
           </>
         ) : null}
       </div>
+
+      {/* DM Confirmation Modal */}
+      {dmConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}>
+          <div className="glass-card w-full max-w-lg mx-4 max-h-[80vh] flex flex-col" style={{ border: '1px solid var(--border-glow)' }}>
+            {/* Header */}
+            <div className="px-5 pt-5 pb-3 border-b" style={{ borderColor: 'var(--border-glass)' }}>
+              <h3 className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+                {`📩 ${dmConfirm.title}`}
+              </h3>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                {`送信先を確認してください — ${dmConfirm.users.length - dmConfirmExcluded.size}/${dmConfirm.users.length}人 選択中`}
+              </p>
+            </div>
+
+            {/* Message Preview */}
+            <div className="px-5 py-3 border-b" style={{ borderColor: 'var(--border-glass)', background: 'rgba(245,158,11,0.04)' }}>
+              <p className="text-[10px] font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>メッセージ</p>
+              <p className="text-xs whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                {dmConfirm.message.length > 120 ? dmConfirm.message.slice(0, 120) + '...' : dmConfirm.message}
+              </p>
+            </div>
+
+            {/* Select All / Deselect All */}
+            <div className="px-5 py-2 flex items-center gap-3 border-b" style={{ borderColor: 'var(--border-glass)' }}>
+              <button
+                onClick={() => setDmConfirmExcluded(new Set())}
+                className="text-[10px] hover:underline"
+                style={{ color: 'var(--accent-primary)' }}
+              >全選択</button>
+              <button
+                onClick={() => setDmConfirmExcluded(new Set(dmConfirm.users.map(u => u.user_name)))}
+                className="text-[10px] hover:underline"
+                style={{ color: 'var(--text-muted)' }}
+              >全解除</button>
+            </div>
+
+            {/* User List */}
+            <div className="flex-1 overflow-y-auto px-5 py-2" style={{ maxHeight: '320px' }}>
+              {dmConfirm.users.map(u => {
+                const excluded = dmConfirmExcluded.has(u.user_name);
+                return (
+                  <label
+                    key={u.user_name}
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors hover:bg-white/[0.03]"
+                    style={{ opacity: excluded ? 0.4 : 1 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!excluded}
+                      onChange={() => {
+                        setDmConfirmExcluded(prev => {
+                          const next = new Set(prev);
+                          if (next.has(u.user_name)) next.delete(u.user_name); else next.add(u.user_name);
+                          return next;
+                        });
+                      }}
+                      className="w-3.5 h-3.5 rounded accent-sky-500 shrink-0"
+                    />
+                    <span className="text-xs font-semibold truncate" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</span>
+                    {u.detail && (
+                      <span className="text-[10px] ml-auto shrink-0" style={{ color: 'var(--text-muted)' }}>{u.detail}</span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-4 border-t flex items-center justify-between" style={{ borderColor: 'var(--border-glass)' }}>
+              <button
+                onClick={() => setDmConfirm(null)}
+                className="text-xs px-4 py-2 rounded-lg transition-colors hover:bg-white/[0.05]"
+                style={{ color: 'var(--text-muted)' }}
+              >キャンセル</button>
+              <button
+                onClick={() => {
+                  const selected = dmConfirm.users
+                    .filter(u => !dmConfirmExcluded.has(u.user_name))
+                    .map(u => u.user_name);
+                  if (selected.length === 0) { setToast('送信対象が0人です'); return; }
+                  dmConfirm.onConfirm(selected);
+                }}
+                disabled={dmSending || dmConfirm.users.length - dmConfirmExcluded.size === 0}
+                className="text-xs px-5 py-2 rounded-lg font-bold transition-all disabled:opacity-50"
+                style={{ background: 'linear-gradient(135deg, #38bdf8, #0ea5e9)', color: '#fff' }}
+              >
+                {dmSending ? '送信中...' : `📤 ${dmConfirm.users.length - dmConfirmExcluded.size}人に送信`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast */}
       {toast && (

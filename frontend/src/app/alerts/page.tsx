@@ -150,7 +150,7 @@ export default function AlertsPage() {
     }
 
     const channel = sb
-      .channel(`alerts-enter-${accountId}`)
+      .channel('alerts-enter-realtime')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'spy_messages', filter: `account_id=eq.${accountId}` },

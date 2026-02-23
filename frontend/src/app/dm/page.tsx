@@ -453,7 +453,7 @@ export default function DmPage() {
   const dmChannelRef = useRef<ReturnType<typeof sb.channel> | null>(null);
 
   useEffect(() => {
-    if (!user || !selectedAccount) return;
+    if (!selectedAccount) return;
 
     // 前のチャネルをクリーンアップ
     if (dmChannelRef.current) {
@@ -462,10 +462,10 @@ export default function DmPage() {
     }
 
     const channel = sb
-      .channel(`dm-status-${selectedAccount}`)
+      .channel('dm-status-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: `account_id=eq.${selectedAccount}` }, () => {
         if (batchIdRef.current) pollStatusRef.current(batchIdRef.current);
-      })
+      });
     subscribeWithRetry(channel);
 
     dmChannelRef.current = channel;
@@ -476,7 +476,7 @@ export default function DmPage() {
         dmChannelRef.current = null;
       }
     };
-  }, [user, selectedAccount]); // batchId/pollStatusはRefで参照、depsから除外
+  }, [selectedAccount]); // batchId/pollStatusはRefで参照、depsから除外
 
   const handleSend = async () => {
     console.log('[DM] handleSend called, targets:', targets.length, 'account:', selectedAccount);

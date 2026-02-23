@@ -916,6 +916,7 @@ function OwnCastListTab() {
             <table className="w-full text-[11px]">
               <thead>
                 <tr className="border-b" style={{ borderColor: 'var(--border-glass)' }}>
+                  <th className="w-16 py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}></th>
                   <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>キャスト名</th>
                   <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>表示名</th>
                   <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>Stripchat URL</th>
@@ -931,6 +932,22 @@ function OwnCastListTab() {
                     borderColor: 'rgba(245,158,11,0.05)',
                     opacity: cast.is_extinct ? 0.5 : 1,
                   }}>
+                    <td className="py-1 px-2 w-16">
+                      {cast.stripchat_model_id ? (
+                        <img
+                          src={`/api/screenshot?model_id=${cast.stripchat_model_id}`}
+                          alt={cast.cast_name}
+                          className="w-14 h-10 object-cover rounded"
+                          style={{ border: '1px solid rgba(245,158,11,0.15)' }}
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="w-14 h-10 rounded flex items-center justify-center text-[9px]"
+                          style={{ background: 'rgba(245,158,11,0.05)', color: 'var(--text-muted)', border: '1px solid rgba(245,158,11,0.1)' }}>
+                          No ID
+                        </div>
+                      )}
+                    </td>
                     <td className="py-2.5 px-2">
                       <Link href={`/casts/${encodeURIComponent(cast.cast_name)}`}
                         className="font-semibold hover:text-amber-400 transition-colors"
@@ -1129,7 +1146,7 @@ function SpyListTab() {
   const [newCastName, setNewCastName] = useState('');
   const [addingCast, setAddingCast] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editFields, setEditFields] = useState<{ genre: string; benchmark: string; category: string; format_tag: string; notes: string; screenshot_interval: number }>({ genre: '', benchmark: '', category: '', format_tag: '', notes: '', screenshot_interval: 0 });
+  const [editFields, setEditFields] = useState<{ genre: string; benchmark: string; category: string; format_tag: string; notes: string; screenshot_interval: number; stripchat_model_id: string }>({ genre: '', benchmark: '', category: '', format_tag: '', notes: '', screenshot_interval: 0, stripchat_model_id: '' });
 
   // Filter state
   const [filterGenre, setFilterGenre] = useState('');
@@ -1223,6 +1240,7 @@ function SpyListTab() {
         format_tag: editFields.format_tag || null,
         notes: editFields.notes || null,
         screenshot_interval: editFields.screenshot_interval || 0,
+        stripchat_model_id: editFields.stripchat_model_id || null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', editingId);
@@ -1234,6 +1252,7 @@ function SpyListTab() {
       format_tag: editFields.format_tag || null,
       notes: editFields.notes || null,
       screenshot_interval: editFields.screenshot_interval || 0,
+      stripchat_model_id: editFields.stripchat_model_id || null,
       updated_at: new Date().toISOString(),
     } : c));
     setEditingId(null);
@@ -1312,6 +1331,7 @@ function SpyListTab() {
             <table className="w-full text-[11px]">
               <thead>
                 <tr className="border-b" style={{ borderColor: 'var(--border-glass)' }}>
+                  <th className="w-16 py-2 px-1 font-semibold" style={{ color: 'var(--text-muted)' }}></th>
                   <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>キャスト</th>
                   <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>タグ</th>
                   <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>MSG</th>
@@ -1343,6 +1363,19 @@ function SpyListTab() {
                       onMouseEnter={e => { e.currentTarget.style.borderLeftColor = '#38bdf8'; e.currentTarget.style.background = 'rgba(56,189,248,0.04)'; }}
                       onMouseLeave={e => { e.currentTarget.style.borderLeftColor = 'transparent'; e.currentTarget.style.background = 'transparent'; }}
                     >
+                      <td className="py-2.5 px-1 w-16">
+                        {cast.stripchat_model_id ? (
+                          <img
+                            src={`/api/screenshot?model_id=${cast.stripchat_model_id}`}
+                            alt={cast.cast_name}
+                            className="w-14 h-10 object-cover rounded"
+                            loading="lazy"
+                            onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        ) : (
+                          <div className="w-14 h-10 rounded flex items-center justify-center text-[10px]" style={{ background: 'rgba(255,255,255,0.03)', color: 'var(--text-muted)' }}>{'📷'}</div>
+                        )}
+                      </td>
                       <td className="py-2.5 px-2">
                         <span
                           className="font-semibold group-hover:text-cyan-400 transition-colors"
@@ -1388,6 +1421,11 @@ function SpyListTab() {
                                 <option value={30}>30分</option>
                               </select>
                             </div>
+                            <div>
+                              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>モデルID</label>
+                              <input type="text" value={editFields.stripchat_model_id} onChange={e => setEditFields(f => ({ ...f, stripchat_model_id: e.target.value }))}
+                                className="input-glass text-[10px] py-0.5 px-1.5 w-32" placeholder="例: 178845750" />
+                            </div>
                           </div>
                         ) : (
                           <CastTagBadges genre={cast.genre} benchmark={cast.benchmark} category={cast.category} />
@@ -1420,7 +1458,7 @@ function SpyListTab() {
                             </>
                           ) : (
                             <>
-                              <button onClick={() => { setEditingId(cast.id); setEditFields({ genre: cast.genre || '', benchmark: cast.benchmark || '', category: cast.category || '', format_tag: cast.format_tag || '', notes: cast.notes || '', screenshot_interval: cast.screenshot_interval ?? 0 }); }}
+                              <button onClick={() => { setEditingId(cast.id); setEditFields({ genre: cast.genre || '', benchmark: cast.benchmark || '', category: cast.category || '', format_tag: cast.format_tag || '', notes: cast.notes || '', screenshot_interval: cast.screenshot_interval ?? 0, stripchat_model_id: cast.stripchat_model_id || '' }); }}
                                 className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="タグ編集">✏️</button>
                               <button onClick={() => handleDelete(cast.id)} className="text-[10px] px-1.5 py-0.5 rounded hover:bg-rose-500/10" style={{ color: 'var(--accent-pink)' }} title="削除">🗑</button>
                             </>

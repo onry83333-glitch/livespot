@@ -4,7 +4,11 @@
  * 状態は chrome.storage.local に永続化し、ポップアップ再開時に復元
  */
 
-const DEFAULT_API_URL = 'https://pseudofinally-glaiked-john.ngrok-free.dev';
+// 環境判定: CWS経由インストール=本番、それ以外=開発
+const _isProd = 'update_url' in (chrome.runtime.getManifest() || {});
+const DEFAULT_API_URL = _isProd
+  ? 'https://livespot-api.onrender.com'
+  : 'http://localhost:8000';
 const SUPABASE_URL = 'https://ujgbhkllfeacbgpdbjto.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_kt56F7VPKZyFIoja-UGHeQ_YVMEQdAZ';
 

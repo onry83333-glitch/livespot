@@ -49,7 +49,7 @@ export function useDMQueue(accountId: string) {
     }
 
     const channel = supabaseRef.current
-      .channel(`dm-queue-${accountId}`)
+      .channel('dm-queue-realtime')
       .on(
         'postgres_changes',
         {

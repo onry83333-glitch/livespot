@@ -36,6 +36,7 @@ const navSections: NavSection[] = [
     title: '管理',
     items: [
       { href: '/admin/command-center', icon: '🎛️', label: 'コマンドセンター' },
+      { href: '/admin/health', icon: '🏥', label: '品質チェック' },
       { href: '/settings',   icon: '⚙️', label: '設定' },
     ],
   },
@@ -44,6 +45,7 @@ const navSections: NavSection[] = [
 const castTabs = [
   { tab: 'overview',  icon: '📊', label: '概要' },
   { tab: 'sessions',  icon: '📺', label: '配信' },
+  { tab: 'broadcast', icon: '📡', label: '配信分析' },
   { tab: 'dm',        icon: '💬', label: 'DM' },
   { tab: 'analytics', icon: '📈', label: '分析' },
   { tab: 'sales',     icon: '💰', label: '売上' },

@@ -15,7 +15,7 @@ import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 /* ============================================================
    Types
    ============================================================ */
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots';
+type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots';
 
 interface CastStatsData {
   total_messages: number;
@@ -149,6 +149,41 @@ interface AlertRule {
   enabled: boolean;
 }
 
+interface BroadcastSessionItem {
+  session_id: string;
+  title: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_minutes: number;
+  total_tokens: number;
+  coin_revenue: number;
+}
+
+interface BroadcastBreakdown {
+  session_id: string;
+  session_title: string;
+  started_at: string;
+  ended_at: string;
+  duration_minutes: number;
+  revenue_by_type: Record<string, number>;
+  total_tokens: number;
+  unique_users: number;
+  new_users: number;
+  returning_users: number;
+  top_users: { user_name: string; tokens: number; types: string[]; is_new: boolean }[];
+  prev_session_tokens: number;
+  prev_session_date: string | null;
+  change_pct: number | null;
+}
+
+interface BroadcastNewUser {
+  user_name: string;
+  total_tokens_on_date: number;
+  transaction_count: number;
+  types: string[];
+  has_prior_history: boolean;
+}
+
 interface PopAlert {
   id: string;
   type: string;
@@ -169,6 +204,7 @@ const ALERT_RULE_LABELS: Record<string, { icon: string; label: string; defaultTh
 const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'overview',  icon: '📊', label: '概要' },
   { key: 'sessions',  icon: '📺', label: '配信' },
+  { key: 'broadcast', icon: '📡', label: '配信分析' },
   { key: 'dm',        icon: '💬', label: 'DM' },
   { key: 'analytics', icon: '📈', label: '分析' },
   { key: 'sales',     icon: '💰', label: '売上' },
@@ -347,6 +383,14 @@ function CastDetailInner() {
   // Screenshots
   const [screenshots, setScreenshots] = useState<ScreenshotItem[]>([]);
   const [screenshotsLoading, setScreenshotsLoading] = useState(false);
+
+  // Broadcast analysis
+  const [broadcastSessions, setBroadcastSessions] = useState<BroadcastSessionItem[]>([]);
+  const [broadcastSelectedDate, setBroadcastSelectedDate] = useState<string>('');
+  const [broadcastBreakdown, setBroadcastBreakdown] = useState<BroadcastBreakdown | null>(null);
+  const [broadcastNewUsers, setBroadcastNewUsers] = useState<BroadcastNewUser[]>([]);
+  const [broadcastLoading, setBroadcastLoading] = useState(false);
+  const [broadcastDetailLoading, setBroadcastDetailLoading] = useState(false);
 
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
@@ -645,7 +689,7 @@ function CastDetailInner() {
   const dmCastChannelRef = useRef<ReturnType<typeof sb.channel> | null>(null);
 
   useEffect(() => {
-    if (!user || !accountId) return;
+    if (!accountId) return;
 
     // 前のチャネルをクリーンアップ
     if (dmCastChannelRef.current) {
@@ -654,7 +698,7 @@ function CastDetailInner() {
     }
 
     const channel = sb
-      .channel(`dm-cast-status-${castName}`)
+      .channel('dm-cast-status-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: `account_id=eq.${accountId}` }, async () => {
         const bid = dmBatchIdRef.current;
         if (!bid) return;
@@ -664,7 +708,7 @@ function CastDetailInner() {
         const counts = { total: logs.length, queued: 0, sending: 0, success: 0, error: 0 };
         logs.forEach((l: { status: string }) => { if (l.status in counts) (counts as Record<string, number>)[l.status]++; });
         setDmStatusCounts(counts);
-      })
+      });
     subscribeWithRetry(channel);
 
     dmCastChannelRef.current = channel;
@@ -675,7 +719,7 @@ function CastDetailInner() {
         dmCastChannelRef.current = null;
       }
     };
-  }, [user, accountId, castName]); // dmBatchIdはRefで参照、depsから除外
+  }, [accountId, castName]); // dmBatchIdはRefで参照、depsから除外
 
   // DM send
   const handleDmSend = useCallback(async () => {
@@ -1201,6 +1245,74 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, sb]);
 
   // ============================================================
+  // Broadcast analysis: セッション一覧取得
+  // ============================================================
+  useEffect(() => {
+    if (!accountId || activeTab !== 'broadcast') return;
+    setBroadcastLoading(true);
+    sb.rpc('get_session_list', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_limit: 50,
+      p_offset: 0,
+    }).then(({ data, error }) => {
+      if (error || !data) {
+        setBroadcastSessions([]);
+        setBroadcastLoading(false);
+        return;
+      }
+      // 2/15以降のみ表示
+      const cutoff = new Date('2026-02-15T00:00:00+09:00');
+      const filtered = (data as BroadcastSessionItem[]).filter(s => new Date(s.started_at) >= cutoff);
+      setBroadcastSessions(filtered);
+      // 最新セッションを自動選択
+      if (filtered.length > 0 && !broadcastSelectedDate) {
+        const latest = filtered[0];
+        const dateStr = new Date(latest.started_at).toISOString().split('T')[0];
+        setBroadcastSelectedDate(dateStr);
+      }
+      setBroadcastLoading(false);
+    });
+  }, [accountId, castName, activeTab, sb]);
+
+  // Broadcast analysis: 選択セッションの詳細取得
+  useEffect(() => {
+    if (!accountId || !broadcastSelectedDate || activeTab !== 'broadcast') return;
+    setBroadcastDetailLoading(true);
+    setBroadcastBreakdown(null);
+    setBroadcastNewUsers([]);
+
+    Promise.all([
+      sb.rpc('get_session_revenue_breakdown', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_session_date: broadcastSelectedDate,
+      }),
+      sb.rpc('get_new_users_by_session', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_session_date: broadcastSelectedDate,
+      }),
+    ]).then(([breakdownRes, newUsersRes]) => {
+      if (breakdownRes.data && breakdownRes.data.length > 0) {
+        const row = breakdownRes.data[0] as BroadcastBreakdown;
+        // top_users がJSONB文字列の場合をパース
+        if (typeof row.top_users === 'string') {
+          try { row.top_users = JSON.parse(row.top_users); } catch { row.top_users = []; }
+        }
+        if (typeof row.revenue_by_type === 'string') {
+          try { row.revenue_by_type = JSON.parse(row.revenue_by_type); } catch { row.revenue_by_type = {}; }
+        }
+        setBroadcastBreakdown(row);
+      }
+      if (newUsersRes.data) {
+        setBroadcastNewUsers(newUsersRes.data as BroadcastNewUser[]);
+      }
+      setBroadcastDetailLoading(false);
+    });
+  }, [accountId, castName, broadcastSelectedDate, activeTab, sb]);
+
+  // ============================================================
   // Screenshots
   // ============================================================
   useEffect(() => {
@@ -1644,6 +1756,283 @@ function CastDetailInner() {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* ============ BROADCAST ANALYSIS ============ */}
+          {activeTab === 'broadcast' && (
+            <div className="space-y-4">
+              {broadcastLoading ? (
+                <div className="space-y-3">
+                  <div className="h-12 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                  <div className="h-40 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                </div>
+              ) : broadcastSessions.length === 0 ? (
+                <div className="glass-card p-8 text-center">
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    2/15以降の配信セッションがありません
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* セッションセレクター */}
+                  <div className="glass-card p-4">
+                    <div className="flex items-center gap-3">
+                      <label className="text-xs font-bold" style={{ color: 'var(--text-secondary)' }}>配信日を選択:</label>
+                      <select
+                        value={broadcastSelectedDate}
+                        onChange={e => setBroadcastSelectedDate(e.target.value)}
+                        className="input-glass text-sm px-3 py-1.5 rounded-lg"
+                        style={{ maxWidth: '280px' }}
+                      >
+                        {broadcastSessions.map(s => {
+                          const d = new Date(s.started_at);
+                          const dateStr = d.toISOString().split('T')[0];
+                          const label = `${d.toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short' })} — ${formatTokens(s.coin_revenue || s.total_tokens)}tk (${s.duration_minutes}分)`;
+                          return <option key={s.session_id} value={dateStr}>{label}</option>;
+                        })}
+                      </select>
+                    </div>
+                  </div>
+
+                  {broadcastDetailLoading ? (
+                    <div className="space-y-3">
+                      <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                      <div className="h-48 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    </div>
+                  ) : broadcastBreakdown ? (
+                    <>
+                      {/* サマリーカード */}
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div className="glass-card p-4">
+                          <p className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>売上</p>
+                          <p className="text-2xl font-bold text-amber-400 mt-1">{formatTokens(broadcastBreakdown.total_tokens)}<span className="text-xs ml-1">tk</span></p>
+                          <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                            ¥{tokensToJPY(broadcastBreakdown.total_tokens, 7.7)}
+                          </p>
+                          {broadcastBreakdown.change_pct !== null && (
+                            <p className={`text-[10px] mt-1 font-bold ${broadcastBreakdown.change_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                              {broadcastBreakdown.change_pct >= 0 ? '+' : ''}{broadcastBreakdown.change_pct}% 前回比
+                            </p>
+                          )}
+                        </div>
+                        <div className="glass-card p-4">
+                          <p className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>ユニークユーザー</p>
+                          <p className="text-2xl font-bold text-sky-400 mt-1">{broadcastBreakdown.unique_users}<span className="text-xs ml-1">名</span></p>
+                        </div>
+                        <div className="glass-card p-4">
+                          <p className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>新規</p>
+                          <p className="text-2xl font-bold text-emerald-400 mt-1">{broadcastBreakdown.new_users}<span className="text-xs ml-1">名</span></p>
+                        </div>
+                        <div className="glass-card p-4">
+                          <p className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>リピーター</p>
+                          <p className="text-2xl font-bold text-purple-400 mt-1">{broadcastBreakdown.returning_users}<span className="text-xs ml-1">名</span></p>
+                        </div>
+                      </div>
+
+                      {/* 売上タイプ別内訳 */}
+                      {Object.keys(broadcastBreakdown.revenue_by_type).length > 0 && (
+                        <div className="glass-card p-4">
+                          <h3 className="text-sm font-bold mb-3">売上タイプ別内訳</h3>
+                          <div className="space-y-2">
+                            {Object.entries(broadcastBreakdown.revenue_by_type)
+                              .sort(([, a], [, b]) => b - a)
+                              .map(([type, tokens]) => {
+                                const pct = broadcastBreakdown.total_tokens > 0
+                                  ? Math.round((tokens / broadcastBreakdown.total_tokens) * 100)
+                                  : 0;
+                                return (
+                                  <div key={type}>
+                                    <div className="flex items-center justify-between mb-1">
+                                      <span className="text-xs font-medium">{type}</span>
+                                      <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                                        {formatTokens(tokens)}tk ({pct}%) — ¥{tokensToJPY(tokens, 7.7)}
+                                      </span>
+                                    </div>
+                                    <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(15,23,42,0.6)' }}>
+                                      <div
+                                        className="h-full rounded-full transition-all duration-500"
+                                        style={{
+                                          width: `${pct}%`,
+                                          background: type === 'tip' ? 'var(--accent-amber)' :
+                                            type === 'private' ? 'var(--accent-pink)' :
+                                            type === 'spy' ? 'var(--accent-purple)' :
+                                            type === 'ticket' ? 'var(--accent-green)' : 'var(--accent-primary)',
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 新規 vs リピーター 比較 */}
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                        <div className="glass-card p-4">
+                          <h3 className="text-sm font-bold mb-2 flex items-center gap-2">
+                            <span className="text-emerald-400">🆕</span> 新規ユーザー
+                          </h3>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="glass-panel p-3 rounded-lg">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>人数</p>
+                              <p className="text-lg font-bold text-emerald-400">{broadcastBreakdown.new_users}名</p>
+                            </div>
+                            <div className="glass-panel p-3 rounded-lg">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>売上シェア</p>
+                              <p className="text-lg font-bold text-emerald-400">
+                                {broadcastBreakdown.unique_users > 0
+                                  ? Math.round((broadcastBreakdown.new_users / broadcastBreakdown.unique_users) * 100)
+                                  : 0}%
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="glass-card p-4">
+                          <h3 className="text-sm font-bold mb-2 flex items-center gap-2">
+                            <span className="text-purple-400">🔁</span> リピーター
+                          </h3>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="glass-panel p-3 rounded-lg">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>人数</p>
+                              <p className="text-lg font-bold text-purple-400">{broadcastBreakdown.returning_users}名</p>
+                            </div>
+                            <div className="glass-panel p-3 rounded-lg">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>売上シェア</p>
+                              <p className="text-lg font-bold text-purple-400">
+                                {broadcastBreakdown.unique_users > 0
+                                  ? Math.round((broadcastBreakdown.returning_users / broadcastBreakdown.unique_users) * 100)
+                                  : 0}%
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* トップ5課金ユーザー */}
+                      {broadcastBreakdown.top_users && broadcastBreakdown.top_users.length > 0 && (
+                        <div className="glass-card p-4">
+                          <h3 className="text-sm font-bold mb-3">トップ5 課金ユーザー</h3>
+                          <div className="space-y-2">
+                            {broadcastBreakdown.top_users.map((u, i) => (
+                              <div key={u.user_name} className="flex items-center justify-between glass-panel p-3 rounded-lg">
+                                <div className="flex items-center gap-3">
+                                  <span className="text-lg font-bold w-6 text-center" style={{ color: i === 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
+                                    {i + 1}
+                                  </span>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-sm font-medium">{u.user_name}</span>
+                                      {u.is_new && (
+                                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">NEW</span>
+                                      )}
+                                    </div>
+                                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                      {u.types?.join(', ')}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <div className="text-right">
+                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.tokens)}tk</p>
+                                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>¥{tokensToJPY(u.tokens, 7.7)}</p>
+                                  </div>
+                                  <button
+                                    onClick={() => {
+                                      setDmTargets(new Set([u.user_name]));
+                                      setDmMessage(`${u.user_name}さん、今日はありがとう！またよろしくね😊`);
+                                      setTab('dm');
+                                    }}
+                                    className="btn-ghost text-[10px] px-2 py-1"
+                                  >
+                                    💬 DM
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 新規ユーザーリスト */}
+                      {broadcastNewUsers.filter(u => !u.has_prior_history).length > 0 && (
+                        <div className="glass-card p-4">
+                          <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                            🆕 新規ユーザー（初課金）
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
+                              {broadcastNewUsers.filter(u => !u.has_prior_history).length}名
+                            </span>
+                          </h3>
+                          <div className="space-y-2">
+                            {broadcastNewUsers
+                              .filter(u => !u.has_prior_history)
+                              .map(u => (
+                                <div key={u.user_name} className="flex items-center justify-between glass-panel p-3 rounded-lg">
+                                  <div>
+                                    <span className="text-sm font-medium">{u.user_name}</span>
+                                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                      {u.transaction_count}件 / {u.types?.join(', ')}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.total_tokens_on_date)}tk</p>
+                                    <button
+                                      onClick={() => {
+                                        setDmTargets(new Set([u.user_name]));
+                                        setDmMessage(`${u.user_name}さん、初めてのチップありがとう！すごく嬉しかったです😊`);
+                                        setTab('dm');
+                                      }}
+                                      className="btn-ghost text-[10px] px-2 py-1"
+                                    >
+                                      💬 DM
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 配信情報 */}
+                      <div className="glass-card p-4">
+                        <h3 className="text-sm font-bold mb-2">配信情報</h3>
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                          <div className="glass-panel p-3 rounded-lg">
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>開始</p>
+                            <p className="text-xs font-medium">{formatJST(broadcastBreakdown.started_at)}</p>
+                          </div>
+                          <div className="glass-panel p-3 rounded-lg">
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>終了</p>
+                            <p className="text-xs font-medium">{broadcastBreakdown.ended_at ? formatJST(broadcastBreakdown.ended_at) : '配信中'}</p>
+                          </div>
+                          <div className="glass-panel p-3 rounded-lg">
+                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>配信時間</p>
+                            <p className="text-xs font-medium">{broadcastBreakdown.duration_minutes}分</p>
+                          </div>
+                          {broadcastBreakdown.prev_session_date && (
+                            <div className="glass-panel p-3 rounded-lg">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>前回配信</p>
+                              <p className="text-xs font-medium">
+                                {new Date(broadcastBreakdown.prev_session_date).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })}
+                                <span className="text-[10px] ml-1" style={{ color: 'var(--text-muted)' }}>
+                                  ({formatTokens(broadcastBreakdown.prev_session_tokens)}tk)
+                                </span>
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="glass-card p-8 text-center">
+                      <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                        この日のセッションデータがありません
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
 

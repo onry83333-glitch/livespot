@@ -278,6 +278,7 @@ export interface RegisteredCast {
   cast_type_id: string | null;
   screenshot_interval: number | null;
   gc_rate_per_minute: number | null;
+  stripchat_model_id: string | null;
   last_seen_online: string | null;
   is_extinct: boolean;
   extinct_at: string | null;
@@ -304,6 +305,7 @@ export interface SpyCast {
   auto_monitor: boolean;
   screenshot_interval: number | null;
   gc_rate_per_minute: number | null;
+  stripchat_model_id: string | null;
   last_seen_online: string | null;
   is_extinct: boolean;
   extinct_at: string | null;
