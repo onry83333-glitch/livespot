@@ -446,13 +446,17 @@ export default function DmPage() {
   }, [sb, selectedAccount]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || !selectedAccount) return;
     const channel = sb
-      .channel('dm-status')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: selectedAccount ? `account_id=eq.${selectedAccount}` : undefined }, () => {
+      .channel(`dm-status-${selectedAccount}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: `account_id=eq.${selectedAccount}` }, () => {
         if (batchId) pollStatus(batchId);
       })
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[Realtime] dm-status error:', status, err);
+        }
+      });
     return () => { sb.removeChannel(channel); };
   }, [user, batchId, pollStatus, sb, selectedAccount]);
 
@@ -472,10 +476,13 @@ export default function DmPage() {
         p_template_name: null,
       });
 
+      console.log('[DM] RPC result:', JSON.stringify({ data, error: rpcErr }));
+
       if (rpcErr) throw rpcErr;
 
       // RPC関数がエラーを返した場合（上限超え等）
       if (data?.error) {
+        console.log('[DM] RPC data.error early return:', data.error);
         setError(`${data.error} (使用済み: ${data.used}/${data.limit})`);
         return;
       }
@@ -499,7 +506,7 @@ export default function DmPage() {
 
       // API送信モード: サーバーサイドでバッチ処理を試行
       // 失敗時はChrome拡張がポーリングでフォールバック送信する
-      console.log('[DM] Calling /api/dm/batch account_id=', selectedAccount, 'count=', count);
+      console.log('[DM] About to call /api/dm/batch');
       try {
         const batchRes = await fetch('/api/dm/batch', {
           method: 'POST',

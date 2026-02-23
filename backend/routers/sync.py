@@ -403,6 +403,7 @@ async def upload_coin_transactions(
         {
             "account_id": account_id,
             "user_name": tx["user_name"],
+            "cast_name": tx.get("cast_name", ""),
             "tokens": tx["tokens"],
             "type": tx["type"],
             "date": tx["date"],
@@ -413,7 +414,11 @@ async def upload_coin_transactions(
     ]
 
     if rows:
-        sb.table("coin_transactions").insert(rows).execute()
+        sb.table("coin_transactions").upsert(
+            rows,
+            on_conflict="account_id,user_name,cast_name,tokens,date",
+            ignore_duplicates=True,
+        ).execute()
 
     # MATERIALIZED VIEW 更新
     try:

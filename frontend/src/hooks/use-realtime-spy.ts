@@ -134,9 +134,11 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
         }
       )
       .subscribe((status, err) => {
+        console.log('[Realtime] spy-realtime status:', status, err?.message || '');
         if (status === 'SUBSCRIBED') {
           setIsConnected(true);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[Realtime] spy-realtime error:', status, err);
           setIsConnected(false);
         } else if (status === 'CLOSED') {
           setIsConnected(false);
