@@ -9,6 +9,7 @@ import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { formatTokens, tokensToJPY, formatJST } from '@/lib/utils';
 import Link from 'next/link';
 import { queueDmBatch } from '@/lib/dm-sender';
+import { checkAndEnroll } from '@/lib/scenario-engine';
 
 /* ============================================================
    Types
@@ -448,6 +449,32 @@ export default function SessionDetailPage() {
   const [timelineFilter, setTimelineFilter] = useState<'all' | 'transcript' | 'payment' | 'chat'>('all');
   const [timelineOpen, setTimelineOpen] = useState(false);
 
+  // Market analysis state (pre-broadcast)
+  const [marketNow, setMarketNow] = useState<{
+    current_hour: number;
+    active_casts: number;
+    avg_viewers_now: number;
+    best_cast: string | null;
+    best_viewers: number | null;
+    own_avg_viewers: number | null;
+  } | null>(null);
+  const [viewerTrends, setViewerTrends] = useState<{
+    cast_name: string;
+    hour_of_day: number;
+    avg_viewers: number;
+    max_viewers: number;
+    broadcast_count: number;
+  }[]>([]);
+  const [revenueTypes, setRevenueTypes] = useState<{
+    cast_name: string;
+    tip_count: number;
+    ticket_count: number;
+    group_count: number;
+    total_tokens: number;
+    broadcast_days: number;
+  }[]>([]);
+  const [marketLoading, setMarketLoading] = useState(false);
+
   // Computed: total send targets
   const sendTargetCount = SEGMENT_GROUPS
     .filter(g => selectedGroups.has(g.id))
@@ -744,6 +771,19 @@ export default function SessionDetailPage() {
         setTemplates(tplData);
         if (!selectedTemplateId) setSelectedTemplateId(tplData[0].id);
       }
+      // Load market data (spy competitor analysis)
+      setMarketLoading(true);
+      const [marketRes, trendsRes, revRes] = await Promise.all([
+        sb.rpc('get_spy_market_now', { p_account_id: accountId, p_days: 7 }),
+        sb.rpc('get_spy_viewer_trends', { p_account_id: accountId, p_days: 7 }),
+        sb.rpc('get_spy_revenue_types', { p_account_id: accountId, p_days: 7 }),
+      ]);
+      if (marketRes.data && marketRes.data.length > 0) {
+        setMarketNow(marketRes.data[0]);
+      }
+      if (trendsRes.data) setViewerTrends(trendsRes.data);
+      if (revRes.data) setRevenueTypes(revRes.data);
+      setMarketLoading(false);
       setPreLoading(false);
     };
     loadPreData();
@@ -906,6 +946,11 @@ export default function SessionDetailPage() {
               selectedUsers.includes(p.user_name) ? { ...p, dm_sent: true } : p
             ),
           } : prev);
+
+          // シナリオ自動エンロール（初課金お礼）
+          for (const u of selectedUsers) {
+            await checkAndEnroll(sb, accountId, castName, u, 'first_payment');
+          }
         } catch (e: unknown) {
           setToast(e instanceof Error ? e.message : '送信エラー');
         }
@@ -938,6 +983,11 @@ export default function SessionDetailPage() {
           const result = await queueDmBatch(sb, accountId, castName, dmTargets, campaign);
           setDmSentCampaign(campaign);
           setToast(`${result.queued}件のフォローDMをキューに登録しました`);
+
+          // シナリオ自動エンロール（来訪フォロー）
+          for (const u of selectedUsers) {
+            await checkAndEnroll(sb, accountId, castName, u, 'visit_no_action');
+          }
         } catch (e: unknown) {
           setToast(e instanceof Error ? e.message : '送信エラー');
         }
@@ -1405,6 +1455,139 @@ export default function SessionDetailPage() {
                     <span>{`${LABELS.prevNewUsers}: ${actions ? actions.first_time_payers.length : '-'}${LABELS.personSuffix}`}</span>
                   </div>
                 </div>
+
+                {/* Market Analysis Section */}
+                {marketLoading ? (
+                  <div className="glass-card p-6 text-center">
+                    <div className="inline-block w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                    <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>マーケットデータ読み込み中...</p>
+                  </div>
+                ) : (viewerTrends.length > 0 || revenueTypes.length > 0) ? (
+                  <div className="glass-card p-5 space-y-4">
+                    <h3 className="text-sm font-bold" style={{ color: 'rgb(6,182,212)' }}>📊 マーケット状況（過去7日）</h3>
+
+                    {/* Market Now Summary */}
+                    {marketNow && (
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="rounded-lg p-3 text-center" style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.15)' }}>
+                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>現在の時間帯</p>
+                          <p className="text-lg font-bold" style={{ color: 'rgb(6,182,212)' }}>{marketNow.current_hour}時台</p>
+                        </div>
+                        <div className="rounded-lg p-3 text-center" style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.15)' }}>
+                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>他社アクティブ</p>
+                          <p className="text-lg font-bold" style={{ color: 'rgb(6,182,212)' }}>{marketNow.active_casts}配信</p>
+                        </div>
+                        <div className="rounded-lg p-3 text-center" style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.15)' }}>
+                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>他社平均視聴者</p>
+                          <p className="text-lg font-bold" style={{ color: 'rgb(6,182,212)' }}>{marketNow.avg_viewers_now ?? '-'}人</p>
+                        </div>
+                        <div className="rounded-lg p-3 text-center" style={{ background: 'rgba(6,182,212,0.06)', border: '1px solid rgba(6,182,212,0.15)' }}>
+                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>自社平均視聴者</p>
+                          <p className="text-lg font-bold" style={{ color: marketNow.own_avg_viewers != null && marketNow.avg_viewers_now > 0 && marketNow.own_avg_viewers >= marketNow.avg_viewers_now ? 'var(--accent-green)' : 'var(--accent-amber)' }}>
+                            {marketNow.own_avg_viewers ?? '-'}人
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Best Cast Banner */}
+                    {marketNow?.best_cast && (
+                      <div className="rounded-lg px-4 py-2.5 flex items-center gap-3" style={{ background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)' }}>
+                        <span className="text-sm">👑</span>
+                        <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                          この時間帯のトップ: <strong style={{ color: 'var(--accent-purple)' }}>{marketNow.best_cast}</strong>
+                          （最大{marketNow.best_viewers}人）
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Viewer Heatmap (hours × casts) */}
+                    {viewerTrends.length > 0 && (() => {
+                      const castNames = Array.from(new Set(viewerTrends.map(v => v.cast_name)));
+                      const hours = Array.from({ length: 24 }, (_, i) => i);
+                      const maxV = Math.max(...viewerTrends.map(v => v.avg_viewers), 1);
+                      const currentHour = marketNow?.current_hour ?? new Date().getHours();
+                      return (
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>時間帯別視聴者数ヒートマップ</p>
+                          <div className="overflow-x-auto">
+                            <table className="text-[9px] w-full" style={{ minWidth: '600px' }}>
+                              <thead>
+                                <tr>
+                                  <th className="text-left px-1 py-1 sticky left-0" style={{ background: 'var(--bg-surface)', color: 'var(--text-muted)', minWidth: '80px' }}>キャスト</th>
+                                  {hours.map(h => (
+                                    <th key={h} className="px-0.5 py-1 text-center font-normal" style={{
+                                      color: h === currentHour ? 'rgb(6,182,212)' : 'var(--text-muted)',
+                                      fontWeight: h === currentHour ? 700 : 400,
+                                    }}>{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {castNames.map(cn => (
+                                  <tr key={cn}>
+                                    <td className="px-1 py-0.5 truncate sticky left-0" style={{ background: 'var(--bg-surface)', color: 'var(--text-secondary)', maxWidth: '80px' }}>{cn}</td>
+                                    {hours.map(h => {
+                                      const cell = viewerTrends.find(v => v.cast_name === cn && v.hour_of_day === h);
+                                      const val = cell ? cell.avg_viewers : 0;
+                                      const intensity = val / maxV;
+                                      return (
+                                        <td key={h} className="px-0.5 py-0.5 text-center" style={{
+                                          background: val > 0
+                                            ? `rgba(6,182,212,${Math.max(0.08, intensity * 0.6)})`
+                                            : 'transparent',
+                                          color: val > 0 ? 'var(--text-primary)' : 'var(--text-muted)',
+                                          borderLeft: h === currentHour ? '1px solid rgba(6,182,212,0.5)' : undefined,
+                                          borderRight: h === currentHour ? '1px solid rgba(6,182,212,0.5)' : undefined,
+                                        }}>
+                                          {val > 0 ? Math.round(val) : ''}
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <p className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>値 = 平均視聴者数 / 縦線 = 現在時刻</p>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Revenue Types */}
+                    {revenueTypes.length > 0 && (
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>他社キャスト課金タイプ分布</p>
+                        <div className="overflow-x-auto">
+                          <table className="text-[10px] w-full">
+                            <thead>
+                              <tr style={{ color: 'var(--text-muted)' }}>
+                                <th className="text-left px-2 py-1.5">キャスト</th>
+                                <th className="text-right px-2 py-1.5">チップ</th>
+                                <th className="text-right px-2 py-1.5">チケット</th>
+                                <th className="text-right px-2 py-1.5">グループ</th>
+                                <th className="text-right px-2 py-1.5">合計tk</th>
+                                <th className="text-right px-2 py-1.5">配信日数</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {revenueTypes.map(r => (
+                                <tr key={r.cast_name} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                                  <td className="px-2 py-1.5 font-semibold truncate" style={{ color: 'var(--text-secondary)', maxWidth: '100px' }}>{r.cast_name}</td>
+                                  <td className="px-2 py-1.5 text-right" style={{ color: r.tip_count > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>{r.tip_count}</td>
+                                  <td className="px-2 py-1.5 text-right" style={{ color: r.ticket_count > 0 ? 'var(--accent-purple)' : 'var(--text-muted)' }}>{r.ticket_count}</td>
+                                  <td className="px-2 py-1.5 text-right" style={{ color: r.group_count > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>{r.group_count}</td>
+                                  <td className="px-2 py-1.5 text-right font-bold" style={{ color: 'var(--accent-primary)' }}>{r.total_tokens.toLocaleString()}</td>
+                                  <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{r.broadcast_days}日</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
 
                 {/* DM Section */}
                 {preLoading ? (
