@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
+import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { formatTokens, tokensToJPY, formatJST } from '@/lib/utils';
 import Link from 'next/link';
 import { queueDmBatch } from '@/lib/dm-sender';
@@ -970,6 +971,11 @@ export default function SessionDetailPage() {
     setLiveLoading(false);
   }, [accountId, sessionId, castName, summary, sb]);
 
+  // Refs for Realtime — handleNewMessage を deps から除外してループ防止
+  const handleNewMessageRef = useRef(handleNewMessage);
+  handleNewMessageRef.current = handleNewMessage;
+  const liveChannelRef = useRef<ReturnType<typeof sb.channel> | null>(null);
+
   const pollNewMessages = useCallback(async () => {
     if (!accountId || !lastMessageTimeRef.current) return;
     const { data } = await sb
@@ -981,9 +987,9 @@ export default function SessionDetailPage() {
       .order('message_time', { ascending: true })
       .limit(50);
     if (data && data.length > 0) {
-      for (const msg of data) handleNewMessage({ new: msg as unknown as Record<string, unknown> });
+      for (const msg of data) handleNewMessageRef.current({ new: msg as unknown as Record<string, unknown> });
     }
-  }, [accountId, sessionId, sb, handleNewMessage]);
+  }, [accountId, sessionId, sb]);
 
   // Effect: Load live data when mode = 'live'
   useEffect(() => {
@@ -994,21 +1000,36 @@ export default function SessionDetailPage() {
   // Effect: Realtime subscription
   useEffect(() => {
     if (resolvedMode !== 'live' || !accountId) return;
+
+    // 重複subscribe防止
+    if (liveChannelRef.current) {
+      sb.removeChannel(liveChannelRef.current);
+      liveChannelRef.current = null;
+    }
+
     const channel = sb
-      .channel(`live-${sessionId}`)
+      .channel('live-session-messages')
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'spy_messages',
         filter: `session_id=eq.${sessionId}`,
       }, (payload: { new: Record<string, unknown> }) => {
-        handleNewMessage(payload);
-      })
-      .subscribe((status: string) => {
-        setRealtimeConnected(status === 'SUBSCRIBED');
+        handleNewMessageRef.current(payload);
       });
-    return () => { sb.removeChannel(channel); };
-  }, [resolvedMode, accountId, sessionId, sb, handleNewMessage]);
+    subscribeWithRetry(channel, (status) => {
+      setRealtimeConnected(status === 'SUBSCRIBED');
+    });
+
+    liveChannelRef.current = channel;
+
+    return () => {
+      if (liveChannelRef.current) {
+        sb.removeChannel(liveChannelRef.current);
+        liveChannelRef.current = null;
+      }
+    };
+  }, [resolvedMode, accountId, sessionId, sb]);
 
   // Effect: Polling fallback (10s if Realtime not connected)
   useEffect(() => {

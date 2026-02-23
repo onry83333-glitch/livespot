@@ -8,11 +8,12 @@ import { formatTokens, tokensToJPY } from '@/lib/utils';
 import Link from 'next/link';
 
 /* ============================================================
-   Types — RPC get_session_list の戻り値に一致
-   session データは spy_messages.session_id の GROUP BY で導出
+   Types — RPC get_session_list_v2 の戻り値に一致
+   broadcast_group: 30分ギャップで自動統合されたセッション群
    ============================================================ */
 interface SessionRow {
-  session_id: string;
+  broadcast_group_id: string;
+  session_ids: string[];
   cast_name: string;
   session_title: string | null;
   started_at: string;
@@ -20,8 +21,16 @@ interface SessionRow {
   duration_minutes: number;
   msg_count: number;
   unique_users: number;
-  total_tokens: number;
+  chat_tokens: number;
   tip_count: number;
+  coin_tokens: number;
+  coin_tip_tokens: number;
+  coin_private_tokens: number;
+  coin_ticket_tokens: number;
+  coin_group_tokens: number;
+  coin_spy_tokens: number;
+  coin_other_tokens: number;
+  total_revenue: number;
   is_active: boolean;
   total_count: number;
 }
@@ -94,12 +103,13 @@ export default function SessionListPage() {
     });
   }, [user, sb]);
 
-  // Load sessions via RPC (spy_messages GROUP BY session_id)
+  // Load sessions via RPC (broadcast_group単位、30分ギャップで統合)
   const loadSessions = useCallback(async (pageNum: number) => {
     if (!accountId) return;
     setLoading(true);
 
-    const { data, error } = await sb.rpc('get_session_list', {
+    // v2 RPC を試行 → 失敗時は v1 にフォールバック
+    let { data, error } = await sb.rpc('get_session_list_v2', {
       p_account_id: accountId,
       p_cast_name: castName,
       p_limit: PAGE_SIZE,
@@ -107,10 +117,42 @@ export default function SessionListPage() {
     });
 
     if (error) {
-      console.error('[Sessions] RPC error:', error.message);
-      // Fallback: spy_messages を直接 GROUP BY
-      await loadSessionsFallback(pageNum);
-      return;
+      console.warn('[Sessions] v2 RPC error, trying v1:', error.message);
+      const v1 = await sb.rpc('get_session_list', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_limit: PAGE_SIZE,
+        p_offset: pageNum * PAGE_SIZE,
+      });
+      if (v1.error) {
+        console.error('[Sessions] v1 RPC also failed:', v1.error.message);
+        await loadSessionsFallback(pageNum);
+        return;
+      }
+      // v1結果をv2形式に変換
+      data = ((v1.data || []) as any[]).map(r => ({
+        broadcast_group_id: r.session_id,
+        session_ids: [r.session_id],
+        cast_name: r.cast_name,
+        session_title: r.session_title,
+        started_at: r.started_at,
+        ended_at: r.ended_at,
+        duration_minutes: r.duration_minutes,
+        msg_count: r.msg_count,
+        unique_users: r.unique_users,
+        chat_tokens: r.total_tokens ?? 0,
+        tip_count: r.tip_count,
+        coin_tokens: 0,
+        coin_tip_tokens: 0,
+        coin_private_tokens: 0,
+        coin_ticket_tokens: 0,
+        coin_group_tokens: 0,
+        coin_spy_tokens: 0,
+        coin_other_tokens: 0,
+        total_revenue: r.total_tokens ?? 0,
+        is_active: r.is_active,
+        total_count: r.total_count,
+      }));
     }
 
     const rows = (data || []) as SessionRow[];
@@ -131,7 +173,7 @@ export default function SessionListPage() {
 
   // Fallback: RPCが無い場合、spy_messagesから直接GROUP BY
   const loadSessionsFallback = useCallback(async (pageNum: number) => {
-    console.log('[Sessions] Fallback: spy_messages direct query');
+    console.warn('[Sessions] Fallback: spy_messages direct query');
     const { data: rawData } = await sb
       .from('spy_messages')
       .select('session_id, cast_name, session_title, message_time, user_name, tokens')
@@ -183,7 +225,8 @@ export default function SessionListPage() {
       const tips = sess.messages.filter(m => m.tokens > 0).length;
 
       allRows.push({
-        session_id: sid,
+        broadcast_group_id: sid,
+        session_ids: [sid],
         cast_name: sess.cast_name,
         session_title: sess.session_title,
         started_at: new Date(minTime).toISOString(),
@@ -191,8 +234,16 @@ export default function SessionListPage() {
         duration_minutes: Math.round((maxTime - minTime) / 60000),
         msg_count: sess.messages.length,
         unique_users: users.size,
-        total_tokens: totalTk,
+        chat_tokens: totalTk,
         tip_count: tips,
+        coin_tokens: 0,
+        coin_tip_tokens: 0,
+        coin_private_tokens: 0,
+        coin_ticket_tokens: 0,
+        coin_group_tokens: 0,
+        coin_spy_tokens: 0,
+        coin_other_tokens: 0,
+        total_revenue: totalTk,
         is_active: (now - maxTime) < 10 * 60 * 1000,
         total_count: 0,
       });
@@ -220,7 +271,7 @@ export default function SessionListPage() {
       return;
     }
     const total = rows[0].total_count || rows.length;
-    const totalRev = rows.reduce((s, r) => s + r.total_tokens, 0);
+    const totalRev = rows.reduce((s, r) => s + r.total_revenue, 0);
     const avgRev = rows.length > 0 ? Math.round(totalRev / rows.length) : 0;
     const avgDur = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.duration_minutes, 0) / rows.length) : 0;
     const totalMsg = rows.reduce((s, r) => s + r.msg_count, 0);
@@ -256,7 +307,7 @@ export default function SessionListPage() {
               <button
                 onClick={() => {
                   const latest = sessions[0];
-                  router.push(`/casts/${encodeURIComponent(castName)}/sessions/${encodeURIComponent(latest.session_id)}?mode=pre`);
+                  router.push(`/casts/${encodeURIComponent(castName)}/sessions/${encodeURIComponent(latest.broadcast_group_id)}?mode=pre`);
                 }}
                 className="text-xs font-semibold px-3 py-1.5 rounded-lg transition-all hover:scale-105"
                 style={{
@@ -281,7 +332,7 @@ export default function SessionListPage() {
               </Link>
             ) : null}
             <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              全 {totalCount} セッション
+              全 {totalCount} 配信
             </span>
           </div>
         </div>
@@ -290,11 +341,11 @@ export default function SessionListPage() {
         {!loading && sessions.length > 0 && (
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {[
-              { label: 'セッション数', value: String(summaryStats.totalSessions), color: 'var(--text-primary)' },
+              { label: '配信数', value: String(summaryStats.totalSessions), color: 'var(--text-primary)' },
               { label: '平均配信時間', value: formatDuration(summaryStats.avgDuration), color: 'var(--accent-primary)' },
-              { label: '表示ページ売上', value: formatTokens(summaryStats.totalRevenue), color: 'var(--accent-amber)' },
-              { label: '平均売上/配信', value: formatTokens(summaryStats.avgRevenue), color: 'var(--accent-green)' },
-              { label: '表示ページMSG', value: summaryStats.totalMessages.toLocaleString(), color: 'var(--accent-purple)' },
+              { label: `直近${sessions.length}配信の売上`, value: formatTokens(summaryStats.totalRevenue), color: 'var(--accent-amber)' },
+              { label: `平均売上/配信（${sessions.length}件）`, value: formatTokens(summaryStats.avgRevenue), color: 'var(--accent-green)' },
+              { label: `直近${sessions.length}配信のMSG`, value: summaryStats.totalMessages.toLocaleString(), color: 'var(--accent-purple)' },
             ].map(kpi => (
               <div key={kpi.label} className="glass-card px-4 py-3">
                 <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>{kpi.label}</p>
@@ -323,11 +374,14 @@ export default function SessionListPage() {
           </div>
         ) : (
           <div className="space-y-2">
-            {sessions.map(s => (
+            {sessions.map(s => {
+              const hasCoin = s.coin_tokens > 0;
+              const isMerged = s.session_ids && s.session_ids.length > 1;
+              return (
               <div
-                key={s.session_id}
+                key={s.broadcast_group_id}
                 className="glass-card-hover cursor-pointer overflow-hidden"
-                onClick={() => router.push(`/casts/${encodeURIComponent(castName)}/sessions/${encodeURIComponent(s.session_id)}`)}
+                onClick={() => router.push(`/casts/${encodeURIComponent(castName)}/sessions/${encodeURIComponent(s.broadcast_group_id)}`)}
               >
                 <div className="px-5 py-4 flex items-center justify-between">
                   {/* Left: date + time + status */}
@@ -342,10 +396,21 @@ export default function SessionListPage() {
                       </p>
                     </div>
 
-                    {/* LIVE badge */}
-                    {s.is_active && (
-                      <span className="badge-live text-[10px] px-2 py-0.5">LIVE</span>
-                    )}
+                    {/* LIVE / Merged badges */}
+                    <div className="flex items-center gap-1">
+                      {s.is_active && (
+                        <span className="badge-live text-[10px] px-2 py-0.5">LIVE</span>
+                      )}
+                      {isMerged && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{
+                          background: 'rgba(167,139,250,0.15)',
+                          border: '1px solid rgba(167,139,250,0.3)',
+                          color: 'var(--accent-purple)',
+                        }}>
+                          {s.session_ids.length}統合
+                        </span>
+                      )}
+                    </div>
 
                     {/* Title + metadata */}
                     <div>
@@ -364,19 +429,56 @@ export default function SessionListPage() {
                   </div>
 
                   {/* Right: revenue */}
-                  <div className="text-right min-w-[120px]">
-                    <p className="text-sm font-bold" style={{ color: s.total_tokens > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
-                      {formatTokens(s.total_tokens)}
+                  <div className="text-right min-w-[140px]">
+                    <p className="text-sm font-bold flex items-center justify-end gap-1" style={{ color: s.total_revenue > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
+                      {formatTokens(s.total_revenue)}
+                      {(() => {
+                        const idx = sessions.indexOf(s);
+                        if (idx >= sessions.length - 1) return null;
+                        const prev = sessions[idx + 1]?.total_revenue || 0;
+                        if (prev <= 0) return null;
+                        const chg = ((s.total_revenue - prev) / prev * 100).toFixed(0);
+                        return (
+                          <span className="text-[10px]" style={{ color: Number(chg) >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                            {Number(chg) >= 0 ? '⇑' : '⇓'}{chg}%
+                          </span>
+                        );
+                      })()}
                     </p>
-                    {s.total_tokens > 0 && (
+                    {s.total_revenue > 0 && (
                       <p className="text-[10px]" style={{ color: 'var(--accent-green)' }}>
-                        {tokensToJPY(s.total_tokens, COIN_RATE)}
+                        {tokensToJPY(s.total_revenue, COIN_RATE)}
                       </p>
+                    )}
+                    {/* Coin内訳ミニバー */}
+                    {hasCoin && (
+                      <div className="flex items-center gap-0.5 mt-1 justify-end">
+                        {[
+                          { val: s.coin_tip_tokens, color: '#f59e0b', label: 'tip' },
+                          { val: s.coin_private_tokens, color: '#f43f5e', label: 'pvt' },
+                          { val: s.coin_ticket_tokens, color: '#a78bfa', label: 'tkt' },
+                          { val: s.coin_group_tokens, color: '#38bdf8', label: 'grp' },
+                          { val: s.coin_spy_tokens, color: '#22c55e', label: 'spy' },
+                          { val: s.coin_other_tokens, color: '#64748b', label: 'etc' },
+                        ].filter(c => c.val > 0).map(c => (
+                          <div
+                            key={c.label}
+                            title={`${c.label}: ${formatTokens(c.val)}`}
+                            style={{
+                              width: `${Math.max(6, Math.round(c.val / s.coin_tokens * 60))}px`,
+                              height: '4px',
+                              background: c.color,
+                              borderRadius: '1px',
+                            }}
+                          />
+                        ))}
+                      </div>
                     )}
                   </div>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
