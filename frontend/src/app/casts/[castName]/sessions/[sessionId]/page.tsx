@@ -372,6 +372,12 @@ export default function SessionDetailPage() {
   const [recordingStartedAt, setRecordingStartedAt] = useState('');
   const [transcribing, setTranscribing] = useState(false);
 
+  // Screenshot state
+  const [screenshotting, setScreenshotting] = useState(false);
+  const [screenshots, setScreenshots] = useState<{ id: string; image_url: string; captured_at: string }[]>([]);
+  const [screenshotModalUrl, setScreenshotModalUrl] = useState<string | null>(null);
+  const [modelId, setModelId] = useState<string | null>(null);
+
   // DM sending state
   const [dmSending, setDmSending] = useState(false);
   const [dmSentCampaign, setDmSentCampaign] = useState<string | null>(null);
@@ -591,6 +597,62 @@ export default function SessionDetailPage() {
   }, [accountId, sessionId, resolvedMode, sb]);
 
   useEffect(() => { loadActions(); }, [loadActions]);
+
+  // Load model_id from registered_casts
+  useEffect(() => {
+    if (!accountId) return;
+    sb.from('registered_casts')
+      .select('stripchat_model_id')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .maybeSingle()
+      .then(({ data }) => { if (data?.stripchat_model_id) setModelId(data.stripchat_model_id); });
+  }, [accountId, castName, sb]);
+
+  // Load screenshots for this session (post mode)
+  const loadScreenshots = useCallback(async () => {
+    if (!accountId) return;
+    const { data } = await sb.from('cast_screenshots')
+      .select('id, image_url, captured_at')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .eq('session_id', sessionId)
+      .order('captured_at', { ascending: true });
+    if (data) setScreenshots(data);
+  }, [accountId, castName, sessionId, sb]);
+
+  useEffect(() => {
+    if (resolvedMode === 'post' && accountId) loadScreenshots();
+  }, [resolvedMode, accountId, loadScreenshots]);
+
+  // Capture screenshot
+  const handleScreenshot = useCallback(async () => {
+    if (!accountId || !modelId || screenshotting) return;
+    setScreenshotting(true);
+    try {
+      const res = await fetch('/api/screenshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model_id: modelId,
+          cast_name: castName,
+          account_id: accountId,
+          session_id: sessionId,
+          thumbnail_type: 'manual',
+        }),
+      });
+      if (res.ok) {
+        const result = await res.json();
+        setToast('スクリーンショットを保存しました');
+        setScreenshots(prev => [...prev, { id: result.screenshot.id, image_url: result.image_url, captured_at: result.screenshot.captured_at }]);
+      } else {
+        setToast('スクリーンショットの取得に失敗しました');
+      }
+    } catch {
+      setToast('スクリーンショットの取得に失敗しました');
+    }
+    setScreenshotting(false);
+  }, [accountId, modelId, screenshotting, castName, sessionId]);
 
   // Load pre-broadcast data (segments + templates)
   useEffect(() => {
@@ -1144,7 +1206,9 @@ export default function SessionDetailPage() {
           <span>/</span>
           <Link href={`/casts/${encodeURIComponent(castName)}/sessions`} className="hover:underline">セッション一覧</Link>
           <span>/</span>
-          <span style={{ color: 'var(--text-secondary)' }}>詳細</span>
+          <span style={{ color: 'var(--text-secondary)' }}>
+            {resolvedMode === 'pre' ? '配信準備' : resolvedMode === 'live' ? '配信中' : 'アクション分析'}
+          </span>
         </nav>
 
         {/* Header */}
@@ -1266,6 +1330,9 @@ export default function SessionDetailPage() {
                         <div className="mt-3 px-4 py-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.06)' }}>
                           <span className="text-xs font-semibold" style={{ color: 'var(--text-muted)' }}>{LABELS.sendTarget}: </span>
                           <span className="text-sm font-bold" style={{ color: 'rgb(251,191,36)' }}>{sendTargetCount}{LABELS.personSuffix}</span>
+                          <span className="text-[10px] ml-2" style={{ color: 'var(--text-muted)' }}>
+                            ({SEGMENT_GROUPS.filter(g => selectedGroups.has(g.id)).map(g => g.label).join(', ') || 'なし'})
+                          </span>
                         </div>
                       )}
                     </div>
@@ -1386,6 +1453,14 @@ export default function SessionDetailPage() {
                       }}>
                         {realtimeConnected ? `● ${LABELS.realtimeActive}` : `○ ${LABELS.pollingMode}`}
                       </span>
+                      {modelId && (
+                        <button
+                          onClick={handleScreenshot}
+                          disabled={screenshotting}
+                          className="text-[10px] px-2 py-0.5 rounded hover:opacity-80 transition-opacity disabled:opacity-50"
+                          style={{ background: 'rgba(56,189,248,0.15)', color: 'var(--accent-primary)' }}
+                        >{screenshotting ? '撮影中...' : '📸 スクショ'}</button>
+                      )}
                     </div>
                   </div>
                   {!isSessionActive && (
@@ -1461,6 +1536,12 @@ export default function SessionDetailPage() {
                                   </div>
                                   <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgoText(v.first_seen)}</p>
                                 </div>
+                                <Link
+                                  href={`/casts/${encodeURIComponent(castName)}?tab=dm&target=${encodeURIComponent(v.user_name)}`}
+                                  className="text-[10px] opacity-40 hover:opacity-100 transition-opacity shrink-0 mt-1"
+                                  title="DMを送る"
+                                  onClick={e => e.stopPropagation()}
+                                >{'💬'}</Link>
                               </div>
                             ))}
                           </div>
@@ -1640,9 +1721,9 @@ export default function SessionDetailPage() {
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     {[
-                      { label: '総売上', value: formatTokens(summary.total_revenue), sub: tokensToJPY(summary.total_revenue, COIN_RATE), color: 'var(--accent-amber)' },
-                      { label: 'チャットチップ', value: formatTokens(summary.chat_tokens), sub: tokensToJPY(summary.chat_tokens, COIN_RATE), color: 'var(--accent-primary)' },
-                      { label: 'コイン売上', value: formatTokens(summary.coin_tokens), sub: summary.coin_tokens > 0 ? tokensToJPY(summary.coin_tokens, COIN_RATE) : '-', color: summary.coin_tokens > 0 ? 'var(--accent-pink)' : 'var(--text-muted)' },
+                      { label: '総売上（チップ+コイン）', value: formatTokens(summary.total_revenue), sub: tokensToJPY(summary.total_revenue, COIN_RATE), color: 'var(--accent-amber)' },
+                      { label: 'チャットチップ（SPY監視分）', value: formatTokens(summary.chat_tokens), sub: tokensToJPY(summary.chat_tokens, COIN_RATE), color: 'var(--accent-primary)' },
+                      { label: 'コイン売上（API集計）', value: formatTokens(summary.coin_tokens), sub: summary.coin_tokens > 0 ? tokensToJPY(summary.coin_tokens, COIN_RATE) : '-', color: summary.coin_tokens > 0 ? 'var(--accent-pink)' : 'var(--text-muted)' },
                       { label: LABELS.users, value: `${summary.unique_users}`, sub: '', color: 'var(--accent-purple)' },
                       { label: LABELS.messages, value: `${summary.msg_count}`, sub: '', color: 'var(--text-primary)' },
                     ].map(kpi => (
@@ -1703,7 +1784,7 @@ export default function SessionDetailPage() {
                 {/* Coin Top Users */}
                 {summary.coin_top_users && summary.coin_top_users.length > 0 && (
                   <div className="glass-card p-5">
-                    <h3 className="text-xs font-bold mb-1" style={{ color: 'var(--text-secondary)' }}>{'👑 コイン売上トップユーザー'}</h3>
+                    <h3 className="text-xs font-bold mb-1" style={{ color: 'var(--text-secondary)' }}>{'👑 コイン売上ランキング（API集計・TOP 5）'}</h3>
                     <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>
                       新規 {summary.coin_new_users}人 / リピーター {summary.coin_returning_users}人
                     </p>
@@ -1754,7 +1835,7 @@ export default function SessionDetailPage() {
                 {/* Top Chatters (チャットチップ) */}
                 {summary.top_chatters && summary.top_chatters.length > 0 && (
                   <div className="glass-card p-5">
-                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`💬 ${LABELS.topUsers}（チャットチップ）`}</h3>
+                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`💬 チャットチップ ランキング（SPY監視分・TOP 5）`}</h3>
                     <div className="space-y-1.5">
                       {summary.top_chatters.map((u, i) => (
                         <div key={u.user_name} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.02]">
@@ -2024,7 +2105,10 @@ export default function SessionDetailPage() {
                         {/* Segment Breakdown Table */}
                         {actions.segment_breakdown && actions.segment_breakdown.length > 0 && (
                           <div className="glass-card p-5">
-                            <h3 className="text-xs font-bold mb-4" style={{ color: 'var(--text-secondary)' }}>{`📊 ${LABELS.segmentBreakdown}`}</h3>
+                            <h3 className="text-xs font-bold mb-2" style={{ color: 'var(--text-secondary)' }}>{`📊 ${LABELS.segmentBreakdown}`}</h3>
+                            <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>
+                              S1-S3: Whale/VIP（高額課金）　S4-S6: Regular（常連）　S7-S9: Light（少額）　S10: Churned/New
+                            </p>
                             <div className="overflow-x-auto">
                               <table className="w-full text-xs">
                                 <thead>
@@ -2093,6 +2177,35 @@ export default function SessionDetailPage() {
                         )}
                       </>
                     ) : null}
+
+                    {/* 📸 Screenshot Gallery */}
+                    {screenshots.length > 0 && (
+                      <div className="glass-card p-5">
+                        <h3 className="text-xs font-bold mb-3 flex items-center gap-2" style={{ color: 'var(--accent-primary)' }}>
+                          {`📸 スクリーンショット (${screenshots.length}枚)`}
+                        </h3>
+                        <div className="grid grid-cols-3 gap-2">
+                          {screenshots.map(ss => (
+                            <button key={ss.id} onClick={() => setScreenshotModalUrl(ss.image_url)} className="relative group rounded-lg overflow-hidden border hover:border-sky-400/40 transition-all" style={{ borderColor: 'var(--border-glass)' }}>
+                              <img src={ss.image_url} alt={`Screenshot ${ss.captured_at}`} className="w-full h-24 object-cover" loading="lazy" />
+                              <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1.5 py-0.5">
+                                <span className="text-[9px]" style={{ color: 'var(--text-secondary)' }}>{formatDateCompact(ss.captured_at)}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Screenshot Modal */}
+                    {screenshotModalUrl && (
+                      <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center" onClick={() => setScreenshotModalUrl(null)}>
+                        <div className="relative max-w-4xl max-h-[90vh]">
+                          <img src={screenshotModalUrl} alt="Screenshot" className="max-w-full max-h-[90vh] object-contain rounded-lg" />
+                          <button onClick={() => setScreenshotModalUrl(null)} className="absolute top-2 right-2 text-white bg-black/50 rounded-full w-8 h-8 flex items-center justify-center hover:bg-black/80">{'✕'}</button>
+                        </div>
+                      </div>
+                    )}
 
                     {/* 🎬 Recording & Transcript Section */}
                     <div className="glass-card p-5">
