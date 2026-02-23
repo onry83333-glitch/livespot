@@ -51,6 +51,7 @@ const castTabs = [
   { tab: 'sales',     icon: '💰', label: '売上' },
   { tab: 'realtime',  icon: '👁', label: 'リアルタイム' },
   { tab: 'persona',   icon: '🎭', label: 'ペルソナ' },
+  { tab: 'overlap',   icon: '🔄', label: '競合分析' },
 ];
 
 const spyTabs = [

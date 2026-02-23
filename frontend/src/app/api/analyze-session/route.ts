@@ -1,5 +1,5 @@
 // ============================================================
-// POST /api/analyze-session — 配信AI分析（Phase 1: ルールベース）
+// POST /api/analyze-session — 配信AI分析（Phase 1: ルールベース）（認証必須）
 //
 // タイムラインデータ（spy_messages + cast_transcripts + coin_transactions）を
 // 統合し、配信構成の分類・課金トリガー特定・フィードバック生成を行う。
@@ -7,6 +7,7 @@
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { authenticateAndValidateAccount } from '@/lib/api-auth';
 
 export const maxDuration = 120;
 
@@ -40,6 +41,10 @@ export async function POST(request: NextRequest) {
   if (!session_id || !cast_name || !account_id) {
     return NextResponse.json({ error: '必須フィールドが不足' }, { status: 400 });
   }
+
+  // 認証 + account_id 検証
+  const auth = await authenticateAndValidateAccount(request, account_id);
+  if (!auth.authenticated) return auth.error;
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

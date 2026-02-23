@@ -1,6 +1,6 @@
 // ============================================================
-// GET  /api/screenshot?model_id=xxx — CDN画像プロキシ（CORS対策）
-// POST /api/screenshot — サムネイル取得 + DB保存
+// GET  /api/screenshot?model_id=xxx — CDN画像プロキシ（CORS対策・認証不要）
+// POST /api/screenshot — サムネイル取得 + DB保存（認証必須）
 //
 // Stripchat CDN URL:
 //   https://img.strpst.com/thumbs/{unix_ts}/{modelId}_webp
@@ -10,6 +10,7 @@
 //   SUPABASE_SERVICE_ROLE_KEY  (POSTのみ)
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server';
+import { authenticateAndValidateAccount, checkRateLimit } from '@/lib/api-auth';
 
 function buildThumbUrl(modelId: string): string {
   const timestamp = Math.floor(Date.now() / 1000);
@@ -47,13 +48,22 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: サムネイル取得 + cast_screenshots に保存
+// POST: サムネイル取得 + cast_screenshots に保存（認証必須）
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const { model_id, cast_name, account_id, session_id, thumbnail_type } = body;
 
   if (!model_id || !cast_name || !account_id) {
     return NextResponse.json({ error: 'model_id, cast_name, account_id required' }, { status: 400 });
+  }
+
+  // 認証 + account_id 検証
+  const auth = await authenticateAndValidateAccount(request, account_id);
+  if (!auth.authenticated) return auth.error;
+
+  // レート制限（同一ユーザー5秒間隔）
+  if (!checkRateLimit(`screenshot:${auth.userId}`)) {
+    return NextResponse.json({ error: '連続リクエストは5秒間隔で行ってください' }, { status: 429 });
   }
 
   const imageUrl = buildThumbUrl(model_id);

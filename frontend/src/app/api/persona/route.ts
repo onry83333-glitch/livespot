@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { authenticateAndValidateAccount } from '@/lib/api-auth';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -53,29 +54,11 @@ function getAuthClient(token: string) {
   });
 }
 
-async function verifyAuth(req: NextRequest): Promise<{ token: string } | NextResponse> {
-  const authHeader = req.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ')) {
-    return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
-  }
-  const token = authHeader.slice(7);
-  const userRes = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-    headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${token}` },
-  });
-  if (!userRes.ok) {
-    return NextResponse.json({ error: '認証トークンが無効です' }, { status: 401 });
-  }
-  return { token };
-}
-
 // ============================================================
 // GET /api/persona?cast_name=xxx&account_id=yyy
-// ペルソナ取得
+// ペルソナ取得（認証 + account_id 検証）
 // ============================================================
 export async function GET(req: NextRequest) {
-  const auth = await verifyAuth(req);
-  if (auth instanceof NextResponse) return auth;
-
   const { searchParams } = new URL(req.url);
   const castName = searchParams.get('cast_name');
   const accountId = searchParams.get('account_id');
@@ -83,6 +66,9 @@ export async function GET(req: NextRequest) {
   if (!castName || !accountId) {
     return NextResponse.json({ error: 'cast_name と account_id は必須です' }, { status: 400 });
   }
+
+  const auth = await authenticateAndValidateAccount(req, accountId);
+  if (!auth.authenticated) return auth.error;
 
   const sb = getAuthClient(auth.token);
   const { data, error } = await sb
@@ -100,18 +86,18 @@ export async function GET(req: NextRequest) {
 }
 
 // ============================================================
-// PUT /api/persona — ペルソナ更新（upsert）
+// PUT /api/persona — ペルソナ更新（upsert）（認証 + account_id 検証）
 // ============================================================
 export async function PUT(req: NextRequest) {
-  const auth = await verifyAuth(req);
-  if (auth instanceof NextResponse) return auth;
-
   const body = await req.json();
   const { account_id, cast_name, ...fields } = body;
 
   if (!account_id || !cast_name) {
     return NextResponse.json({ error: 'account_id と cast_name は必須です' }, { status: 400 });
   }
+
+  const auth = await authenticateAndValidateAccount(req, account_id);
+  if (!auth.authenticated) return auth.error;
 
   const sb = getAuthClient(auth.token);
   const { data, error } = await sb
@@ -520,11 +506,13 @@ async function callClaude(systemPrompt: string, userPrompt: string, maxTokens = 
 // (後方互換) task_type指定 → Phase 2
 // ============================================================
 export async function POST(req: NextRequest) {
-  const auth = await verifyAuth(req);
-  if (auth instanceof NextResponse) return auth;
-
   const body = await req.json();
   const mode = body.mode as string || (body.task_type ? 'ai' : 'generate');
+  const reqAccountId = body.account_id as string | null;
+
+  // 認証 + account_id 検証
+  const auth = await authenticateAndValidateAccount(req, reqAccountId);
+  if (!auth.authenticated) return auth.error;
 
   // ── Phase 1: テンプレートベースDM生成 ──
   if (mode === 'generate') {
