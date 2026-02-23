@@ -55,7 +55,7 @@ BEGIN
     ROUND(EXTRACT(EPOCH FROM (MAX(sm.message_time) - MIN(sm.message_time))) / 60, 1) AS duration_minutes,
     COUNT(*) AS msg_count,
     COUNT(DISTINCT sm.user_name) FILTER (WHERE sm.user_name IS NOT NULL AND sm.user_name != '') AS unique_users,
-    COALESCE(SUM(sm.tokens) FILTER (WHERE sm.tokens > 0), 0) AS total_tokens,
+    COALESCE(SUM(sm.tokens) FILTER (WHERE sm.tokens > 0), 0)::BIGINT AS total_tokens,
     COUNT(*) FILTER (WHERE sm.tokens > 0) AS tip_count,
     (MAX(sm.message_time) > NOW() - INTERVAL '10 minutes') AS is_active,
     v_total AS total_count
@@ -110,7 +110,7 @@ DECLARE
   v_prev_start TIMESTAMPTZ;
 BEGIN
   -- セッションのcast_nameと開始時刻を特定
-  SELECT sm.cast_name, MIN(sm.message_time), COALESCE(SUM(sm.tokens) FILTER (WHERE sm.tokens > 0), 0)
+  SELECT sm.cast_name, MIN(sm.message_time), COALESCE(SUM(sm.tokens) FILTER (WHERE sm.tokens > 0), 0)::BIGINT
   INTO v_cast, v_started, v_tokens
   FROM public.spy_messages sm
   WHERE sm.account_id = p_account_id
@@ -128,7 +128,7 @@ BEGIN
   FROM (
     SELECT
       sm2.session_id AS sid,
-      COALESCE(SUM(sm2.tokens) FILTER (WHERE sm2.tokens > 0), 0) AS tk,
+      COALESCE(SUM(sm2.tokens) FILTER (WHERE sm2.tokens > 0), 0)::BIGINT AS tk,
       MIN(sm2.message_time) AS sa
     FROM public.spy_messages sm2
     WHERE sm2.account_id = p_account_id
@@ -154,7 +154,7 @@ BEGIN
       ROUND(EXTRACT(EPOCH FROM (MAX(sm.message_time) - MIN(sm.message_time))) / 60, 1) AS duration_minutes,
       COUNT(*) AS msg_count,
       COUNT(DISTINCT sm.user_name) FILTER (WHERE sm.user_name IS NOT NULL AND sm.user_name != '') AS unique_users,
-      COALESCE(SUM(sm.tokens) FILTER (WHERE sm.tokens > 0), 0) AS total_tokens,
+      COALESCE(SUM(sm.tokens) FILTER (WHERE sm.tokens > 0), 0)::BIGINT AS total_tokens,
       COUNT(*) FILTER (WHERE sm.tokens > 0) AS tip_count
     FROM public.spy_messages sm
     WHERE sm.account_id = p_account_id
