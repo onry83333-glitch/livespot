@@ -7,12 +7,15 @@ import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, formatJST } from '@/lib/utils';
 import Link from 'next/link';
+import { queueDmBatch } from '@/lib/dm-sender';
 
 /* ============================================================
    Types
    ============================================================ */
 interface SessionSummary {
-  session_id: string;
+  // v2 broadcast group fields (v1 fallback: session_id mapped to broadcast_group_id)
+  broadcast_group_id: string;
+  session_ids: string[];
   cast_name: string;
   session_title: string | null;
   started_at: string;
@@ -20,12 +23,20 @@ interface SessionSummary {
   duration_minutes: number;
   msg_count: number;
   unique_users: number;
-  total_tokens: number;
+  chat_tokens: number;
   tip_count: number;
   tokens_by_type: Record<string, number>;
-  top_users: { user_name: string; tokens: number; tip_count: number }[];
-  prev_session_id: string | null;
-  prev_total_tokens: number | null;
+  top_chatters: { user_name: string; tokens: number; tip_count: number }[];
+  // Coin data (0 when v1 fallback)
+  coin_tokens: number;
+  coin_by_type: Record<string, number>;
+  coin_top_users: { user_name: string; tokens: number; types: string[]; is_new: boolean }[];
+  coin_new_users: number;
+  coin_returning_users: number;
+  total_revenue: number;
+  // Comparison
+  prev_broadcast_group_id: string | null;
+  prev_total_revenue: number | null;
   prev_started_at: string | null;
   change_pct: number | null;
 }
@@ -195,6 +206,12 @@ const LABELS = {
   noRecordingHint: '配信録画ファイルをアップロードすると、自動で文字起こしされます',
   processingTranscript: '文字起こし中...',
   nextPhase: '次フェーズで実装予定',
+  recordingStartLabel: '録画開始時刻（任意）',
+  recordingStartHint: '入力するとチャットログと突合できます',
+  fileTooLarge: 'Whisper APIの上限は25MBです。音声ファイル（mp3/m4a/wav）に変換してアップロードしてください',
+  transcribing: '文字起こし処理中...',
+  transcribeComplete: '文字起こし完了',
+  transcribeFailed: '文字起こし失敗',
 } as const;
 
 const COIN_RATE = 7.7;
@@ -323,6 +340,7 @@ export default function SessionDetailPage() {
   );
   const [templates, setTemplates] = useState<DmTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [dmText, setDmText] = useState<string>(LABELS.defaultTemplateText);
   const [preLoading, setPreLoading] = useState(false);
 
   // Live mode state
@@ -340,6 +358,7 @@ export default function SessionDetailPage() {
   const [liveLoading, setLiveLoading] = useState(false);
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrolledUp = useRef(false);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const lastMessageTimeRef = useRef<string | null>(null);
   const dmSentUsersRef = useRef<Map<string, { sent_at: string; segment: string | null }>>(new Map());
   const sessionPayersRef = useRef<Set<string>>(new Set());
@@ -349,6 +368,17 @@ export default function SessionDetailPage() {
   const [transcriptsLoading, setTranscriptsLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [recordingStartedAt, setRecordingStartedAt] = useState('');
+  const [transcribing, setTranscribing] = useState(false);
+
+  // DM sending state
+  const [dmSending, setDmSending] = useState(false);
+  const [dmSentCampaign, setDmSentCampaign] = useState<string | null>(null);
+
+  // User DM history (inline expand)
+  const [expandedDmUser, setExpandedDmUser] = useState<string | null>(null);
+  const [userDmHistory, setUserDmHistory] = useState<{ message: string; status: string; campaign: string | null; sent_at: string | null; queued_at: string }[]>([]);
+  const [userDmLoading, setUserDmLoading] = useState(false);
 
   // Computed: total send targets
   const sendTargetCount = SEGMENT_GROUPS
@@ -371,35 +401,111 @@ export default function SessionDetailPage() {
     });
   }, [user, sb]);
 
-  // Load session summary
+  // Helper: v1 RPC結果をv2形式に変換
+  const mapV1toV2 = (row: any): SessionSummary => {
+    let topUsers = row.top_users || [];
+    if (typeof topUsers === 'string') { try { topUsers = JSON.parse(topUsers); } catch { topUsers = []; } }
+    let tokensByType = row.tokens_by_type || {};
+    if (typeof tokensByType === 'string') { try { tokensByType = JSON.parse(tokensByType); } catch { tokensByType = {}; } }
+    return {
+      broadcast_group_id: row.session_id,
+      session_ids: [row.session_id],
+      cast_name: row.cast_name,
+      session_title: row.session_title,
+      started_at: row.started_at,
+      ended_at: row.ended_at,
+      duration_minutes: row.duration_minutes,
+      msg_count: row.msg_count,
+      unique_users: row.unique_users,
+      chat_tokens: row.total_tokens ?? 0,
+      tip_count: row.tip_count,
+      tokens_by_type: tokensByType,
+      top_chatters: topUsers,
+      coin_tokens: 0, coin_by_type: {}, coin_top_users: [],
+      coin_new_users: 0, coin_returning_users: 0,
+      total_revenue: row.total_tokens ?? 0,
+      prev_broadcast_group_id: row.prev_session_id ?? null,
+      prev_total_revenue: row.prev_total_tokens ?? null,
+      prev_started_at: row.prev_started_at ?? null,
+      change_pct: row.change_pct ?? null,
+    };
+  };
+
+  // Helper: v2 RPC結果のJSONBフィールドをパース
+  const parseV2Row = (row: any): SessionSummary => {
+    let topChatters = row.top_chatters || [];
+    if (typeof topChatters === 'string') { try { topChatters = JSON.parse(topChatters); } catch { topChatters = []; } }
+    let tokensByType = row.tokens_by_type || {};
+    if (typeof tokensByType === 'string') { try { tokensByType = JSON.parse(tokensByType); } catch { tokensByType = {}; } }
+    let coinByType = row.coin_by_type || {};
+    if (typeof coinByType === 'string') { try { coinByType = JSON.parse(coinByType); } catch { coinByType = {}; } }
+    let coinTopUsers = row.coin_top_users || [];
+    if (typeof coinTopUsers === 'string') { try { coinTopUsers = JSON.parse(coinTopUsers); } catch { coinTopUsers = []; } }
+    return {
+      broadcast_group_id: row.broadcast_group_id,
+      session_ids: row.session_ids || [row.broadcast_group_id],
+      cast_name: row.cast_name,
+      session_title: row.session_title,
+      started_at: row.started_at,
+      ended_at: row.ended_at,
+      duration_minutes: row.duration_minutes,
+      msg_count: row.msg_count,
+      unique_users: row.unique_users,
+      chat_tokens: row.chat_tokens ?? 0,
+      tip_count: row.tip_count,
+      tokens_by_type: tokensByType,
+      top_chatters: topChatters,
+      coin_tokens: row.coin_tokens ?? 0,
+      coin_by_type: coinByType,
+      coin_top_users: coinTopUsers,
+      coin_new_users: row.coin_new_users ?? 0,
+      coin_returning_users: row.coin_returning_users ?? 0,
+      total_revenue: row.total_revenue ?? row.chat_tokens ?? 0,
+      prev_broadcast_group_id: row.prev_broadcast_group_id ?? null,
+      prev_total_revenue: row.prev_total_revenue ?? null,
+      prev_started_at: row.prev_started_at ?? null,
+      change_pct: row.change_pct ?? null,
+    };
+  };
+
+  // Load session summary (v2 → v1 → fallback)
   useEffect(() => {
     if (!accountId) return;
     setLoading(true);
     setError(null);
 
-    sb.rpc('get_session_summary', {
-      p_account_id: accountId,
-      p_session_id: sessionId,
-    }).then(async ({ data, error: rpcError }) => {
-      if (rpcError) {
-        await loadFallback();
-        return;
-      }
-      const rows = Array.isArray(data) ? data : data ? [data] : [];
-      if (rows.length > 0) {
-        const row = rows[0] as SessionSummary;
-        if (typeof row.top_users === 'string') {
-          try { row.top_users = JSON.parse(row.top_users); } catch { row.top_users = []; }
+    (async () => {
+      // Try v2 first
+      const { data: v2data, error: v2err } = await sb.rpc('get_session_summary_v2', {
+        p_account_id: accountId,
+        p_session_id: sessionId,
+      });
+      if (!v2err) {
+        const rows = Array.isArray(v2data) ? v2data : v2data ? [v2data] : [];
+        if (rows.length > 0) {
+          setSummary(parseV2Row(rows[0]));
+          setLoading(false);
+          return;
         }
-        if (typeof row.tokens_by_type === 'string') {
-          try { row.tokens_by_type = JSON.parse(row.tokens_by_type); } catch { row.tokens_by_type = {}; }
-        }
-        setSummary(row);
-        setLoading(false);
-        return;
       }
+      console.warn('[Session] v2 RPC failed or empty, trying v1:', v2err?.message);
+
+      // Try v1
+      const { data: v1data, error: v1err } = await sb.rpc('get_session_summary', {
+        p_account_id: accountId,
+        p_session_id: sessionId,
+      });
+      if (!v1err) {
+        const rows = Array.isArray(v1data) ? v1data : v1data ? [v1data] : [];
+        if (rows.length > 0) {
+          setSummary(mapV1toV2(rows[0]));
+          setLoading(false);
+          return;
+        }
+      }
+      console.warn('[Session] v1 RPC also failed, using fallback:', v1err?.message);
       await loadFallback();
-    });
+    })();
   }, [accountId, sessionId, sb]);
 
   const loadFallback = async () => {
@@ -438,12 +544,16 @@ export default function SessionDetailPage() {
       .map(([name, v]) => ({ user_name: name, tokens: v.tokens, tip_count: v.count }));
 
     setSummary({
-      session_id: sessionId, cast_name: msgs[0].cast_name, session_title: msgs[0].session_title,
+      broadcast_group_id: sessionId, session_ids: [sessionId],
+      cast_name: msgs[0].cast_name, session_title: msgs[0].session_title,
       started_at: new Date(Math.min(...times)).toISOString(), ended_at: new Date(Math.max(...times)).toISOString(),
       duration_minutes: Math.round((Math.max(...times) - Math.min(...times)) / 60000),
-      msg_count: msgs.length, unique_users: users.size, total_tokens: totalTk, tip_count: tips.length,
-      tokens_by_type: typeMap, top_users: top5,
-      prev_session_id: null, prev_total_tokens: null, prev_started_at: null, change_pct: null,
+      msg_count: msgs.length, unique_users: users.size, chat_tokens: totalTk, tip_count: tips.length,
+      tokens_by_type: typeMap, top_chatters: top5,
+      coin_tokens: 0, coin_by_type: {}, coin_top_users: [],
+      coin_new_users: 0, coin_returning_users: 0,
+      total_revenue: totalTk,
+      prev_broadcast_group_id: null, prev_total_revenue: null, prev_started_at: null, change_pct: null,
     });
     setLoading(false);
   };
@@ -522,20 +632,131 @@ export default function SessionDetailPage() {
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Load transcripts for this session (post mode only)
-  useEffect(() => {
-    if (!accountId || resolvedMode !== 'post') return;
+  // Load transcripts for this session
+  const loadTranscripts = useCallback(async () => {
+    if (!accountId) return;
     setTranscriptsLoading(true);
-    sb.from('cast_transcripts')
+    const { data, error: err } = await sb.from('cast_transcripts')
       .select('id, session_id, cast_name, segment_start_seconds, segment_end_seconds, text, language, confidence, source_file, processing_status, error_message, created_at')
       .eq('account_id', accountId)
       .eq('session_id', sessionId)
-      .order('segment_start_seconds', { ascending: true, nullsFirst: false })
-      .then(({ data, error: err }) => {
-        if (!err && data) setTranscripts(data as CastTranscript[]);
-        setTranscriptsLoading(false);
-      });
-  }, [accountId, sessionId, resolvedMode, sb]);
+      .order('segment_start_seconds', { ascending: true, nullsFirst: false });
+    if (!err && data) setTranscripts(data as CastTranscript[]);
+    setTranscriptsLoading(false);
+  }, [accountId, sessionId, sb]);
+
+  useEffect(() => {
+    if (resolvedMode === 'post') loadTranscripts();
+  }, [resolvedMode, loadTranscripts]);
+
+  // Load DM history for a specific user (inline expand)
+  const loadUserDmHistory = useCallback(async (userName: string) => {
+    if (!accountId) return;
+    if (expandedDmUser === userName) { setExpandedDmUser(null); return; }
+    setExpandedDmUser(userName);
+    setUserDmLoading(true);
+    const { data } = await sb.from('dm_send_log')
+      .select('message, status, campaign, sent_at, queued_at')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .eq('user_name', userName)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    setUserDmHistory(data || []);
+    setUserDmLoading(false);
+  }, [accountId, castName, sb, expandedDmUser]);
+
+  // Pre-broadcast: bulk DM send
+  const handlePreBroadcastDm = useCallback(async () => {
+    if (!accountId || dmSending) return;
+    const selectedSegments = SEGMENT_GROUPS
+      .filter(g => selectedGroups.has(g.id))
+      .flatMap(g => [...g.segments] as string[]);
+    if (selectedSegments.length === 0 || sendTargetCount === 0) {
+      setToast('送信対象のセグメントを選択してください');
+      return;
+    }
+    const msg = dmText.trim() + '\n' + LABELS.byafText;
+    if (!window.confirm(`${sendTargetCount}人に配信前DMを送信しますか？\n\nメッセージ:\n${msg.slice(0, 100)}...`)) return;
+
+    setDmSending(true);
+    try {
+      const { data: users } = await sb
+        .from('paid_users')
+        .select('user_name, segment')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .in('segment', selectedSegments);
+      if (!users || users.length === 0) {
+        setToast('対象ユーザーが見つかりませんでした');
+        setDmSending(false);
+        return;
+      }
+      const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+      const campaign = `pre_broadcast_${sessionId.slice(0, 8)}_${ts}`;
+      const targets = users.map(u => ({ username: u.user_name, message: msg }));
+      const result = await queueDmBatch(sb, accountId, castName, targets, campaign);
+      setDmSentCampaign(campaign);
+      setToast(`${result.queued}件のDMをキューに登録しました`);
+    } catch (e: unknown) {
+      setToast(e instanceof Error ? e.message : '送信エラー');
+    }
+    setDmSending(false);
+  }, [accountId, dmSending, selectedGroups, sendTargetCount, dmText, sb, castName, sessionId]);
+
+  // Post-broadcast: first-time payer thank DM
+  const handleThankDm = useCallback(async () => {
+    if (!accountId || !actions || dmSending) return;
+    const unsent = actions.first_time_payers.filter(u => !u.dm_sent);
+    if (unsent.length === 0) { setToast('全員送信済みです'); return; }
+    if (!window.confirm(`初課金${unsent.length}人にお礼DMを送信しますか？`)) return;
+
+    setDmSending(true);
+    try {
+      const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+      const campaign = `post_thank_${sessionId.slice(0, 8)}_${ts}`;
+      const targets = unsent.map(u => ({
+        username: u.user_name,
+        message: (dmText || LABELS.defaultTemplateText).replace('{username}', u.user_name),
+      }));
+      const result = await queueDmBatch(sb, accountId, castName, targets, campaign);
+      setDmSentCampaign(campaign);
+      setToast(`${result.queued}件のお礼DMをキューに登録しました`);
+      setActions(prev => prev ? {
+        ...prev,
+        first_time_payers: prev.first_time_payers.map(p =>
+          unsent.some(u => u.user_name === p.user_name) ? { ...p, dm_sent: true } : p
+        ),
+      } : prev);
+    } catch (e: unknown) {
+      setToast(e instanceof Error ? e.message : '送信エラー');
+    }
+    setDmSending(false);
+  }, [accountId, actions, dmSending, dmText, sb, castName, sessionId]);
+
+  // Post-broadcast: follow DM for visited_no_action
+  const handleFollowDm = useCallback(async () => {
+    if (!accountId || !actions || dmSending) return;
+    const followTargets = actions.visited_no_action;
+    if (followTargets.length === 0) { setToast('対象ユーザーがいません'); return; }
+    if (!window.confirm(`来訪無アクション${followTargets.length}人にフォローDMを送信しますか？`)) return;
+
+    setDmSending(true);
+    try {
+      const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 15);
+      const campaign = `post_follow_${sessionId.slice(0, 8)}_${ts}`;
+      const dmTargets = followTargets.map(u => ({
+        username: u.user_name,
+        message: `${u.user_name}さん、今日は来てくれてありがとう！\nまた気が向いたら遊びに来てくださいね😊`,
+      }));
+      const result = await queueDmBatch(sb, accountId, castName, dmTargets, campaign);
+      setDmSentCampaign(campaign);
+      setToast(`${result.queued}件のフォローDMをキューに登録しました`);
+    } catch (e: unknown) {
+      setToast(e instanceof Error ? e.message : '送信エラー');
+    }
+    setDmSending(false);
+  }, [accountId, actions, dmSending, sb, castName, sessionId]);
 
   // ============================================================
   // LIVE MODE: Data loading + Realtime + Polling
@@ -837,7 +1058,9 @@ export default function SessionDetailPage() {
 
   const handleChatScroll = (e: React.UIEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
-    isUserScrolledUp.current = el.scrollTop + el.clientHeight < el.scrollHeight - 50;
+    const scrolledUp = el.scrollTop + el.clientHeight < el.scrollHeight - 50;
+    isUserScrolledUp.current = scrolledUp;
+    setShowScrollToBottom(scrolledUp);
   };
 
   // Computed: revenue buckets (10-min intervals)
@@ -966,7 +1189,7 @@ export default function SessionDetailPage() {
                   </h2>
                   <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     <span>{`${LABELS.prevBroadcast}: ${formatDateCompact(summary.started_at)}~${formatDateCompact(summary.ended_at).split(' ')[1]}`}</span>
-                    <span>{`${LABELS.sales}: ${tokensToJPY(summary.total_tokens, COIN_RATE)}`}</span>
+                    <span>{`${LABELS.sales}: ${tokensToJPY(summary.total_revenue, COIN_RATE)}`}</span>
                     <span>{`${LABELS.prevAttendance}: ${summary.unique_users}${LABELS.personSuffix}`}</span>
                     <span>{`${LABELS.prevNewUsers}: ${actions ? actions.first_time_payers.length : '-'}${LABELS.personSuffix}`}</span>
                   </div>
@@ -1032,7 +1255,12 @@ export default function SessionDetailPage() {
                       {templates.length > 0 && (
                         <select
                           value={selectedTemplateId || ''}
-                          onChange={e => setSelectedTemplateId(e.target.value || null)}
+                          onChange={e => {
+                            const id = e.target.value || null;
+                            setSelectedTemplateId(id);
+                            const tpl = templates.find(t => t.id === id);
+                            setDmText(tpl ? tpl.message : LABELS.defaultTemplateText);
+                          }}
                           className="input-glass w-full text-xs mb-3"
                         >
                           <option value="">---</option>
@@ -1041,9 +1269,13 @@ export default function SessionDetailPage() {
                           ))}
                         </select>
                       )}
-                      <div className="rounded-lg p-4 text-xs whitespace-pre-wrap" style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', lineHeight: '1.8' }}>
-                        {selectedTemplateMsg}
-                      </div>
+                      <textarea
+                        value={dmText}
+                        onChange={e => setDmText(e.target.value)}
+                        className="w-full rounded-lg p-4 text-xs resize-y min-h-[100px]"
+                        style={{ background: 'rgba(0,0,0,0.2)', color: 'var(--text-secondary)', lineHeight: '1.8', border: '1px solid var(--border-glass)' }}
+                        placeholder="DMメッセージを入力..."
+                      />
                     </div>
 
                     {/* BYAF */}
@@ -1055,14 +1287,11 @@ export default function SessionDetailPage() {
                     {/* Action Buttons */}
                     <div className="flex items-center gap-3 pt-2">
                       <button
-                        onClick={() => setToast(LABELS.notImplemented)}
-                        className="btn-ghost text-xs px-4 py-2"
-                      >{LABELS.preview}</button>
-                      <button
-                        onClick={() => setToast(LABELS.notImplemented)}
-                        className="text-xs px-5 py-2.5 rounded-lg font-bold transition-all"
+                        onClick={handlePreBroadcastDm}
+                        disabled={dmSending || !!dmSentCampaign?.startsWith('pre_broadcast_') || sendTargetCount === 0}
+                        className="text-xs px-5 py-2.5 rounded-lg font-bold transition-all disabled:opacity-50"
                         style={{ background: 'linear-gradient(135deg, rgb(245,158,11), rgb(217,119,6))', color: '#fff' }}
-                      >{`📤 ${LABELS.bulkSend}`}</button>
+                      >{dmSending ? '送信中...' : dmSentCampaign?.startsWith('pre_broadcast_') ? '✅ 送信済み' : `📤 ${LABELS.bulkSend}`}</button>
                     </div>
                   </div>
                 )}
@@ -1075,7 +1304,7 @@ export default function SessionDetailPage() {
                   <div className="grid grid-cols-3 gap-4 text-center mb-4">
                     <div>
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.sales}</p>
-                      <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(summary.total_tokens, COIN_RATE)}</p>
+                      <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(summary.total_revenue, COIN_RATE)}</p>
                       {summary.change_pct !== null && (
                         <p className="text-[10px]" style={{ color: summary.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
                           {`(${LABELS.prevCompare} ${summary.change_pct >= 0 ? '+' : ''}${summary.change_pct}%) ${summary.change_pct >= 0 ? '⇑' : '⇓'}`}
@@ -1218,7 +1447,7 @@ export default function SessionDetailPage() {
                       </div>
 
                       {/* === Center: Chat Feed === */}
-                      <div className={`glass-card flex flex-col ${mobileTab !== 'chat' ? 'hidden lg:flex' : ''}`} style={{ maxHeight: 'calc(100vh - 300px)', minHeight: '400px' }}>
+                      <div className={`glass-card flex flex-col relative ${mobileTab !== 'chat' ? 'hidden lg:flex' : ''}`} style={{ maxHeight: 'calc(100vh - 300px)', minHeight: '400px' }}>
                         <h3 className="text-xs font-bold px-4 pt-4 pb-2" style={{ color: 'rgb(248,113,113)' }}>
                           {`💬 ${LABELS.chatFeed} (${liveMessages.length})`}
                         </h3>
@@ -1266,6 +1495,19 @@ export default function SessionDetailPage() {
                             })
                           )}
                         </div>
+                        {/* Scroll to bottom button */}
+                        {showScrollToBottom && (
+                          <button
+                            onClick={() => {
+                              chatContainerRef.current?.scrollTo({ top: chatContainerRef.current.scrollHeight, behavior: 'smooth' });
+                              setShowScrollToBottom(false);
+                            }}
+                            className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs px-3 py-1.5 rounded-full shadow-lg z-10 hover:brightness-110 transition-all"
+                            style={{ background: 'rgba(248,113,113,0.8)', color: '#fff' }}
+                          >
+                            ↓ 最新メッセージへ
+                          </button>
+                        )}
                       </div>
 
                       {/* === Right: Stats Panel === */}
@@ -1375,10 +1617,11 @@ export default function SessionDetailPage() {
                       </div>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                     {[
-                      { label: LABELS.sales, value: formatTokens(summary.total_tokens), sub: tokensToJPY(summary.total_tokens, COIN_RATE), color: 'var(--accent-amber)' },
-                      { label: LABELS.tipCount, value: `${summary.tip_count}`, sub: `${summary.tip_count > 0 ? `${Math.round(summary.total_tokens / summary.tip_count)} tk/tip` : ''}`, color: 'var(--accent-primary)' },
+                      { label: '総売上', value: formatTokens(summary.total_revenue), sub: tokensToJPY(summary.total_revenue, COIN_RATE), color: 'var(--accent-amber)' },
+                      { label: 'チャットチップ', value: formatTokens(summary.chat_tokens), sub: tokensToJPY(summary.chat_tokens, COIN_RATE), color: 'var(--accent-primary)' },
+                      { label: 'コイン売上', value: formatTokens(summary.coin_tokens), sub: summary.coin_tokens > 0 ? tokensToJPY(summary.coin_tokens, COIN_RATE) : '-', color: summary.coin_tokens > 0 ? 'var(--accent-pink)' : 'var(--text-muted)' },
                       { label: LABELS.users, value: `${summary.unique_users}`, sub: '', color: 'var(--accent-purple)' },
                       { label: LABELS.messages, value: `${summary.msg_count}`, sub: '', color: 'var(--text-primary)' },
                     ].map(kpi => (
@@ -1389,12 +1632,81 @@ export default function SessionDetailPage() {
                       </div>
                     ))}
                   </div>
+                  {/* Merged sessions badge */}
+                  {summary.session_ids && summary.session_ids.length > 1 && (
+                    <div className="mt-2 text-[10px] px-3 py-1.5 rounded-lg inline-block" style={{
+                      background: 'rgba(167,139,250,0.1)',
+                      border: '1px solid rgba(167,139,250,0.25)',
+                      color: 'var(--accent-purple)',
+                    }}>
+                      {summary.session_ids.length}セッション統合（30分ギャップ基準）
+                    </div>
+                  )}
                 </div>
 
-                {/* Tokens by msg_type */}
+                {/* Coin Revenue Breakdown */}
+                {summary.coin_tokens > 0 && Object.keys(summary.coin_by_type).length > 0 && (
+                  <div className="glass-card p-5">
+                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{'💰 コイン売上内訳'}</h3>
+                    <div className="space-y-2">
+                      {(() => {
+                        const coinTypeColors: Record<string, string> = {
+                          tip: '#f59e0b', private: '#f43f5e', ticket: '#a78bfa',
+                          group: '#38bdf8', spy: '#22c55e', striptease: '#ec4899',
+                        };
+                        const coinTypeLabels: Record<string, string> = {
+                          tip: 'チップ', private: 'プライベート', ticket: 'チケットショー',
+                          group: 'グループ', spy: 'スパイ', striptease: 'ストリップ',
+                        };
+                        return Object.entries(summary.coin_by_type)
+                          .sort(([, a], [, b]) => b - a)
+                          .map(([type, tokens]) => {
+                            const pct = summary.coin_tokens > 0 ? Math.round(tokens / summary.coin_tokens * 100) : 0;
+                            const color = coinTypeColors[type] || '#64748b';
+                            return (
+                              <div key={type} className="flex items-center gap-3">
+                                <span className="text-xs w-28 text-right" style={{ color: 'var(--text-secondary)' }}>{coinTypeLabels[type] || type}</span>
+                                <div className="flex-1 h-3 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                  <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+                                </div>
+                                <span className="text-xs font-bold min-w-[80px] text-right" style={{ color }}>{formatTokens(tokens)}</span>
+                                <span className="text-[10px] min-w-[40px] text-right" style={{ color: 'var(--text-muted)' }}>{pct}%</span>
+                              </div>
+                            );
+                          });
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                {/* Coin Top Users */}
+                {summary.coin_top_users && summary.coin_top_users.length > 0 && (
+                  <div className="glass-card p-5">
+                    <h3 className="text-xs font-bold mb-1" style={{ color: 'var(--text-secondary)' }}>{'👑 コイン売上トップユーザー'}</h3>
+                    <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>
+                      新規 {summary.coin_new_users}人 / リピーター {summary.coin_returning_users}人
+                    </p>
+                    <div className="space-y-1.5">
+                      {summary.coin_top_users.map((u, i) => (
+                        <div key={u.user_name} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.02]">
+                          <span className="text-xs font-bold w-6" style={{ color: i < 3 ? 'var(--accent-pink)' : 'var(--text-muted)' }}>#{i + 1}</span>
+                          <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }} onClick={e => e.stopPropagation()}>{u.user_name}</Link>
+                          {u.is_new && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: 'rgb(74,222,128)' }}>NEW</span>
+                          )}
+                          <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>{u.types?.join(', ')}</span>
+                          <span className="text-xs font-bold min-w-[80px] text-right" style={{ color: 'var(--accent-pink)' }}>{formatTokens(u.tokens)}</span>
+                          <span className="text-[10px] min-w-[60px] text-right" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.tokens, COIN_RATE)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Tokens by msg_type (Chat) */}
                 {summary.tokens_by_type && Object.keys(summary.tokens_by_type).length > 0 && (
                   <div className="glass-card p-5">
-                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`💰 ${LABELS.salesBreakdown}`}</h3>
+                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`💬 ${LABELS.salesBreakdown}`}</h3>
                     <div className="space-y-2">
                       {(() => {
                         const typeTotal = Object.values(summary.tokens_by_type).reduce((s, v) => s + v, 0);
@@ -1418,15 +1730,22 @@ export default function SessionDetailPage() {
                   </div>
                 )}
 
-                {/* Top Users */}
-                {summary.top_users && summary.top_users.length > 0 && (
+                {/* Top Chatters (チャットチップ) */}
+                {summary.top_chatters && summary.top_chatters.length > 0 && (
                   <div className="glass-card p-5">
-                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`👑 ${LABELS.topUsers}`}</h3>
+                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`💬 ${LABELS.topUsers}（チャットチップ）`}</h3>
                     <div className="space-y-1.5">
-                      {summary.top_users.map((u, i) => (
+                      {summary.top_chatters.map((u, i) => (
                         <div key={u.user_name} className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.02]">
                           <span className="text-xs font-bold w-6" style={{ color: i < 3 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>#{i + 1}</span>
                           <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }} onClick={e => e.stopPropagation()}>{u.user_name}</Link>
+                          <Link
+                            href={`/casts/${encodeURIComponent(castName)}?tab=dm&target=${encodeURIComponent(u.user_name)}`}
+                            className="text-[10px] hover:opacity-70 transition-opacity"
+                            style={{ color: 'var(--text-muted)' }}
+                            onClick={e => e.stopPropagation()}
+                            title="DMを送る"
+                          >💬</Link>
                           <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>{u.tip_count} tips</span>
                           <span className="text-xs font-bold min-w-[80px] text-right" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.tokens)}</span>
                           <span className="text-[10px] min-w-[60px] text-right" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.tokens, COIN_RATE)}</span>
@@ -1436,21 +1755,21 @@ export default function SessionDetailPage() {
                   </div>
                 )}
 
-                {/* Previous Session Comparison */}
-                {summary.prev_session_id && summary.prev_total_tokens !== null && (
+                {/* Previous Broadcast Comparison */}
+                {summary.prev_broadcast_group_id && summary.prev_total_revenue !== null && (
                   <div className="glass-card p-5">
                     <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{`📊 ${LABELS.prevComparison}`}</h3>
                     <div className="grid grid-cols-3 gap-4 text-center">
                       <div>
                         <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.prevSales}</p>
-                        <p className="text-sm font-bold" style={{ color: 'var(--text-secondary)' }}>{formatTokens(summary.prev_total_tokens)}</p>
+                        <p className="text-sm font-bold" style={{ color: 'var(--text-secondary)' }}>{formatTokens(summary.prev_total_revenue)}</p>
                         {summary.prev_started_at && (
                           <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatJST(summary.prev_started_at).split(' ')[0]}</p>
                         )}
                       </div>
                       <div>
                         <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.currentSales}</p>
-                        <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(summary.total_tokens)}</p>
+                        <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(summary.total_revenue)}</p>
                       </div>
                       <div>
                         <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.changeRate}</p>
@@ -1485,12 +1804,13 @@ export default function SessionDetailPage() {
                             <h4 className="text-xs font-bold" style={{ color: 'rgb(251,146,60)' }}>
                               {`🟠 ${LABELS.firstTimePayers} (${actions.first_time_payers.length}${LABELS.personSuffix})`}
                             </h4>
-                            {actions.first_time_payers.length > 0 && (
-                              <Link
-                                href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
-                                className="text-[10px] px-3 py-1.5 rounded-lg font-semibold hover:opacity-80 transition-opacity"
+                            {actions.first_time_payers.filter(u => !u.dm_sent).length > 0 && (
+                              <button
+                                onClick={handleThankDm}
+                                disabled={dmSending || !!dmSentCampaign?.startsWith('post_thank_')}
+                                className="text-[10px] px-3 py-1.5 rounded-lg font-semibold hover:opacity-80 transition-opacity disabled:opacity-50"
                                 style={{ background: 'rgba(249,115,22,0.2)', color: 'rgb(251,146,60)' }}
-                              >{`${LABELS.sendTemplate} →`}</Link>
+                              >{dmSending ? '送信中...' : dmSentCampaign?.startsWith('post_thank_') ? '✅ 送信済み' : `${LABELS.sendTemplate}`}</button>
                             )}
                           </div>
                           {actions.first_time_payers.length === 0 ? (
@@ -1498,18 +1818,83 @@ export default function SessionDetailPage() {
                           ) : (
                             <div className="space-y-1.5">
                               {actions.first_time_payers.map(u => (
-                                <div key={u.user_name} className="flex items-center gap-3 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
-                                  <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
-                                  <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
-                                  <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
-                                  {u.dm_sent ? (
-                                    <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: 'rgb(74,222,128)' }}>{`✅${LABELS.dmSentBadge}`}</span>
-                                  ) : (
-                                    <Link
-                                      href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
+                                <div key={u.user_name}>
+                                  <div className="flex items-center gap-3 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                    <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
+                                    <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
+                                    <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
+                                    {u.dm_sent ? (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: 'rgb(74,222,128)' }}>{`✅${LABELS.dmSentBadge}`}</span>
+                                    ) : (
+                                      <>
+                                        <Link
+                                          href={`/casts/${encodeURIComponent(castName)}?tab=dm&target=${encodeURIComponent(u.user_name)}`}
+                                          className="text-[10px] px-1.5 py-0.5 rounded hover:opacity-80 transition-opacity"
+                                          style={{ background: 'rgba(56,189,248,0.15)', color: 'var(--accent-primary)' }}
+                                        >{'💬 DM'}</Link>
+                                        <button
+                                          onClick={async (e) => {
+                                            e.stopPropagation();
+                                            await sb.from('dm_send_log').insert({
+                                              account_id: accountId,
+                                              cast_name: castName,
+                                              user_name: u.user_name,
+                                              message: '手動送信済み',
+                                              status: 'success',
+                                              sent_via: 'manual',
+                                              campaign: `post_thank_${sessionId}`,
+                                            });
+                                            setActions(prev => prev ? {
+                                              ...prev,
+                                              first_time_payers: prev.first_time_payers.map(p =>
+                                                p.user_name === u.user_name ? { ...p, dm_sent: true } : p
+                                              ),
+                                            } : prev);
+                                            setToast('送信済みに更新しました');
+                                          }}
+                                          className="text-[10px] px-1.5 py-0.5 rounded hover:opacity-80 transition-opacity"
+                                          style={{ background: 'rgba(249,115,22,0.15)', color: 'rgb(251,146,60)' }}
+                                        >{'✅ 送信済みにする'}</button>
+                                      </>
+                                    )}
+                                    <button
+                                      onClick={() => loadUserDmHistory(u.user_name)}
                                       className="text-[10px] px-1.5 py-0.5 rounded hover:opacity-80 transition-opacity"
-                                      style={{ background: 'rgba(56,189,248,0.15)', color: 'var(--accent-primary)' }}
-                                    >{`💬 DM`}</Link>
+                                      style={{ background: 'rgba(255,255,255,0.05)', color: 'var(--text-muted)' }}
+                                    >{expandedDmUser === u.user_name ? '▲ 閉じる' : '📋 DM履歴'}</button>
+                                  </div>
+                                  {/* Inline DM History Timeline */}
+                                  {expandedDmUser === u.user_name && (
+                                    <div className="ml-6 mt-1 mb-2 pl-3 border-l-2 space-y-1.5" style={{ borderColor: 'rgba(249,115,22,0.3)' }}>
+                                      {userDmLoading ? (
+                                        <p className="text-[10px] py-1" style={{ color: 'var(--text-muted)' }}>読み込み中...</p>
+                                      ) : userDmHistory.length === 0 ? (
+                                        <p className="text-[10px] py-1" style={{ color: 'var(--text-muted)' }}>DM履歴なし</p>
+                                      ) : (
+                                        <>
+                                          {userDmHistory.map((dm, i) => (
+                                            <div key={i} className="flex items-start gap-2 py-1">
+                                              <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${
+                                                dm.status === 'success' ? 'bg-green-500/15 text-green-400' :
+                                                dm.status === 'error' ? 'bg-red-500/15 text-red-400' :
+                                                'bg-amber-500/15 text-amber-400'
+                                              }`}>{dm.status}</span>
+                                              <p className="text-[10px] flex-1 break-all" style={{ color: 'var(--text-secondary)' }}>
+                                                {(dm.message || '').slice(0, 80)}{(dm.message || '').length > 80 ? '...' : ''}
+                                              </p>
+                                              <span className="text-[10px] flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
+                                                {dm.sent_at ? formatDateCompact(dm.sent_at) : formatDateCompact(dm.queued_at)}
+                                              </span>
+                                            </div>
+                                          ))}
+                                          <Link
+                                            href={`/users/${encodeURIComponent(u.user_name)}`}
+                                            className="text-[10px] hover:underline"
+                                            style={{ color: 'var(--accent-primary)' }}
+                                          >{'もっと見る →'}</Link>
+                                        </>
+                                      )}
+                                    </div>
                                   )}
                                 </div>
                               ))}
@@ -1553,11 +1938,12 @@ export default function SessionDetailPage() {
                               {`🟡 ${LABELS.visitedNoAction} (${actions.visited_no_action.length}${LABELS.personSuffix})`}
                             </h4>
                             {actions.visited_no_action.length > 0 && (
-                              <Link
-                                href={`/casts/${encodeURIComponent(castName)}?tab=dm`}
-                                className="text-[10px] px-3 py-1.5 rounded-lg font-semibold hover:opacity-80 transition-opacity"
+                              <button
+                                onClick={handleFollowDm}
+                                disabled={dmSending || !!dmSentCampaign?.startsWith('post_follow_')}
+                                className="text-[10px] px-3 py-1.5 rounded-lg font-semibold hover:opacity-80 transition-opacity disabled:opacity-50"
                                 style={{ background: 'rgba(234,179,8,0.2)', color: 'rgb(250,204,21)' }}
-                              >{`${LABELS.followDm} →`}</Link>
+                              >{dmSending ? '送信中...' : dmSentCampaign?.startsWith('post_follow_') ? '✅ 送信済み' : `${LABELS.followDm}`}</button>
                             )}
                           </div>
                           {actions.visited_no_action.length === 0 ? (
@@ -1738,23 +2124,19 @@ export default function SessionDetailPage() {
                               e.preventDefault();
                               setIsDragOver(false);
                               const file = e.dataTransfer.files[0];
-                              if (file && /\.(mp4|webm|mkv)$/i.test(file.name) && file.size <= 2 * 1024 * 1024 * 1024) {
+                              if (file && /\.(mp4|webm|mkv|mp3|m4a|wav|ogg)$/i.test(file.name)) {
                                 setSelectedFile(file);
                               } else {
-                                setToast('MP4/WebM/MKV（2GB以下）を選択してください');
+                                setToast('対応形式: mp4, webm, mkv, mp3, m4a, wav');
                               }
                             }}
                             onClick={() => {
                               const input = document.createElement('input');
                               input.type = 'file';
-                              input.accept = '.mp4,.webm,.mkv';
+                              input.accept = '.mp4,.webm,.mkv,.mp3,.m4a,.wav,.ogg';
                               input.onchange = () => {
                                 const file = input.files?.[0];
-                                if (file && file.size <= 2 * 1024 * 1024 * 1024) {
-                                  setSelectedFile(file);
-                                } else if (file) {
-                                  setToast('ファイルサイズは2GB以下にしてください');
-                                }
+                                if (file) setSelectedFile(file);
                               };
                               input.click();
                             }}
@@ -1769,6 +2151,9 @@ export default function SessionDetailPage() {
                                 </p>
                                 <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
                                   {`${(selectedFile.size / (1024 * 1024)).toFixed(1)} MB`}
+                                  {selectedFile.size > 25 * 1024 * 1024 && (
+                                    <span style={{ color: 'var(--accent-pink)' }}>{` — ⚠ 25MB超`}</span>
+                                  )}
                                 </p>
                               </div>
                             ) : (
@@ -1785,17 +2170,73 @@ export default function SessionDetailPage() {
                           </div>
 
                           {selectedFile && (
-                            <button
-                              onClick={() => setToast(LABELS.nextPhase)}
-                              className="mt-3 w-full text-xs px-4 py-2.5 rounded-lg font-bold transition-all hover:brightness-110"
-                              style={{
-                                background: 'linear-gradient(135deg, rgba(168,85,247,0.3), rgba(139,92,246,0.3))',
-                                color: 'rgb(192,132,252)',
-                                border: '1px solid rgba(168,85,247,0.3)',
-                              }}
-                            >
-                              {`🎙 ${LABELS.startTranscription}`}
-                            </button>
+                            <div className="mt-3 space-y-3">
+                              {/* Recording start time (optional) */}
+                              <div>
+                                <label className="text-[10px] font-semibold block mb-1" style={{ color: 'var(--text-muted)' }}>
+                                  {LABELS.recordingStartLabel}
+                                </label>
+                                <input
+                                  type="datetime-local"
+                                  value={recordingStartedAt}
+                                  onChange={e => setRecordingStartedAt(e.target.value)}
+                                  className="input-glass w-full text-xs"
+                                />
+                                <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                  {LABELS.recordingStartHint}
+                                </p>
+                              </div>
+
+                              {/* 25MB warning */}
+                              {selectedFile.size > 25 * 1024 * 1024 && (
+                                <p className="text-[10px] px-3 py-2 rounded-lg" style={{ background: 'rgba(244,63,94,0.1)', color: 'var(--accent-pink)' }}>
+                                  {LABELS.fileTooLarge}
+                                </p>
+                              )}
+
+                              {/* Transcribe button */}
+                              <button
+                                disabled={transcribing || selectedFile.size > 25 * 1024 * 1024}
+                                onClick={async () => {
+                                  setTranscribing(true);
+                                  try {
+                                    const fd = new FormData();
+                                    fd.append('audio', selectedFile);
+                                    fd.append('session_id', sessionId);
+                                    fd.append('cast_name', castName);
+                                    fd.append('account_id', accountId!);
+                                    if (recordingStartedAt) {
+                                      fd.append('recording_started_at', new Date(recordingStartedAt).toISOString());
+                                    }
+                                    const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
+                                    const json = await res.json();
+                                    if (!res.ok) throw new Error(json.error || LABELS.transcribeFailed);
+                                    setToast(`${LABELS.transcribeComplete}（${json.segments}セグメント）`);
+                                    setSelectedFile(null);
+                                    await loadTranscripts();
+                                  } catch (err: unknown) {
+                                    const msg = err instanceof Error ? err.message : LABELS.transcribeFailed;
+                                    setToast(`${LABELS.transcribeFailed}: ${msg}`);
+                                    await loadTranscripts();
+                                  } finally {
+                                    setTranscribing(false);
+                                  }
+                                }}
+                                className="w-full text-xs px-4 py-2.5 rounded-lg font-bold transition-all hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+                                style={{
+                                  background: 'linear-gradient(135deg, rgba(168,85,247,0.3), rgba(139,92,246,0.3))',
+                                  color: 'rgb(192,132,252)',
+                                  border: '1px solid rgba(168,85,247,0.3)',
+                                }}
+                              >
+                                {transcribing ? (
+                                  <span className="flex items-center justify-center gap-2">
+                                    <span className="inline-block w-3.5 h-3.5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgb(192,132,252)', borderTopColor: 'transparent' }} />
+                                    {LABELS.transcribing}
+                                  </span>
+                                ) : `🎙 ${LABELS.startTranscription}`}
+                              </button>
+                            </div>
                           )}
 
                           {!selectedFile && (
