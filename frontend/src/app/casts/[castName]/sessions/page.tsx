@@ -4,25 +4,24 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
-import { formatTokens, tokensToJPY, formatJST } from '@/lib/utils';
+import { formatTokens, tokensToJPY } from '@/lib/utils';
 import Link from 'next/link';
 
 /* ============================================================
-   Types
+   Types — RPC get_session_list の戻り値に一致
+   session データは spy_messages.session_id の GROUP BY で導出
    ============================================================ */
 interface SessionRow {
   session_id: string;
-  title: string;
   cast_name: string;
+  session_title: string | null;
   started_at: string;
-  ended_at: string | null;
+  ended_at: string;
   duration_minutes: number;
-  total_messages: number;
+  msg_count: number;
+  unique_users: number;
   total_tokens: number;
-  peak_viewers: number;
-  unique_chatters: number;
   tip_count: number;
-  coin_revenue: number;
   is_active: boolean;
   total_count: number;
 }
@@ -31,14 +30,15 @@ const COIN_RATE = 7.7;
 const PAGE_SIZE = 20;
 
 /* ============================================================
-   Helper: 配信時間フォーマット
+   Helpers
    ============================================================ */
 function formatDuration(minutes: number): string {
-  if (minutes < 0) return '-';
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
-  if (h === 0) return `${m}分`;
-  return `${h}時間${m > 0 ? `${m}分` : ''}`;
+  if (!minutes || minutes < 0) return '0分';
+  const m = Math.round(minutes);
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  if (h === 0) return `${rem}分`;
+  return `${h}時間${rem > 0 ? `${rem}分` : ''}`;
 }
 
 function formatDateJST(dateStr: string): string {
@@ -77,7 +77,7 @@ export default function SessionListPage() {
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
 
-  // Summary stats
+  // Summary stats (calculated from loaded data)
   const [summaryStats, setSummaryStats] = useState({
     totalSessions: 0,
     totalRevenue: 0,
@@ -94,7 +94,7 @@ export default function SessionListPage() {
     });
   }, [user, sb]);
 
-  // Load sessions via RPC
+  // Load sessions via RPC (spy_messages GROUP BY session_id)
   const loadSessions = useCallback(async (pageNum: number) => {
     if (!accountId) return;
     setLoading(true);
@@ -108,40 +108,8 @@ export default function SessionListPage() {
 
     if (error) {
       console.error('[Sessions] RPC error:', error.message);
-      // Fallback: direct query
-      const since = new Date(Date.now() - 90 * 86400000).toISOString();
-      const { data: fallbackData } = await sb
-        .from('sessions')
-        .select('*')
-        .eq('account_id', accountId)
-        .or(`cast_name.eq.${castName},title.eq.${castName}`)
-        .gte('started_at', since)
-        .order('started_at', { ascending: false })
-        .range(pageNum * PAGE_SIZE, (pageNum + 1) * PAGE_SIZE - 1);
-
-      if (fallbackData) {
-        const rows: SessionRow[] = fallbackData.map((s: Record<string, unknown>) => ({
-          session_id: s.session_id as string,
-          title: (s.title || s.cast_name || castName) as string,
-          cast_name: (s.cast_name || s.title || castName) as string,
-          started_at: s.started_at as string,
-          ended_at: s.ended_at as string | null,
-          duration_minutes: s.ended_at
-            ? Math.round((new Date(s.ended_at as string).getTime() - new Date(s.started_at as string).getTime()) / 60000)
-            : 0,
-          total_messages: (s.total_messages || 0) as number,
-          total_tokens: (s.total_tokens || 0) as number,
-          peak_viewers: (s.peak_viewers || 0) as number,
-          unique_chatters: 0,
-          tip_count: 0,
-          coin_revenue: 0,
-          is_active: s.ended_at === null,
-          total_count: 0,
-        }));
-        setSessions(rows);
-        setTotalCount(rows.length);
-      }
-      setLoading(false);
+      // Fallback: spy_messages を直接 GROUP BY
+      await loadSessionsFallback(pageNum);
       return;
     }
 
@@ -153,24 +121,111 @@ export default function SessionListPage() {
       setTotalCount(0);
     }
 
-    // Calculate summary from first page
-    if (pageNum === 0 && rows.length > 0) {
-      const total = rows[0].total_count;
-      const totalRev = rows.reduce((sum, r) => sum + r.coin_revenue, 0);
-      const avgRev = rows.length > 0 ? Math.round(totalRev / rows.length) : 0;
-      const avgDur = rows.length > 0 ? Math.round(rows.reduce((sum, r) => sum + r.duration_minutes, 0) / rows.length) : 0;
-      const totalMsg = rows.reduce((sum, r) => sum + r.total_messages, 0);
-      setSummaryStats({
-        totalSessions: total,
-        totalRevenue: totalRev,
-        avgRevenue: avgRev,
-        avgDuration: avgDur,
-        totalMessages: totalMsg,
-      });
+    // KPI集計 (表示ページ分)
+    if (pageNum === 0) {
+      computeSummary(rows);
     }
 
     setLoading(false);
   }, [accountId, castName, sb]);
+
+  // Fallback: RPCが無い場合、spy_messagesから直接GROUP BY
+  const loadSessionsFallback = useCallback(async (pageNum: number) => {
+    console.log('[Sessions] Fallback: spy_messages direct query');
+    const { data: rawData } = await sb
+      .from('spy_messages')
+      .select('session_id, cast_name, session_title, message_time, user_name, tokens')
+      .eq('account_id', accountId!)
+      .eq('cast_name', castName)
+      .not('session_id', 'is', null)
+      .order('message_time', { ascending: false })
+      .limit(2000);
+
+    if (!rawData || rawData.length === 0) {
+      setSessions([]);
+      setTotalCount(0);
+      setLoading(false);
+      return;
+    }
+
+    // クライアント側でGROUP BY session_id
+    const sessionMap = new Map<string, {
+      session_id: string; cast_name: string; session_title: string | null;
+      messages: { time: string; user_name: string | null; tokens: number }[];
+    }>();
+
+    for (const r of rawData) {
+      if (!r.session_id) continue;
+      if (!sessionMap.has(r.session_id)) {
+        sessionMap.set(r.session_id, {
+          session_id: r.session_id,
+          cast_name: r.cast_name,
+          session_title: r.session_title,
+          messages: [],
+        });
+      }
+      sessionMap.get(r.session_id)!.messages.push({
+        time: r.message_time,
+        user_name: r.user_name,
+        tokens: r.tokens || 0,
+      });
+    }
+
+    const allRows: SessionRow[] = [];
+    const now = Date.now();
+    for (const entry of Array.from(sessionMap.entries())) {
+      const [sid, sess] = entry;
+      const times = sess.messages.map(m => new Date(m.time).getTime());
+      const minTime = Math.min(...times);
+      const maxTime = Math.max(...times);
+      const users = new Set(sess.messages.filter(m => m.user_name).map(m => m.user_name));
+      const totalTk = sess.messages.reduce((s, m) => s + (m.tokens > 0 ? m.tokens : 0), 0);
+      const tips = sess.messages.filter(m => m.tokens > 0).length;
+
+      allRows.push({
+        session_id: sid,
+        cast_name: sess.cast_name,
+        session_title: sess.session_title,
+        started_at: new Date(minTime).toISOString(),
+        ended_at: new Date(maxTime).toISOString(),
+        duration_minutes: Math.round((maxTime - minTime) / 60000),
+        msg_count: sess.messages.length,
+        unique_users: users.size,
+        total_tokens: totalTk,
+        tip_count: tips,
+        is_active: (now - maxTime) < 10 * 60 * 1000,
+        total_count: 0,
+      });
+    }
+
+    allRows.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+    const total = allRows.length;
+    const sliced = allRows.slice(pageNum * PAGE_SIZE, (pageNum + 1) * PAGE_SIZE);
+    sliced.forEach(r => r.total_count = total);
+
+    setSessions(sliced);
+    setTotalCount(total);
+
+    if (pageNum === 0) {
+      computeSummary(sliced);
+    }
+
+    setLoading(false);
+  }, [accountId, castName, sb]);
+
+  // KPI集計
+  const computeSummary = (rows: SessionRow[]) => {
+    if (rows.length === 0) {
+      setSummaryStats({ totalSessions: 0, totalRevenue: 0, avgRevenue: 0, avgDuration: 0, totalMessages: 0 });
+      return;
+    }
+    const total = rows[0].total_count || rows.length;
+    const totalRev = rows.reduce((s, r) => s + r.total_tokens, 0);
+    const avgRev = rows.length > 0 ? Math.round(totalRev / rows.length) : 0;
+    const avgDur = rows.length > 0 ? Math.round(rows.reduce((s, r) => s + r.duration_minutes, 0) / rows.length) : 0;
+    const totalMsg = rows.reduce((s, r) => s + r.msg_count, 0);
+    setSummaryStats({ totalSessions: total, totalRevenue: totalRev, avgRevenue: avgRev, avgDuration: avgDur, totalMessages: totalMsg });
+  };
 
   useEffect(() => {
     loadSessions(page);
@@ -252,28 +307,26 @@ export default function SessionListPage() {
                         {formatDateJST(s.started_at)}
                       </p>
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        {formatTimeJST(s.started_at)}
-                        {s.ended_at ? `〜${formatTimeJST(s.ended_at)}` : '〜配信中'}
+                        {formatTimeJST(s.started_at)}〜{formatTimeJST(s.ended_at)}
                       </p>
                     </div>
 
-                    {/* Status badge */}
+                    {/* LIVE badge */}
                     {s.is_active && (
                       <span className="badge-live text-[10px] px-2 py-0.5">LIVE</span>
                     )}
 
                     {/* Title + metadata */}
                     <div>
-                      {s.title && s.title !== s.cast_name && (
+                      {s.session_title && (
                         <p className="text-xs font-semibold" style={{ color: 'var(--accent-purple)' }}>
-                          {s.title}
+                          {s.session_title}
                         </p>
                       )}
                       <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
                         <span>⏱ {formatDuration(s.duration_minutes)}</span>
-                        <span>💬 {s.total_messages} msg</span>
-                        <span>👤 {s.unique_chatters} users</span>
-                        {s.peak_viewers > 0 && <span>👁 max {s.peak_viewers}</span>}
+                        <span>💬 {s.msg_count} msg</span>
+                        <span>👤 {s.unique_users} users</span>
                         {s.tip_count > 0 && <span>🎁 {s.tip_count} tips</span>}
                       </div>
                     </div>
@@ -281,26 +334,13 @@ export default function SessionListPage() {
 
                   {/* Right: revenue */}
                   <div className="text-right min-w-[120px]">
-                    {s.coin_revenue > 0 ? (
-                      <>
-                        <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>
-                          {formatTokens(s.coin_revenue)}
-                        </p>
-                        <p className="text-[10px]" style={{ color: 'var(--accent-green)' }}>
-                          {tokensToJPY(s.coin_revenue, COIN_RATE)}
-                        </p>
-                      </>
-                    ) : s.total_tokens > 0 ? (
-                      <>
-                        <p className="text-xs font-bold" style={{ color: 'var(--text-secondary)' }}>
-                          {formatTokens(s.total_tokens)}
-                        </p>
-                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                          SPYベース
-                        </p>
-                      </>
-                    ) : (
-                      <p className="text-xs" style={{ color: 'var(--text-muted)' }}>-</p>
+                    <p className="text-sm font-bold" style={{ color: s.total_tokens > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>
+                      {formatTokens(s.total_tokens)}
+                    </p>
+                    {s.total_tokens > 0 && (
+                      <p className="text-[10px]" style={{ color: 'var(--accent-green)' }}>
+                        {tokensToJPY(s.total_tokens, COIN_RATE)}
+                      </p>
                     )}
                   </div>
                 </div>
