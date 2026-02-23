@@ -7,15 +7,17 @@ import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, timeAgo } from '@/lib/utils';
 import type { Account, RegisteredCast } from '@/types';
 
-/** 今週の月曜00:00（JST）をUTCで返す。offset=1で前週月曜。 */
+/** 週境界: 月曜03:00 JST（送金サイクル区切り）をUTCで返す。月曜0-2時台は前週扱い。 */
 function getWeekStartJST(offset = 0): Date {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   const day = jst.getUTCDay();
-  const diff = day === 0 ? 6 : day - 1;
+  const hour = jst.getUTCHours();
+  let diff = day === 0 ? 6 : day - 1;
+  if (day === 1 && hour < 3) diff = 7;
   const monday = new Date(jst);
   monday.setUTCDate(jst.getUTCDate() - diff - offset * 7);
-  monday.setUTCHours(0, 0, 0, 0);
+  monday.setUTCHours(3, 0, 0, 0);
   return new Date(monday.getTime() - 9 * 60 * 60 * 1000);
 }
 

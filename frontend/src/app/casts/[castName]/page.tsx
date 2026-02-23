@@ -176,17 +176,20 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
 ];
 
 /* ============================================================
-   Helper: 今週の月曜（JST）
+   Helper: 週境界（月曜 03:00 JST = 送金サイクル区切り）
+   月曜 0:00〜2:59 JST の売上は前週に計上される
    ============================================================ */
 function getWeekStart(offset = 0): Date {
   const now = new Date();
   const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
   const day = jst.getUTCDay();
-  const diff = day === 0 ? 6 : day - 1;
+  const hour = jst.getUTCHours();
+  let diff = day === 0 ? 6 : day - 1;
+  // 月曜3時未満は前週扱い
+  if (day === 1 && hour < 3) diff = 7;
   const monday = new Date(jst);
   monday.setUTCDate(jst.getUTCDate() - diff - offset * 7);
-  monday.setUTCHours(0, 0, 0, 0);
-  // JSTからUTCに戻す
+  monday.setUTCHours(3, 0, 0, 0);
   return new Date(monday.getTime() - 9 * 60 * 60 * 1000);
 }
 

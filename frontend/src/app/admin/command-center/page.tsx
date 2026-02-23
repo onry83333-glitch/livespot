@@ -206,14 +206,18 @@ export default function CommandCenterPage() {
   useEffect(() => {
     const fetchRevenue = async () => {
       try {
+        // 週境界: 月曜03:00 JST（送金サイクル区切り）
         const now = new Date();
-        const dayOfWeek = now.getDay();
-        const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
-        const weekStart = new Date(now);
-        weekStart.setDate(now.getDate() - diffToMonday);
-        weekStart.setHours(0, 0, 0, 0);
-        const lastWeekStart = new Date(weekStart);
-        lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+        const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+        const day = jst.getUTCDay();
+        const hour = jst.getUTCHours();
+        let diff = day === 0 ? 6 : day - 1;
+        if (day === 1 && hour < 3) diff = 7;
+        const monday = new Date(jst);
+        monday.setUTCDate(jst.getUTCDate() - diff);
+        monday.setUTCHours(3, 0, 0, 0);
+        const weekStart = new Date(monday.getTime() - 9 * 60 * 60 * 1000);
+        const lastWeekStart = new Date(weekStart.getTime() - 7 * 24 * 60 * 60 * 1000);
 
         const { data: thisWeekData } = await supabase
           .from('coin_transactions')
