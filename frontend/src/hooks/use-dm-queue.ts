@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import type { DMLog } from '@/types';
 
 export function useDMQueue(accountId: string) {
@@ -59,11 +60,7 @@ export function useDMQueue(accountId: string) {
         },
         () => { loadQueue(); }
       )
-      .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[Realtime] dm-queue error:', status, err);
-        }
-      });
+    subscribeWithRetry(channel);
 
     channelRef.current = channel;
 

@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 
 import { createClient } from '@/lib/supabase/client';
+import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { tokensToJPY } from '@/lib/utils';
 import type { DMFunnel } from '@/types';
 
@@ -465,11 +466,7 @@ export default function DmPage() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: `account_id=eq.${selectedAccount}` }, () => {
         if (batchIdRef.current) pollStatusRef.current(batchIdRef.current);
       })
-      .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[Realtime] dm-status error:', status, err);
-        }
-      });
+    subscribeWithRetry(channel);
 
     dmChannelRef.current = channel;
 
@@ -482,6 +479,7 @@ export default function DmPage() {
   }, [user, selectedAccount]); // batchId/pollStatusはRefで参照、depsから除外
 
   const handleSend = async () => {
+    console.log('[DM] handleSend called, targets:', targets.length, 'account:', selectedAccount);
     if (targets.length === 0) { setError('ターゲットを1件以上入力してください'); return; }
     if (!message.trim()) { setError('メッセージを入力してください'); return; }
     if (!selectedAccount) { setError('アカウントを選択してください'); return; }
@@ -489,33 +487,73 @@ export default function DmPage() {
     try {
       // ターゲットからユーザー名を抽出
       const usernames = targets.map(t => t.replace(/.*\/user\//, '').trim());
+      const modePrefix = sendMode === 'pipeline' ? `pipe${tabs}` : 'seq';
+      const now = new Date();
+      const timestamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
 
-      const { data, error: rpcErr } = await sb.rpc('create_dm_batch', {
-        p_account_id: selectedAccount,
-        p_targets: usernames,
-        p_message: message,
-        p_template_name: null,
-      });
+      let originalBid: string | null = null;
+      let count = usernames.length;
+      let usedRpc = false;
 
-      console.log('[DM] RPC result:', JSON.stringify({ data, error: rpcErr }));
+      // Step 1: RPCでバッチ作成を試行
+      console.log('[DM] Step1: calling create_dm_batch RPC...');
+      try {
+        const { data, error: rpcErr } = await sb.rpc('create_dm_batch', {
+          p_account_id: selectedAccount,
+          p_targets: usernames,
+          p_message: message,
+          p_template_name: null,
+        });
+        console.log('[DM] Step1 RPC result:', JSON.stringify({ data, error: rpcErr }));
 
-      if (rpcErr) throw rpcErr;
-
-      // RPC関数がエラーを返した場合（上限超え等）
-      if (data?.error) {
-        console.log('[DM] RPC data.error early return:', data.error);
-        setError(`${data.error} (使用済み: ${data.used}/${data.limit})`);
-        return;
+        if (!rpcErr && data && !data.error) {
+          originalBid = data.batch_id;
+          count = data.count || usernames.length;
+          usedRpc = true;
+          console.log('[DM] Step1 RPC success: batch_id=', originalBid, 'count=', count);
+        } else if (data?.error) {
+          // プラン上限超え等のビジネスエラー
+          console.warn('[DM] Step1 RPC business error:', data.error);
+          setError(`${data.error} (使用済み: ${data.used}/${data.limit})`);
+          return;
+        } else {
+          console.warn('[DM] Step1 RPC failed, will use direct INSERT:', rpcErr?.message);
+        }
+      } catch (rpcException) {
+        console.warn('[DM] Step1 RPC exception (function may not exist), will use direct INSERT:', rpcException);
       }
 
-      const originalBid = data?.batch_id;
-      const count = data?.count || usernames.length;
+      // Step 2: RPCが失敗した場合、直接INSERTでフォールバック
+      if (!usedRpc) {
+        console.log('[DM] Step2: direct INSERT fallback for', usernames.length, 'users');
+        originalBid = `bulk_${timestamp}`;
+        const rows = usernames.map(un => ({
+          account_id: selectedAccount,
+          user_name: un,
+          message: message,
+          status: 'queued',
+          campaign: originalBid,
+          queued_at: now.toISOString(),
+        }));
 
-      // 送信モード設定をキャンペーンに埋め込み（background.jsが解析）
-      const modePrefix = sendMode === 'pipeline' ? `pipe${tabs}` : 'seq';
+        const { data: insertData, error: insertErr } = await sb
+          .from('dm_send_log')
+          .insert(rows)
+          .select('id');
+
+        if (insertErr) {
+          console.error('[DM] Step2 INSERT failed:', insertErr.message);
+          setError(`キュー登録失敗: ${insertErr.message}`);
+          return;
+        }
+        count = insertData?.length || usernames.length;
+        console.log('[DM] Step2 INSERT success:', count, 'rows');
+      }
+
+      // Step 3: キャンペーン名にモードプレフィックスを埋め込み
       const bid = `${modePrefix}_${originalBid}`;
+      console.log('[DM] Step3: campaign update to', bid);
 
-      // dm_send_logのcampaignフィールドを更新
       await sb.from('dm_send_log')
         .update({ campaign: bid })
         .eq('campaign', originalBid);
@@ -525,9 +563,8 @@ export default function DmPage() {
       setStatusCounts({ total: count, queued: count, sending: 0, success: 0, error: 0 });
       if (bid) pollStatus(bid);
 
-      // API送信モード: サーバーサイドでバッチ処理を試行
-      // 失敗時はChrome拡張がポーリングでフォールバック送信する
-      console.log('[DM] About to call /api/dm/batch');
+      // Step 4: API送信を試行（失敗してもChrome拡張がフォールバック送信する）
+      console.log('[DM] Step4: calling /api/dm/batch');
       try {
         const batchRes = await fetch('/api/dm/batch', {
           method: 'POST',
@@ -539,12 +576,16 @@ export default function DmPage() {
           }),
         });
         const batchData = await batchRes.json();
-        console.log('[DM] API batch response:', batchRes.status, batchData);
+        console.log('[DM] Step4 API response:', batchRes.status, JSON.stringify(batchData));
       } catch (batchErr) {
-        console.warn('[DM] API batch failed, extension will pick up:', batchErr);
+        console.warn('[DM] Step4 API failed (extension will pick up):', batchErr);
       }
+
+      console.log('[DM] handleSend complete: bid=', bid, 'count=', count, 'rpc=', usedRpc);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      const errMsg = e instanceof Error ? e.message : String(e);
+      console.error('[DM] handleSend unexpected error:', errMsg, e);
+      setError(errMsg);
     }
     setSending(false);
   };

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
+import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { timeAgo } from '@/lib/utils';
 
 // ---------- 型定義 ----------
@@ -171,11 +172,7 @@ export default function AlertsPage() {
           setAlerts(prev => [alert, ...prev].slice(0, 100));
         }
       )
-      .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[Realtime] alerts-enter error:', status, err);
-        }
-      });
+    subscribeWithRetry(channel);
 
     alertChannelRef.current = channel;
 

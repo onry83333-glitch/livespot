@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import type { SpyMessage } from '@/types';
 
 interface UseRealtimeSpyOptions {
@@ -139,12 +140,10 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
           );
         }
       )
-      .subscribe((status, err) => {
-        console.log('[Realtime] spy-realtime status:', status, err?.message || '');
+    subscribeWithRetry(channel, (status) => {
         if (status === 'SUBSCRIBED') {
           setIsConnected(true);
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[Realtime] spy-realtime error:', status, err);
           setIsConnected(false);
         } else if (status === 'CLOSED') {
           setIsConnected(false);

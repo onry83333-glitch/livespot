@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'rea
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
+import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
 import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST } from '@/lib/utils';
@@ -664,11 +665,7 @@ function CastDetailInner() {
         logs.forEach((l: { status: string }) => { if (l.status in counts) (counts as Record<string, number>)[l.status]++; });
         setDmStatusCounts(counts);
       })
-      .subscribe((status, err) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[Realtime] dm-cast-status error:', status, err);
-        }
-      });
+    subscribeWithRetry(channel);
 
     dmCastChannelRef.current = channel;
 
@@ -682,28 +679,74 @@ function CastDetailInner() {
 
   // DM send
   const handleDmSend = useCallback(async () => {
+    console.log('[DM-Cast] handleDmSend called, targets:', dmTargets.size, 'cast:', castName);
     if (dmTargets.size === 0 || !dmMessage.trim() || !accountId) return;
     setDmSending(true); setDmError(null); setDmResult(null);
     try {
       const usernames = Array.from(dmTargets);
-      const { data, error: rpcErr } = await sb.rpc('create_dm_batch', {
-        p_account_id: accountId,
-        p_targets: usernames,
-        p_message: dmMessage,
-        p_template_name: null,
-      });
-      if (rpcErr) throw rpcErr;
-      // プラン上限チェック — 警告表示のみ（送信は継続）
-      if (data?.error && !data?.batch_id) { setDmError(`⚠ ${data.error} (使用済み: ${data.used}/${data.limit})`); }
-      if (!data?.batch_id) { setDmSending(false); return; }
-
-      const originalBid = data?.batch_id;
-      const count = data?.count || usernames.length;
       const modePrefix = dmSendMode === 'pipeline' ? `pipe${dmTabs}` : 'seq';
       const tag = dmCampaign.trim() ? `${dmCampaign.trim()}_` : '';
-      const bid = `${modePrefix}_${tag}${originalBid}`;
+      const now = new Date();
+      const timestamp = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
 
+      let originalBid: string | null = null;
+      let count = usernames.length;
+      let usedRpc = false;
+
+      // Step 1: RPC試行
+      console.log('[DM-Cast] Step1: calling create_dm_batch RPC...');
+      try {
+        const { data, error: rpcErr } = await sb.rpc('create_dm_batch', {
+          p_account_id: accountId,
+          p_targets: usernames,
+          p_message: dmMessage,
+          p_template_name: null,
+        });
+        console.log('[DM-Cast] Step1 RPC result:', JSON.stringify({ data, error: rpcErr }));
+
+        if (!rpcErr && data && !data.error) {
+          originalBid = data.batch_id;
+          count = data.count || usernames.length;
+          usedRpc = true;
+        } else if (data?.error && !data?.batch_id) {
+          setDmError(`⚠ ${data.error} (使用済み: ${data.used}/${data.limit})`);
+          setDmSending(false);
+          return;
+        } else {
+          console.warn('[DM-Cast] Step1 RPC failed, fallback to INSERT:', rpcErr?.message);
+        }
+      } catch (rpcException) {
+        console.warn('[DM-Cast] Step1 RPC exception, fallback to INSERT:', rpcException);
+      }
+
+      // Step 2: RPC失敗時のフォールバック — 直接INSERT
+      if (!usedRpc) {
+        console.log('[DM-Cast] Step2: direct INSERT for', usernames.length, 'users');
+        originalBid = `bulk_${timestamp}`;
+        const rows = usernames.map(un => ({
+          account_id: accountId,
+          user_name: un,
+          message: dmMessage,
+          status: 'queued',
+          campaign: originalBid,
+          cast_name: castName,
+          queued_at: now.toISOString(),
+        }));
+        const { error: insertErr } = await sb.from('dm_send_log').insert(rows);
+        if (insertErr) {
+          console.error('[DM-Cast] Step2 INSERT failed:', insertErr.message);
+          setDmError(`キュー登録失敗: ${insertErr.message}`);
+          setDmSending(false);
+          return;
+        }
+        console.log('[DM-Cast] Step2 INSERT success:', rows.length, 'rows');
+      }
+
+      // Step 3: キャンペーン名更新
+      const bid = `${modePrefix}_${tag}${originalBid}`;
+      console.log('[DM-Cast] Step3: campaign=', bid);
       await sb.from('dm_send_log').update({ campaign: bid, cast_name: castName }).eq('campaign', originalBid);
+
       setDmBatchId(bid);
       setDmResult({ count, batch_id: bid });
       setDmStatusCounts({ total: count, queued: count, sending: 0, success: 0, error: 0 });
@@ -716,7 +759,13 @@ function CastDetailInner() {
         .select('id, user_name, message, status, error, campaign, queued_at, sent_at')
         .eq('account_id', accountId).eq('cast_name', castName).order('created_at', { ascending: false }).limit(200);
       setDmLogs((logs || []) as DMLogItem[]);
-    } catch (e: unknown) { setDmError(e instanceof Error ? e.message : String(e)); }
+
+      console.log('[DM-Cast] handleDmSend complete: bid=', bid, 'count=', count, 'rpc=', usedRpc);
+    } catch (e: unknown) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      console.error('[DM-Cast] handleDmSend error:', errMsg, e);
+      setDmError(errMsg);
+    }
     setDmSending(false);
   }, [dmTargets, dmMessage, dmCampaign, dmSendMode, dmTabs, accountId, castName, sb]);
 
