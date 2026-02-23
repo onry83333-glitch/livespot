@@ -394,6 +394,8 @@ export default function SessionDetailPage() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [recordingStartedAt, setRecordingStartedAt] = useState('');
   const [transcribing, setTranscribing] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Screenshot state
   const [screenshotting, setScreenshotting] = useState(false);
@@ -2608,6 +2610,9 @@ export default function SessionDetailPage() {
                                 <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
                                   {LABELS.uploadHint}
                                 </p>
+                                <p className="text-[9px] mt-2" style={{ color: 'var(--text-muted)', opacity: 0.7 }}>
+                                  対応形式: mp3, m4a, wav, webm, mp4（25MBまで）
+                                </p>
                               </div>
                             )}
                           </div>
@@ -2637,48 +2642,95 @@ export default function SessionDetailPage() {
                                 </p>
                               )}
 
-                              {/* Transcribe button */}
-                              <button
-                                disabled={transcribing || selectedFile.size > 25 * 1024 * 1024}
-                                onClick={async () => {
-                                  setTranscribing(true);
-                                  try {
-                                    const fd = new FormData();
-                                    fd.append('audio', selectedFile);
-                                    fd.append('session_id', sessionId);
-                                    fd.append('cast_name', castName);
-                                    fd.append('account_id', accountId!);
-                                    if (recordingStartedAt) {
-                                      fd.append('recording_started_at', new Date(recordingStartedAt).toISOString());
+                              {/* Progress bar */}
+                              {transcribing && (
+                                <div className="space-y-1">
+                                  <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(168,85,247,0.1)' }}>
+                                    <div
+                                      className="h-full rounded-full transition-all duration-500"
+                                      style={{
+                                        width: `${uploadProgress}%`,
+                                        background: 'linear-gradient(90deg, rgb(168,85,247), rgb(139,92,246))',
+                                      }}
+                                    />
+                                  </div>
+                                  <p className="text-[9px] text-right" style={{ color: 'var(--text-muted)' }}>
+                                    {uploadProgress < 30 ? 'アップロード中...' : uploadProgress < 90 ? 'Whisper API処理中...' : '保存中...'}
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* Transcribe / Cancel buttons */}
+                              <div className="flex gap-2">
+                                <button
+                                  disabled={transcribing || selectedFile.size > 25 * 1024 * 1024}
+                                  onClick={async () => {
+                                    setTranscribing(true);
+                                    setUploadProgress(10);
+                                    const controller = new AbortController();
+                                    abortControllerRef.current = controller;
+                                    try {
+                                      const fd = new FormData();
+                                      fd.append('audio', selectedFile);
+                                      fd.append('session_id', sessionId);
+                                      fd.append('cast_name', castName);
+                                      fd.append('account_id', accountId!);
+                                      if (recordingStartedAt) {
+                                        fd.append('recording_started_at', new Date(recordingStartedAt).toISOString());
+                                      }
+                                      setUploadProgress(30);
+                                      const res = await fetch('/api/transcribe', {
+                                        method: 'POST',
+                                        body: fd,
+                                        signal: controller.signal,
+                                      });
+                                      setUploadProgress(90);
+                                      const json = await res.json();
+                                      if (!res.ok) throw new Error(json.error || LABELS.transcribeFailed);
+                                      setUploadProgress(100);
+                                      setToast(`${LABELS.transcribeComplete}（${json.segments}セグメント）`);
+                                      setSelectedFile(null);
+                                      await loadTranscripts();
+                                    } catch (err: unknown) {
+                                      if (err instanceof DOMException && err.name === 'AbortError') {
+                                        setToast('文字起こしをキャンセルしました');
+                                      } else {
+                                        const msg = err instanceof Error ? err.message : LABELS.transcribeFailed;
+                                        setToast(`${LABELS.transcribeFailed}: ${msg}`);
+                                      }
+                                      await loadTranscripts();
+                                    } finally {
+                                      setTranscribing(false);
+                                      setUploadProgress(0);
+                                      abortControllerRef.current = null;
                                     }
-                                    const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
-                                    const json = await res.json();
-                                    if (!res.ok) throw new Error(json.error || LABELS.transcribeFailed);
-                                    setToast(`${LABELS.transcribeComplete}（${json.segments}セグメント）`);
-                                    setSelectedFile(null);
-                                    await loadTranscripts();
-                                  } catch (err: unknown) {
-                                    const msg = err instanceof Error ? err.message : LABELS.transcribeFailed;
-                                    setToast(`${LABELS.transcribeFailed}: ${msg}`);
-                                    await loadTranscripts();
-                                  } finally {
-                                    setTranscribing(false);
-                                  }
-                                }}
-                                className="w-full text-xs px-4 py-2.5 rounded-lg font-bold transition-all hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
-                                style={{
-                                  background: 'linear-gradient(135deg, rgba(168,85,247,0.3), rgba(139,92,246,0.3))',
-                                  color: 'rgb(192,132,252)',
-                                  border: '1px solid rgba(168,85,247,0.3)',
-                                }}
-                              >
-                                {transcribing ? (
-                                  <span className="flex items-center justify-center gap-2">
-                                    <span className="inline-block w-3.5 h-3.5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgb(192,132,252)', borderTopColor: 'transparent' }} />
-                                    {LABELS.transcribing}
-                                  </span>
-                                ) : `🎙 ${LABELS.startTranscription}`}
-                              </button>
+                                  }}
+                                  className="flex-1 text-xs px-4 py-2.5 rounded-lg font-bold transition-all hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed"
+                                  style={{
+                                    background: 'linear-gradient(135deg, rgba(168,85,247,0.3), rgba(139,92,246,0.3))',
+                                    color: 'rgb(192,132,252)',
+                                    border: '1px solid rgba(168,85,247,0.3)',
+                                  }}
+                                >
+                                  {transcribing ? (
+                                    <span className="flex items-center justify-center gap-2">
+                                      <span className="inline-block w-3.5 h-3.5 border-2 rounded-full animate-spin" style={{ borderColor: 'rgb(192,132,252)', borderTopColor: 'transparent' }} />
+                                      {LABELS.transcribing}
+                                    </span>
+                                  ) : `🎙 ${LABELS.startTranscription}`}
+                                </button>
+                                {transcribing && (
+                                  <button
+                                    onClick={() => abortControllerRef.current?.abort()}
+                                    className="text-xs px-3 py-2.5 rounded-lg font-bold transition-all hover:brightness-110"
+                                    style={{
+                                      background: 'rgba(244,63,94,0.15)',
+                                      color: 'var(--accent-pink)',
+                                      border: '1px solid rgba(244,63,94,0.3)',
+                                    }}
+                                  >キャンセル</button>
+                                )}
+                              </div>
                             </div>
                           )}
 

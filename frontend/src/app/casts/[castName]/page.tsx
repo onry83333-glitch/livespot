@@ -752,6 +752,32 @@ function CastDetailInner() {
       .order('scheduled_at', { ascending: false })
       .limit(20)
       .then(({ data }) => setDmSchedules((data || []) as DmScheduleItem[]));
+
+    // シナリオ一覧取得
+    setScenariosLoading(true);
+    sb.from('dm_scenarios')
+      .select('*')
+      .eq('account_id', accountId)
+      .order('created_at', { ascending: false })
+      .then(async ({ data: scData }) => {
+        const items = (scData || []) as ScenarioItem[];
+        setScenarios(items);
+        // エンロール数を取得
+        if (items.length > 0) {
+          const { data: enrollData } = await sb
+            .from('dm_scenario_enrollments')
+            .select('scenario_id, status')
+            .eq('account_id', accountId)
+            .eq('cast_name', castName)
+            .eq('status', 'active');
+          const countMap = new Map<string, number>();
+          for (const e of enrollData || []) {
+            countMap.set(e.scenario_id, (countMap.get(e.scenario_id) || 0) + 1);
+          }
+          setScenarioEnrollCounts(countMap);
+        }
+        setScenariosLoading(false);
+      });
   }, [accountId, castName, activeTab, sb]);
 
   // DM Realtime status polling
@@ -2268,6 +2294,7 @@ function CastDetailInner() {
                   { key: 'users' as const, icon: '👥', label: 'ユーザー別' },
                   { key: 'send' as const, icon: '✉️', label: 'DM送信' },
                   { key: 'campaigns' as const, icon: '📊', label: 'キャンペーン' },
+                  { key: 'scenarios' as const, icon: '📋', label: 'シナリオ' },
                 ] as const).map(t => (
                   <button key={t.key} onClick={() => setDmSection(t.key)}
                     className={`text-[11px] px-4 py-2 rounded-lg font-medium transition-all ${
@@ -2731,6 +2758,217 @@ function CastDetailInner() {
                             </div>
                           ));
                       })()}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Section D: シナリオ */}
+              {dmSection === 'scenarios' && (
+                <div className="glass-card p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-bold">📋 DMシナリオ</h3>
+                    <button
+                      onClick={() => setScenarioCreating(!scenarioCreating)}
+                      className="text-[10px] px-2 py-1 rounded-lg"
+                      style={{
+                        background: 'rgba(56,189,248,0.12)',
+                        border: '1px solid rgba(56,189,248,0.3)',
+                        color: 'var(--accent-primary)',
+                      }}
+                    >
+                      {scenarioCreating ? '✕ 閉じる' : '＋ 新規作成'}
+                    </button>
+                  </div>
+
+                  {/* 新規作成フォーム */}
+                  {scenarioCreating && (
+                    <div className="glass-panel rounded-lg p-3 mb-3 space-y-2">
+                      <input
+                        className="input-glass text-xs w-full"
+                        placeholder="シナリオ名（例: 初課金お礼）"
+                        value={newScenario.name}
+                        onChange={e => setNewScenario(prev => ({ ...prev, name: e.target.value }))}
+                      />
+                      <select
+                        className="input-glass text-xs w-full"
+                        value={newScenario.triggerType}
+                        onChange={e => setNewScenario(prev => ({ ...prev, triggerType: e.target.value }))}
+                      >
+                        <option value="first_payment">初課金</option>
+                        <option value="high_payment">高額課金</option>
+                        <option value="visit_no_action">来訪（課金なし）</option>
+                        <option value="dormant">離脱（N日不在）</option>
+                        <option value="segment_change">セグメント変化</option>
+                        <option value="manual">手動エンロール</option>
+                        <option value="thankyou_vip">VIPお礼</option>
+                        <option value="thankyou_regular">常連お礼</option>
+                        <option value="thankyou_first">初回お礼</option>
+                        <option value="churn_recovery">離脱防止</option>
+                      </select>
+                      {newScenario.triggerType === 'dormant' && (
+                        <input
+                          className="input-glass text-xs w-full"
+                          placeholder='設定JSON（例: {"days": 7}）'
+                          value={newScenario.config}
+                          onChange={e => setNewScenario(prev => ({ ...prev, config: e.target.value }))}
+                        />
+                      )}
+                      <button
+                        className="btn-primary text-xs px-3 py-1.5 w-full"
+                        disabled={!newScenario.name.trim()}
+                        onClick={async () => {
+                          if (!accountId || !newScenario.name.trim()) return;
+                          let config = {};
+                          try { config = JSON.parse(newScenario.config); } catch { /* ignore */ }
+                          const { error } = await sb.from('dm_scenarios').insert({
+                            account_id: accountId,
+                            scenario_name: newScenario.name.trim(),
+                            trigger_type: newScenario.triggerType,
+                            trigger_config: config,
+                            segment_targets: [],
+                            steps: [],
+                            is_active: true,
+                            auto_approve_step0: true,
+                            daily_send_limit: 50,
+                            min_interval_hours: 24,
+                          });
+                          if (error) { alert('作成失敗: ' + error.message); return; }
+                          setScenarioCreating(false);
+                          setNewScenario({ name: '', triggerType: 'first_payment', config: '{}' });
+                          // リロード
+                          const { data: fresh } = await sb.from('dm_scenarios')
+                            .select('*').eq('account_id', accountId).order('created_at', { ascending: false });
+                          setScenarios((fresh || []) as ScenarioItem[]);
+                        }}
+                      >
+                        作成
+                      </button>
+                    </div>
+                  )}
+
+                  {/* シナリオ一覧 */}
+                  {scenariosLoading ? (
+                    <div className="space-y-2">
+                      {[...Array(3)].map((_, i) => (
+                        <div key={i} className="h-16 rounded-lg animate-pulse" style={{ background: 'rgba(255,255,255,0.03)' }} />
+                      ))}
+                    </div>
+                  ) : scenarios.length === 0 ? (
+                    <p className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>
+                      シナリオが登録されていません
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {scenarios.map(sc => {
+                        const triggerLabels: Record<string, string> = {
+                          first_payment: '初課金', high_payment: '高額課金',
+                          visit_no_action: '来訪（課金なし）', dormant: '離脱',
+                          segment_change: 'セグメント変化', manual: '手動',
+                          thankyou_vip: 'VIPお礼', thankyou_regular: '常連お礼',
+                          thankyou_first: '初回お礼', churn_recovery: '離脱防止',
+                        };
+                        const enrollCount = scenarioEnrollCounts.get(sc.id) || 0;
+                        const isExpanded = scenarioExpanded === sc.id;
+                        return (
+                          <div key={sc.id} className="glass-panel rounded-lg overflow-hidden">
+                            <div
+                              className="px-3 py-2.5 flex items-center justify-between cursor-pointer hover:bg-white/[0.02]"
+                              onClick={() => setScenarioExpanded(isExpanded ? null : sc.id)}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full ${sc.is_active ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+                                <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>
+                                  {sc.scenario_name}
+                                </span>
+                                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{
+                                  background: 'rgba(167,139,250,0.12)',
+                                  color: 'var(--accent-purple)',
+                                }}>
+                                  {triggerLabels[sc.trigger_type] || sc.trigger_type}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                <span>{(sc.steps || []).length}ステップ</span>
+                                {enrollCount > 0 && (
+                                  <span style={{ color: 'var(--accent-primary)' }}>{enrollCount}名進行中</span>
+                                )}
+                                <span>{isExpanded ? '▲' : '▼'}</span>
+                              </div>
+                            </div>
+
+                            {isExpanded && (
+                              <div className="px-3 pb-3 space-y-2">
+                                {/* Toggle active */}
+                                <div className="flex items-center justify-between">
+                                  <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                    {sc.is_active ? '有効' : '無効'}
+                                  </span>
+                                  <button
+                                    className="text-[10px] px-2 py-0.5 rounded"
+                                    style={{
+                                      background: sc.is_active ? 'rgba(244,63,94,0.12)' : 'rgba(34,197,94,0.12)',
+                                      color: sc.is_active ? 'var(--accent-pink)' : 'var(--accent-green)',
+                                    }}
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      await sb.from('dm_scenarios').update({ is_active: !sc.is_active }).eq('id', sc.id);
+                                      setScenarios(prev => prev.map(s => s.id === sc.id ? { ...s, is_active: !s.is_active } : s));
+                                    }}
+                                  >
+                                    {sc.is_active ? '無効にする' : '有効にする'}
+                                  </button>
+                                </div>
+
+                                {/* Config info */}
+                                {sc.trigger_config && Object.keys(sc.trigger_config).length > 0 && (
+                                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                    設定: {JSON.stringify(sc.trigger_config)}
+                                  </p>
+                                )}
+                                {sc.segment_targets && sc.segment_targets.length > 0 && (
+                                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                    対象セグメント: {sc.segment_targets.join(', ')}
+                                  </p>
+                                )}
+
+                                {/* Steps */}
+                                <div className="space-y-1.5">
+                                  <p className="text-[10px] font-bold" style={{ color: 'var(--text-secondary)' }}>ステップ一覧:</p>
+                                  {(sc.steps || []).length === 0 ? (
+                                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>ステップ未設定</p>
+                                  ) : (
+                                    (sc.steps || []).map((step, i) => (
+                                      <div key={i} className="flex items-start gap-2 text-[10px] rounded px-2 py-1.5"
+                                        style={{ background: 'rgba(0,0,0,0.15)' }}>
+                                        <span className="font-bold shrink-0" style={{ color: 'var(--accent-primary)' }}>
+                                          Step {i}
+                                        </span>
+                                        <div className="flex-1 min-w-0">
+                                          <p style={{ color: 'var(--text-muted)' }}>
+                                            {step.delay_hours > 0 ? `${step.delay_hours}時間後` : '即時'}
+                                            {step.goal && ` → ゴール: ${step.goal}`}
+                                          </p>
+                                          <p className="truncate" style={{ color: 'var(--text-secondary)' }}>
+                                            {step.message || step.template}
+                                          </p>
+                                        </div>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+
+                                {/* Limits info */}
+                                <div className="flex gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                  <span>日次上限: {sc.daily_send_limit}</span>
+                                  <span>最小間隔: {sc.min_interval_hours}h</span>
+                                  <span>Step0自動: {sc.auto_approve_step0 ? 'ON' : 'OFF'}</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
