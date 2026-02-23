@@ -855,6 +855,7 @@ function CastDetailInner() {
       try {
         const { data, error: rpcErr } = await sb.rpc('create_dm_batch', {
           p_account_id: accountId,
+          p_cast_name: castName,
           p_targets: usernames,
           p_message: dmMessage,
           p_template_name: null,

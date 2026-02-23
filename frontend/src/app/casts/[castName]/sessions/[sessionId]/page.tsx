@@ -720,9 +720,13 @@ export default function SessionDetailPage() {
     if (!accountId || !modelId || screenshotting) return;
     setScreenshotting(true);
     try {
+      const { data: { session } } = await sb.auth.getSession();
       const res = await fetch('/api/screenshot', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
         body: JSON.stringify({
           model_id: modelId,
           cast_name: castName,
@@ -742,7 +746,7 @@ export default function SessionDetailPage() {
       setToast('スクリーンショットの取得に失敗しました');
     }
     setScreenshotting(false);
-  }, [accountId, modelId, screenshotting, castName, sessionId]);
+  }, [accountId, modelId, screenshotting, castName, sessionId, sb]);
 
   // Load pre-broadcast data (segments + templates)
   useEffect(() => {
@@ -839,9 +843,13 @@ export default function SessionDetailPage() {
     setAnalysisError(null);
     setAnalysisResult(null);
     try {
+      const { data: { session } } = await sb.auth.getSession();
       const res = await fetch('/api/analyze-session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
         body: JSON.stringify({ session_id: sessionId, cast_name: castName, account_id: accountId }),
       });
       const json = await res.json();
@@ -853,7 +861,7 @@ export default function SessionDetailPage() {
     } finally {
       setAnalyzing(false);
     }
-  }, [accountId, sessionId, castName, analyzing]);
+  }, [accountId, sessionId, castName, analyzing, sb]);
 
   // Load DM history for a specific user (inline expand)
   const loadUserDmHistory = useCallback(async (userName: string) => {
@@ -2670,6 +2678,7 @@ export default function SessionDetailPage() {
                                     const controller = new AbortController();
                                     abortControllerRef.current = controller;
                                     try {
+                                      const { data: { session: authSession } } = await sb.auth.getSession();
                                       const fd = new FormData();
                                       fd.append('audio', selectedFile);
                                       fd.append('session_id', sessionId);
@@ -2681,6 +2690,7 @@ export default function SessionDetailPage() {
                                       setUploadProgress(30);
                                       const res = await fetch('/api/transcribe', {
                                         method: 'POST',
+                                        headers: authSession?.access_token ? { Authorization: `Bearer ${authSession.access_token}` } : {},
                                         body: fd,
                                         signal: controller.signal,
                                       });

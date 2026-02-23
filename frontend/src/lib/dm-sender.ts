@@ -37,6 +37,7 @@ export async function queueDmBatch(
     try {
       const { data, error: rpcErr } = await supabase.rpc('create_dm_batch', {
         p_account_id: accountId,
+        p_cast_name: castName,
         p_targets: usernames,
         p_message: firstMessage,
         p_template_name: null,
@@ -78,10 +79,10 @@ export async function queueDmBatch(
     count = insertData?.length || targets.length;
   }
 
-  // Step 3: RPC使用時はcampaignを上書き
+  // Step 3: RPC使用時はcampaignを上書き + cast_name補完
   if (usedRpc && batchId !== campaign) {
     await supabase.from('dm_send_log')
-      .update({ campaign })
+      .update({ campaign, cast_name: castName })
       .eq('campaign', batchId);
     batchId = campaign;
   }

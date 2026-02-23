@@ -1,5 +1,5 @@
 // ============================================================
-// POST /api/transcribe — OpenAI Whisper API で音声→文字起こし
+// POST /api/transcribe — OpenAI Whisper API で音声→文字起こし（認証必須）
 //
 // 必要な環境変数（.env.local に追加）:
 //   OPENAI_API_KEY=sk-...
@@ -14,6 +14,8 @@ import { createClient } from '@supabase/supabase-js';
 
 export const maxDuration = 300; // 5min timeout (Vercel Pro)
 
+const ALLOWED_EXTENSIONS = ['.mp3', '.m4a', '.wav', '.webm', '.mp4'];
+
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const audioFile = formData.get('audio') as File | null;
@@ -26,6 +28,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
   }
 
+  // File format check
+  const fileName = audioFile.name.toLowerCase();
+  if (!ALLOWED_EXTENSIONS.some(ext => fileName.endsWith(ext))) {
+    return NextResponse.json({
+      error: `対応形式: ${ALLOWED_EXTENSIONS.join(', ')}。受信: ${audioFile.name}`,
+    }, { status: 400 });
+  }
+
   // Server-side file size check (Whisper API limit: 25MB)
   if (audioFile.size > 25 * 1024 * 1024) {
     return NextResponse.json({ error: 'ファイルサイズが大きすぎます（上限25MB）' }, { status: 413 });
@@ -33,8 +43,13 @@ export async function POST(request: NextRequest) {
 
   const openaiKey = process.env.OPENAI_API_KEY;
   if (!openaiKey) {
-    return NextResponse.json({ error: 'OPENAI_API_KEY not configured' }, { status: 500 });
+    return NextResponse.json({
+      error: 'OPENAI_API_KEY が未設定です。.env.local に OPENAI_API_KEY=sk-... を追加してください。',
+    }, { status: 500 });
   }
+
+  const startTime = Date.now();
+  console.log(`[Transcribe] 開始: ${audioFile.name} (${(audioFile.size / 1024 / 1024).toFixed(1)}MB) session=${sessionId}`);
 
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -73,7 +88,13 @@ export async function POST(request: NextRequest) {
 
     if (!whisperRes.ok) {
       const errBody = await whisperRes.text().catch(() => '');
-      throw new Error(`Whisper API ${whisperRes.status}: ${errBody.slice(0, 200)}`);
+      const statusText = whisperRes.status === 401
+        ? 'APIキーが無効です。OPENAI_API_KEYを確認してください。'
+        : whisperRes.status === 429
+          ? 'APIレート制限に達しました。しばらく待ってから再試行してください。'
+          : `Whisper API エラー (${whisperRes.status})`;
+      console.error(`[Transcribe] Whisper API エラー: ${whisperRes.status}`, errBody.slice(0, 500));
+      throw new Error(`${statusText}: ${errBody.slice(0, 200)}`);
     }
 
     const whisperData = await whisperRes.json();
@@ -110,6 +131,9 @@ export async function POST(request: NextRequest) {
       await supabase.from('cast_transcripts').insert(transcriptRows);
     }
 
+    const elapsed = Date.now() - startTime;
+    console.log(`[Transcribe] 完了: ${segments.length}セグメント, ${(whisperData.duration || 0).toFixed(1)}秒, ${elapsed}ms`);
+
     return NextResponse.json({
       success: true,
       segments: transcriptRows.length,
@@ -118,6 +142,8 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
+    const elapsed = Date.now() - startTime;
+    console.error(`[Transcribe] 失敗 (${elapsed}ms):`, message);
     if (record?.id) {
       await supabase
         .from('cast_transcripts')
