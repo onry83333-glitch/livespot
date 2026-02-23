@@ -556,6 +556,22 @@ claude
 
 ## Recent Changes
 
+### [2026-02-22] 大規模更新
+- UX改善バッチ2: 32件修正（CVR丸め、Unicode 1,106個修正、ペルソナタブ非表示、売上2カラム化）
+- Stripchat API統合レイヤー: stripchat-api.ts（モデル情報、視聴者リスト、DM送信、サムネイル）
+- DM送信サーバーサイドAPI化: /api/dm/send, /api/dm/batch（認証cookieベース）
+- spy_viewers テーブル: 視聴者リアルタイム取得（Risa_06: 22人、yun_1022: 61人で動作確認）
+- CDNサムネイル: captureAllThumbnailsCDN（img.doppiocdn.org/thumbs/）
+- AutoPatrol URL修正: ja.stripchat.com/api/front/v2/models/username/{name}/cam
+- Chrome拡張: JWT capture chain、セッション同期、cookies権限追加
+- DB: stripchat_sessions, spy_viewers, screenshots.thumbnail_url, dm_send_log.sent_via, sessions.peak_viewers, registered_casts.stripchat_model_id
+- Cloudflare Bot検知テスト: Vercelサーバーから直接アクセス可能（200 OK）
+
+### 既知の未解決問題
+- DM API化: フロントエンドから /api/dm/batch が呼ばれない（Chrome拡張フォールバックで運用に支障なし）
+- CDNサムネイル: 配信中キャストでも取得失敗する場合あり
+- セッション同期: userId=null（取得ロジック要修正）
+
 ### [2026-02-22] 🔍 品質巡回エージェント実施 — データ分離修正6件
 
 **自動修正済み（コミット済み）:**
