@@ -44,6 +44,32 @@ interface DmTemplate {
   message: string;
 }
 
+interface LiveMessage {
+  id: number;
+  message_time: string;
+  msg_type: string;
+  user_name: string | null;
+  message: string | null;
+  tokens: number;
+  user_color: string | null;
+  is_vip: boolean;
+}
+
+interface LiveViewer {
+  user_name: string;
+  segment: string | null;
+  lifetime_tokens: number;
+  first_seen: string;
+  is_new_payer: boolean;
+}
+
+interface DmVisitBanner {
+  id: string;
+  user_name: string;
+  segment: string | null;
+  dm_sent_at: string;
+}
+
 type BroadcastMode = 'pre' | 'live' | 'post';
 
 /* ============================================================
@@ -116,6 +142,35 @@ const LABELS = {
   loadingPreData: '配信準備データを読み込み中...',
   unhandledLabel: '未対応',
   thanksDmUnsent: 'お礼DM未送信',
+  // Live mode labels
+  liveStatus: 'LIVE',
+  broadcasting: '配信中',
+  viewerCount: '視聴者',
+  revenueLabel: '売上',
+  newUsersLabel: '新規',
+  viewerPanel: '視聴者',
+  chatFeed: 'チャット',
+  statsPanel: 'リアルタイム集計',
+  revenueTrend: '売上推移',
+  revenueBreakdownLive: '売上内訳',
+  payingUsersLabel: '課金ユーザー',
+  firstTimeLive: '初課金',
+  avgPaymentLabel: '平均課金額',
+  perPerson: '/人',
+  entered: '入室しました',
+  left: '退室しました',
+  minutesAgo: '分前',
+  justNow: 'たったいま',
+  firstVisit: '初来訪',
+  lifetimeLabel: '累計',
+  dmVisitDetected: 'DM来訪',
+  dmSentTimeAgo: 'DM送信',
+  hoursAgo: '時間前',
+  realtimeActive: 'Realtime接続中',
+  pollingMode: 'ポーリングモード',
+  noMessagesYet: 'メッセージなし',
+  liveDataPast: '過去データ表示中',
+  whisperLabel: 'ささやき',
 } as const;
 
 const COIN_RATE = 7.7;
@@ -163,6 +218,55 @@ function groupBySegmentRange(items: { segment: string }[]): { label: string; cou
   })).filter(r => r.count > 0);
 }
 
+function timeAgoText(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return LABELS.justNow;
+  if (mins < 60) return `${mins}${LABELS.minutesAgo}`;
+  const hours = Math.floor(mins / 60);
+  return `${hours}${LABELS.hoursAgo}`;
+}
+
+function getSegmentEmoji(segment: string | null): string {
+  switch (segment) {
+    case 'whale': return '\u{1F535}';
+    case 'vip': return '\u{1F7E2}';
+    case 'regular': return '\u{1F7E1}';
+    case 'light': return '\u26AA';
+    case 'churned': return '\u{1F53B}';
+    default: return '\u2B50';
+  }
+}
+
+function getSegmentLabel(segment: string | null): string {
+  switch (segment) {
+    case 'whale': return 'Whale';
+    case 'vip': return 'VIP';
+    case 'regular': return 'Regular';
+    case 'light': return 'Light';
+    case 'churned': return 'Churned';
+    default: return 'New';
+  }
+}
+
+function formatElapsed(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function getMsgStyle(msgType: string, tokens: number): { bg: string; color: string; italic?: boolean; small?: boolean } {
+  if (tokens > 0) return { bg: 'rgba(245,158,11,0.12)', color: 'rgb(251,191,36)' };
+  switch (msgType) {
+    case 'enter': return { bg: 'transparent', color: 'var(--text-muted)', small: true };
+    case 'leave': return { bg: 'transparent', color: 'var(--text-muted)', small: true };
+    case 'system': return { bg: 'transparent', color: 'var(--text-muted)', italic: true };
+    case 'whisper': return { bg: 'rgba(167,139,250,0.08)', color: 'rgb(167,139,250)' };
+    default: return { bg: 'transparent', color: 'var(--text-secondary)' };
+  }
+}
+
 /* ============================================================
    Component
    ============================================================ */
@@ -182,7 +286,7 @@ export default function SessionDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [mode, setMode] = useState<BroadcastMode>(urlMode === 'pre' ? 'pre' : 'post');
+  const [mode, setMode] = useState<BroadcastMode>(urlMode === 'pre' ? 'pre' : urlMode === 'live' ? 'live' : 'post');
   const [actions, setActions] = useState<SessionActions | null>(null);
   const [actionsLoading, setActionsLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -196,6 +300,23 @@ export default function SessionDetailPage() {
   const [templates, setTemplates] = useState<DmTemplate[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
   const [preLoading, setPreLoading] = useState(false);
+
+  // Live mode state
+  const [liveMessages, setLiveMessages] = useState<LiveMessage[]>([]);
+  const [liveViewers, setLiveViewers] = useState<LiveViewer[]>([]);
+  const [liveTotalTokens, setLiveTotalTokens] = useState(0);
+  const [livePayingCount, setLivePayingCount] = useState(0);
+  const [liveNewPayerCount, setLiveNewPayerCount] = useState(0);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [dmVisitBanners, setDmVisitBanners] = useState<DmVisitBanner[]>([]);
+  const [mobileTab, setMobileTab] = useState<'chat' | 'viewers' | 'stats'>('chat');
+  const [liveRevenueByType, setLiveRevenueByType] = useState<Record<string, number>>({});
+  const [liveLoading, setLiveLoading] = useState(false);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const isUserScrolledUp = useRef(false);
+  const lastMessageTimeRef = useRef<string | null>(null);
+  const dmSentUsersRef = useRef<Map<string, { sent_at: string; segment: string | null }>>(new Map());
 
   // Computed: total send targets
   const sendTargetCount = SEGMENT_GROUPS
@@ -298,6 +419,7 @@ export default function SessionDetailPage() {
   // Auto-detect mode (respect URL param)
   useEffect(() => {
     if (urlMode === 'pre') { setMode('pre'); return; }
+    if (urlMode === 'live') { setMode('live'); return; }
     if (!summary) return;
     const endedAt = new Date(summary.ended_at).getTime();
     const tenMinAgo = Date.now() - 10 * 60 * 1000;
@@ -364,6 +486,282 @@ export default function SessionDetailPage() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // ============================================================
+  // LIVE MODE: Data loading + Realtime + Polling
+  // ============================================================
+
+  const handleNewMessage = useCallback((payload: { new: Record<string, unknown> }) => {
+    const msg = payload.new as unknown as LiveMessage;
+    setLiveMessages(prev => [...prev, msg]);
+    lastMessageTimeRef.current = msg.message_time;
+
+    if (msg.tokens > 0) {
+      setLiveTotalTokens(prev => prev + msg.tokens);
+      setLiveRevenueByType(prev => ({
+        ...prev,
+        [msg.msg_type || 'other']: (prev[msg.msg_type || 'other'] || 0) + msg.tokens,
+      }));
+    }
+
+    // DM visit detection
+    if (msg.user_name && dmSentUsersRef.current.has(msg.user_name)) {
+      const dmInfo = dmSentUsersRef.current.get(msg.user_name)!;
+      setDmVisitBanners(prev => {
+        if (prev.some(b => b.user_name === msg.user_name)) return prev;
+        return [...prev, {
+          id: `${msg.user_name}-${Date.now()}`,
+          user_name: msg.user_name!,
+          segment: dmInfo.segment,
+          dm_sent_at: dmInfo.sent_at,
+        }];
+      });
+      dmSentUsersRef.current.delete(msg.user_name!);
+    }
+
+    // Update viewer list
+    if (msg.user_name) {
+      setLiveViewers(prev => {
+        const idx = prev.findIndex(v => v.user_name === msg.user_name);
+        if (idx >= 0) {
+          if (msg.tokens > 0) {
+            const updated = [...prev];
+            updated[idx] = { ...updated[idx], lifetime_tokens: updated[idx].lifetime_tokens + msg.tokens };
+            return updated.sort((a, b) => b.lifetime_tokens - a.lifetime_tokens);
+          }
+          return prev;
+        }
+        return [...prev, {
+          user_name: msg.user_name!,
+          segment: null,
+          lifetime_tokens: msg.tokens > 0 ? msg.tokens : 0,
+          first_seen: msg.message_time,
+          is_new_payer: false,
+        }].sort((a, b) => b.lifetime_tokens - a.lifetime_tokens);
+      });
+    }
+  }, []);
+
+  const loadLiveData = useCallback(async () => {
+    if (!accountId || !summary) return;
+    setLiveLoading(true);
+
+    // 1. Load messages
+    const { data: msgs } = await sb
+      .from('spy_messages')
+      .select('id, message_time, msg_type, user_name, message, tokens, user_color, is_vip')
+      .eq('session_id', sessionId)
+      .eq('account_id', accountId)
+      .order('message_time', { ascending: true })
+      .limit(500);
+
+    if (msgs && msgs.length > 0) {
+      setLiveMessages(msgs as LiveMessage[]);
+      lastMessageTimeRef.current = msgs[msgs.length - 1].message_time;
+
+      let totalTk = 0;
+      const typeMap: Record<string, number> = {};
+      const payerSet = new Set<string>();
+      for (const m of msgs) {
+        if (m.tokens > 0) {
+          totalTk += m.tokens;
+          const t = m.msg_type || 'other';
+          typeMap[t] = (typeMap[t] || 0) + m.tokens;
+          if (m.user_name) payerSet.add(m.user_name);
+        }
+      }
+      setLiveTotalTokens(totalTk);
+      setLiveRevenueByType(typeMap);
+      setLivePayingCount(payerSet.size);
+    }
+
+    // 2. Build viewer list from session messages
+    const viewerMap = new Map<string, { first_seen: string; session_tokens: number }>();
+    if (msgs) {
+      for (const m of msgs) {
+        if (!m.user_name) continue;
+        if (!viewerMap.has(m.user_name)) {
+          viewerMap.set(m.user_name, { first_seen: m.message_time, session_tokens: 0 });
+        }
+        if (m.tokens > 0) {
+          viewerMap.get(m.user_name)!.session_tokens += m.tokens;
+        }
+      }
+    }
+
+    const userNames = Array.from(viewerMap.keys());
+
+    // 3. Get lifetime tokens per user for this cast
+    const lifetimeMap = new Map<string, number>();
+    if (userNames.length > 0) {
+      const { data: ltData } = await sb
+        .from('spy_messages')
+        .select('user_name, tokens')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .in('user_name', userNames.slice(0, 200))
+        .gt('tokens', 0);
+      if (ltData) {
+        for (const row of ltData) {
+          if (row.user_name) lifetimeMap.set(row.user_name, (lifetimeMap.get(row.user_name) || 0) + row.tokens);
+        }
+      }
+    }
+
+    // 4. Get segments from paid_users
+    const segmentMap = new Map<string, string>();
+    if (userNames.length > 0) {
+      const { data: puData } = await sb
+        .from('paid_users')
+        .select('username, segment')
+        .eq('account_id', accountId);
+      if (puData) {
+        for (const row of puData as { username?: string; user_name?: string; segment: string }[]) {
+          const uname = row.username || row.user_name;
+          if (uname && row.segment) segmentMap.set(uname, row.segment);
+        }
+      }
+    }
+
+    // 5. Build viewers
+    let newPayerCount = 0;
+    const viewers: LiveViewer[] = [];
+    for (const entry of Array.from(viewerMap.entries())) {
+      const [name, data] = entry;
+      const lifetime = lifetimeMap.get(name) || 0;
+      const segment = segmentMap.get(name) || null;
+      const isNew = data.session_tokens > 0 && lifetime <= data.session_tokens;
+      if (isNew) newPayerCount++;
+      viewers.push({ user_name: name, segment, lifetime_tokens: lifetime, first_seen: data.first_seen, is_new_payer: isNew });
+    }
+    viewers.sort((a, b) => b.lifetime_tokens - a.lifetime_tokens);
+    setLiveViewers(viewers);
+    setLiveNewPayerCount(newPayerCount);
+
+    // 6. Load DM send log for visit detection
+    const dayBefore = new Date(new Date(summary.started_at).getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: dmData } = await sb
+      .from('dm_send_log')
+      .select('user_name, sent_at')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .eq('status', 'success')
+      .gte('sent_at', dayBefore)
+      .lt('sent_at', summary.started_at);
+    if (dmData) {
+      const map = new Map<string, { sent_at: string; segment: string | null }>();
+      for (const d of dmData) {
+        if (d.user_name) map.set(d.user_name, { sent_at: d.sent_at, segment: segmentMap.get(d.user_name) || null });
+      }
+      dmSentUsersRef.current = map;
+    }
+
+    setLiveLoading(false);
+  }, [accountId, sessionId, castName, summary, sb]);
+
+  const pollNewMessages = useCallback(async () => {
+    if (!accountId || !lastMessageTimeRef.current) return;
+    const { data } = await sb
+      .from('spy_messages')
+      .select('id, message_time, msg_type, user_name, message, tokens, user_color, is_vip')
+      .eq('session_id', sessionId)
+      .eq('account_id', accountId)
+      .gt('message_time', lastMessageTimeRef.current)
+      .order('message_time', { ascending: true })
+      .limit(50);
+    if (data && data.length > 0) {
+      for (const msg of data) handleNewMessage({ new: msg as unknown as Record<string, unknown> });
+    }
+  }, [accountId, sessionId, sb, handleNewMessage]);
+
+  // Effect: Load live data when mode = 'live'
+  useEffect(() => {
+    if (mode !== 'live' || !accountId || !summary) return;
+    loadLiveData();
+  }, [mode, accountId, summary, loadLiveData]);
+
+  // Effect: Realtime subscription
+  useEffect(() => {
+    if (mode !== 'live' || !accountId) return;
+    const channel = sb
+      .channel(`live-${sessionId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'spy_messages',
+        filter: `session_id=eq.${sessionId}`,
+      }, (payload: { new: Record<string, unknown> }) => {
+        handleNewMessage(payload);
+      })
+      .subscribe((status: string) => {
+        setRealtimeConnected(status === 'SUBSCRIBED');
+      });
+    return () => { sb.removeChannel(channel); };
+  }, [mode, accountId, sessionId, sb, handleNewMessage]);
+
+  // Effect: Polling fallback (10s if Realtime not connected)
+  useEffect(() => {
+    if (mode !== 'live' || !accountId || realtimeConnected) return;
+    const interval = setInterval(pollNewMessages, 10000);
+    return () => clearInterval(interval);
+  }, [mode, accountId, realtimeConnected, pollNewMessages]);
+
+  // Effect: Elapsed time timer
+  useEffect(() => {
+    if (mode !== 'live' || !summary) return;
+    const startTime = new Date(summary.started_at).getTime();
+    const update = () => setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startTime) / 1000)));
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [mode, summary]);
+
+  // Effect: DM visit banner auto-clear (5s)
+  useEffect(() => {
+    if (dmVisitBanners.length === 0) return;
+    const t = setTimeout(() => setDmVisitBanners(prev => prev.slice(1)), 5000);
+    return () => clearTimeout(t);
+  }, [dmVisitBanners]);
+
+  // Effect: Auto-scroll chat
+  useEffect(() => {
+    if (!isUserScrolledUp.current && chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [liveMessages.length]);
+
+  const handleChatScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    isUserScrolledUp.current = el.scrollTop + el.clientHeight < el.scrollHeight - 50;
+  };
+
+  // Computed: revenue buckets (10-min intervals)
+  const revenueBuckets = (() => {
+    if (!summary || liveMessages.length === 0) return [];
+    const startTime = new Date(summary.started_at).getTime();
+    const bucketSize = 10 * 60 * 1000;
+    const bucketMap = new Map<number, number>();
+    for (const msg of liveMessages) {
+      if (msg.tokens <= 0) continue;
+      const idx = Math.floor((new Date(msg.message_time).getTime() - startTime) / bucketSize);
+      bucketMap.set(idx, (bucketMap.get(idx) || 0) + msg.tokens);
+    }
+    if (bucketMap.size === 0) return [];
+    const maxIdx = Math.max(...Array.from(bucketMap.keys()));
+    const result: { label: string; tokens: number; cumulative: number }[] = [];
+    let cum = 0;
+    for (let i = 0; i <= maxIdx; i++) {
+      const tk = bucketMap.get(i) || 0;
+      cum += tk;
+      const t = new Date(startTime + i * bucketSize);
+      const jst = new Date(t.getTime() + 9 * 60 * 60 * 1000);
+      result.push({ label: `${String(jst.getUTCHours()).padStart(2, '0')}:${String(jst.getUTCMinutes()).padStart(2, '0')}`, tokens: tk, cumulative: cum });
+    }
+    return result;
+  })();
+
+  // Session is "truly live" if ended_at is within 10 minutes
+  const isSessionActive = summary ? (Date.now() - new Date(summary.ended_at).getTime()) < 10 * 60 * 1000 : false;
+
   const toggleGroup = (groupId: string) => {
     setSelectedGroups(prev => {
       const next = new Set(prev);
@@ -387,7 +785,7 @@ export default function SessionDetailPage() {
 
   return (
     <div className="min-h-screen bg-mesh">
-      <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
+      <div className={`mx-auto px-4 py-8 space-y-6 ${mode === 'live' ? 'max-w-7xl' : 'max-w-5xl'}`}>
         {/* Header */}
         <div className="flex items-center gap-3">
           <Link
@@ -396,7 +794,7 @@ export default function SessionDetailPage() {
             style={{ color: 'var(--text-muted)' }}
           >{`← ${LABELS.backToList}`}</Link>
           <h1 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-            {mode === 'pre' ? `📡 ${LABELS.preBroadcastPrep}` : `📺 ${LABELS.sessionDetail}`}
+            {mode === 'pre' ? `📡 ${LABELS.preBroadcastPrep}` : mode === 'live' ? `🔴 ${LABELS.liveStatus}` : `📺 ${LABELS.sessionDetail}`}
           </h1>
         </div>
 
@@ -410,16 +808,12 @@ export default function SessionDetailPage() {
               return (
                 <button
                   key={m}
-                  onClick={() => {
-                    if (isLive) { setToast(LABELS.developing); return; }
-                    setMode(m);
-                  }}
+                  onClick={() => setMode(m)}
                   className="px-4 py-2 text-xs font-semibold rounded-t-lg transition-all"
                   style={{
                     background: isActive ? colors.bg : 'transparent',
                     borderBottom: isActive ? `2px solid ${colors.border}` : '2px solid transparent',
                     color: isActive ? colors.text : 'var(--text-muted)',
-                    opacity: isLive ? 0.6 : 1,
                   }}
                 >{modeLabels[m]}</button>
               );
@@ -598,9 +992,240 @@ export default function SessionDetailPage() {
             )}
 
             {/* ============================================================
-               POST-BROADCAST MODE (and session info for non-pre modes)
+               LIVE MODE
                ============================================================ */}
-            {mode !== 'pre' && (
+            {mode === 'live' && (
+              <>
+                {/* Live Status Bar */}
+                <div className="rounded-xl p-4 border-2" style={{ borderColor: 'rgba(239,68,68,0.5)', background: 'rgba(239,68,68,0.08)' }}>
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-lg anim-pulse-glow" style={{ background: 'rgba(239,68,68,0.2)', color: 'rgb(248,113,113)' }}>
+                        {`🔴 ${LABELS.liveStatus}`}
+                      </span>
+                      <span className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>{castName}</span>
+                      <span className="text-sm font-mono font-bold" style={{ color: 'rgb(248,113,113)' }}>{formatElapsed(elapsedSeconds)}</span>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      <span>{`${LABELS.viewerCount}: ${liveViewers.length}${LABELS.personSuffix}`}</span>
+                      <span style={{ color: 'var(--accent-amber)' }}>{`${LABELS.revenueLabel}: ${tokensToJPY(liveTotalTokens, COIN_RATE)}`}</span>
+                      <span style={{ color: 'var(--accent-green)' }}>{`${LABELS.newUsersLabel}: ${liveNewPayerCount}${LABELS.personSuffix}`}</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded" style={{
+                        background: realtimeConnected ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)',
+                        color: realtimeConnected ? 'rgb(74,222,128)' : 'rgb(251,191,36)',
+                      }}>
+                        {realtimeConnected ? `● ${LABELS.realtimeActive}` : `○ ${LABELS.pollingMode}`}
+                      </span>
+                    </div>
+                  </div>
+                  {!isSessionActive && (
+                    <p className="text-[10px] mt-2" style={{ color: 'var(--text-muted)' }}>{`※ ${LABELS.liveDataPast}`}</p>
+                  )}
+                </div>
+
+                {/* DM Visit Banners */}
+                {dmVisitBanners.map(b => (
+                  <div key={b.id} className="rounded-lg px-4 py-2.5 border anim-fade-up" style={{ background: 'rgba(56,189,248,0.08)', borderColor: 'rgba(56,189,248,0.25)' }}>
+                    <span className="text-xs" style={{ color: 'var(--accent-primary)' }}>
+                      {`📩 ${LABELS.dmVisitDetected}: `}
+                      <span className="font-bold">{b.user_name}</span>
+                      {b.segment && ` (${getSegmentLabel(b.segment)})`}
+                      {` ${LABELS.entered}（${LABELS.dmSentTimeAgo} ${timeAgoText(b.dm_sent_at)}）`}
+                    </span>
+                  </div>
+                ))}
+
+                {liveLoading ? (
+                  <div className="glass-card p-12 text-center">
+                    <div className="inline-block w-6 h-6 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                    <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>{LABELS.loading}</p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Mobile tab switcher (lg未満) */}
+                    <div className="flex gap-1 lg:hidden">
+                      {(['chat', 'viewers', 'stats'] as const).map(tab => (
+                        <button
+                          key={tab}
+                          onClick={() => setMobileTab(tab)}
+                          className="flex-1 px-3 py-2 text-xs font-semibold rounded-lg transition-all"
+                          style={{
+                            background: mobileTab === tab ? 'rgba(239,68,68,0.1)' : 'transparent',
+                            color: mobileTab === tab ? 'rgb(248,113,113)' : 'var(--text-muted)',
+                            borderBottom: mobileTab === tab ? '2px solid rgb(239,68,68)' : '2px solid transparent',
+                          }}
+                        >
+                          {tab === 'chat' ? `💬 ${LABELS.chatFeed}` : tab === 'viewers' ? `👥 ${LABELS.viewerPanel}` : `📊 ${LABELS.statsPanel}`}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* 3-Column Layout */}
+                    <div className="grid grid-cols-1 lg:grid-cols-[250px_1fr_280px] gap-4" style={{ minHeight: '500px' }}>
+                      {/* === Left: Viewer Panel === */}
+                      <div className={`glass-card p-4 overflow-y-auto ${mobileTab !== 'viewers' ? 'hidden lg:block' : ''}`} style={{ maxHeight: '600px' }}>
+                        <h3 className="text-xs font-bold mb-3 sticky top-0 pb-2" style={{ color: 'rgb(248,113,113)', background: 'inherit' }}>
+                          {`👥 ${LABELS.viewerPanel} (${liveViewers.length}${LABELS.personSuffix})`}
+                        </h3>
+                        {liveViewers.length === 0 ? (
+                          <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.noData}</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {liveViewers.map(v => (
+                              <div key={v.user_name} className="flex items-start gap-2 px-2 py-1.5 rounded-lg hover:bg-white/[0.03] transition-colors">
+                                <span className="text-sm mt-0.5">{getSegmentEmoji(v.segment)}</span>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <Link href={`/users/${encodeURIComponent(v.user_name)}`} className="text-[11px] font-semibold truncate hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                                      {v.user_name}
+                                    </Link>
+                                    {v.is_new_payer && (
+                                      <span className="text-[9px] px-1 py-0.5 rounded" style={{ background: 'rgba(245,158,11,0.15)', color: 'rgb(251,191,36)' }}>NEW</span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                                    <span>{getSegmentLabel(v.segment)}</span>
+                                    {v.lifetime_tokens > 0 && (
+                                      <span style={{ color: 'var(--accent-amber)' }}>{`${LABELS.lifetimeLabel}${tokensToJPY(v.lifetime_tokens, COIN_RATE)}`}</span>
+                                    )}
+                                  </div>
+                                  <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgoText(v.first_seen)}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* === Center: Chat Feed === */}
+                      <div className={`glass-card flex flex-col ${mobileTab !== 'chat' ? 'hidden lg:flex' : ''}`} style={{ maxHeight: '600px' }}>
+                        <h3 className="text-xs font-bold px-4 pt-4 pb-2" style={{ color: 'rgb(248,113,113)' }}>
+                          {`💬 ${LABELS.chatFeed} (${liveMessages.length})`}
+                        </h3>
+                        <div
+                          ref={chatContainerRef}
+                          onScroll={handleChatScroll}
+                          className="flex-1 overflow-y-auto px-4 pb-4 space-y-0.5"
+                        >
+                          {liveMessages.length === 0 ? (
+                            <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>{LABELS.noMessagesYet}</p>
+                          ) : (
+                            liveMessages.map((msg, i) => {
+                              const style = getMsgStyle(msg.msg_type, msg.tokens);
+                              const timeJst = formatDateCompact(msg.message_time).split(' ')[1] || '';
+                              return (
+                                <div
+                                  key={msg.id || i}
+                                  className={`rounded px-2.5 py-1 ${style.small ? 'py-0.5' : ''}`}
+                                  style={{ background: style.bg }}
+                                >
+                                  <div className="flex items-baseline gap-2">
+                                    <span className="text-[9px] font-mono shrink-0" style={{ color: 'var(--text-muted)' }}>{timeJst}</span>
+                                    {msg.tokens > 0 && (
+                                      <span className="text-[10px] font-bold shrink-0" style={{ color: 'rgb(251,191,36)' }}>{`💎 ${msg.tokens}tk`}</span>
+                                    )}
+                                    {msg.user_name && (
+                                      <span className={`text-[11px] font-semibold shrink-0 ${style.small ? 'text-[10px]' : ''}`} style={{ color: msg.tokens > 0 ? 'rgb(251,191,36)' : 'var(--accent-primary)' }}>
+                                        {msg.user_name}
+                                      </span>
+                                    )}
+                                    <span className={`text-[11px] break-all ${style.small ? 'text-[10px]' : ''} ${style.italic ? 'italic' : ''}`} style={{ color: style.color }}>
+                                      {msg.msg_type === 'enter' ? LABELS.entered
+                                        : msg.msg_type === 'leave' ? LABELS.left
+                                        : msg.msg_type === 'whisper' ? `[${LABELS.whisperLabel}] ${msg.message || ''}`
+                                        : msg.message || ''}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+
+                      {/* === Right: Stats Panel === */}
+                      <div className={`glass-card p-4 overflow-y-auto ${mobileTab !== 'stats' ? 'hidden lg:block' : ''}`} style={{ maxHeight: '600px' }}>
+                        <h3 className="text-xs font-bold mb-4" style={{ color: 'rgb(248,113,113)' }}>
+                          {`📊 ${LABELS.statsPanel}`}
+                        </h3>
+
+                        {/* Revenue Trend Bars */}
+                        {revenueBuckets.length > 0 && (
+                          <div className="mb-5">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>{LABELS.revenueTrend}</p>
+                            <div className="space-y-1">
+                              {revenueBuckets.map((b, i) => {
+                                const maxCum = revenueBuckets[revenueBuckets.length - 1]?.cumulative || 1;
+                                const pct = Math.round(b.cumulative / maxCum * 100);
+                                return (
+                                  <div key={i} className="flex items-center gap-1.5">
+                                    <span className="text-[9px] font-mono w-10 text-right shrink-0" style={{ color: 'var(--text-muted)' }}>{b.label}</span>
+                                    <div className="flex-1 h-3 rounded-sm overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                                      <div className="h-full rounded-sm transition-all" style={{ width: `${pct}%`, background: 'linear-gradient(90deg, var(--accent-amber), var(--accent-green))' }} />
+                                    </div>
+                                    <span className="text-[9px] w-16 text-right shrink-0" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(b.cumulative, COIN_RATE)}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Revenue Breakdown */}
+                        {Object.keys(liveRevenueByType).length > 0 && (
+                          <div className="mb-5">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>{LABELS.revenueBreakdownLive}</p>
+                            <div className="space-y-1.5">
+                              {Object.entries(liveRevenueByType)
+                                .sort(([, a], [, b]) => b - a)
+                                .map(([type, tokens]) => {
+                                  const pct = liveTotalTokens > 0 ? Math.round(tokens / liveTotalTokens * 100) : 0;
+                                  return (
+                                    <div key={type} className="flex items-center justify-between">
+                                      <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>{type}</span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-[10px] font-bold" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(tokens, COIN_RATE)}</span>
+                                        <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{pct}%</span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Key Metrics */}
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.payingUsersLabel}</span>
+                            <span className="text-xs font-bold" style={{ color: 'var(--accent-primary)' }}>{`${livePayingCount}${LABELS.personSuffix}`}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.firstTimeLive}</span>
+                            <span className="text-xs font-bold" style={{ color: 'var(--accent-green)' }}>{`${liveNewPayerCount}${LABELS.personSuffix}`}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.avgPaymentLabel}</span>
+                            <span className="text-xs font-bold" style={{ color: 'var(--accent-amber)' }}>
+                              {livePayingCount > 0 ? `${tokensToJPY(Math.round(liveTotalTokens / livePayingCount), COIN_RATE)}${LABELS.perPerson}` : '-'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.messages}</span>
+                            <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>{liveMessages.length}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {/* ============================================================
+               POST-BROADCAST MODE
+               ============================================================ */}
+            {mode === 'post' && (
               <>
                 {/* Session Info */}
                 <div className="glass-card p-5">
