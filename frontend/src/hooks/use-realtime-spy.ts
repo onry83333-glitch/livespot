@@ -103,11 +103,17 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
   }, []);
 
   // Realtime subscription — 全メッセージを購読（フィルタはUI側で行う）
+  const channelRef = useRef<ReturnType<typeof supabaseRef.current.channel> | null>(null);
+  const reconnectRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   useEffect(() => {
     if (!enabled) return;
 
     loadMessages();
     loadCastNames();
+
+    // 重複subscribe防止
+    if (channelRef.current) return;
 
     const channel = supabaseRef.current
       .channel('spy-realtime')
@@ -145,25 +151,27 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
         }
       });
 
+    channelRef.current = channel;
+
     // Realtime再接続時にDBから再取得（件数リセット防止）
-    // Supabase Realtimeは自動再接続するが、その間のメッセージを補完する
-    const reconnectInterval = setInterval(() => {
-      const state = channel.state;
-      if (state === 'joined') {
-        // 接続中は何もしない
-      } else if (state === 'errored' || state === 'closed') {
-        // エラー or 切断 → DBから再取得してメッセージを補完
+    reconnectRef.current = setInterval(() => {
+      if (!channelRef.current) return;
+      const state = channelRef.current.state;
+      if (state === 'errored' || state === 'closed') {
         loadMessages();
         loadCastNames();
       }
     }, 30000);
 
     return () => {
-      clearInterval(reconnectInterval);
-      supabaseRef.current.removeChannel(channel);
+      if (reconnectRef.current) clearInterval(reconnectRef.current);
+      if (channelRef.current) {
+        supabaseRef.current.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
       setIsConnected(false);
     };
-  }, [enabled, loadMessages, loadCastNames]);
+  }, [enabled]); // loadMessages/loadCastNamesはuseRef相当で安定、depsから除外
 
   // キャストフィルタ適用済みメッセージ
   const messages = castName

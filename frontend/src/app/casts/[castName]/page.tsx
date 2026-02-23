@@ -639,21 +639,46 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, sb]);
 
   // DM Realtime status polling
+  const dmBatchIdRef = useRef(dmBatchId);
+  dmBatchIdRef.current = dmBatchId;
+  const dmCastChannelRef = useRef<ReturnType<typeof sb.channel> | null>(null);
+
   useEffect(() => {
-    if (!user || !dmBatchId) return;
+    if (!user || !accountId) return;
+
+    // 前のチャネルをクリーンアップ
+    if (dmCastChannelRef.current) {
+      sb.removeChannel(dmCastChannelRef.current);
+      dmCastChannelRef.current = null;
+    }
+
     const channel = sb
-      .channel('dm-cast-status')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log' }, async () => {
+      .channel(`dm-cast-status-${castName}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: `account_id=eq.${accountId}` }, async () => {
+        const bid = dmBatchIdRef.current;
+        if (!bid) return;
         const { data: items } = await sb.from('dm_send_log')
-          .select('*').eq('campaign', dmBatchId).eq('cast_name', castName).order('created_at', { ascending: false });
+          .select('*').eq('campaign', bid).eq('cast_name', castName).order('created_at', { ascending: false });
         const logs = items || [];
         const counts = { total: logs.length, queued: 0, sending: 0, success: 0, error: 0 };
         logs.forEach((l: { status: string }) => { if (l.status in counts) (counts as Record<string, number>)[l.status]++; });
         setDmStatusCounts(counts);
       })
-      .subscribe();
-    return () => { sb.removeChannel(channel); };
-  }, [user, dmBatchId, sb]);
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[Realtime] dm-cast-status error:', status, err);
+        }
+      });
+
+    dmCastChannelRef.current = channel;
+
+    return () => {
+      if (dmCastChannelRef.current) {
+        sb.removeChannel(dmCastChannelRef.current);
+        dmCastChannelRef.current = null;
+      }
+    };
+  }, [user, accountId, castName]); // dmBatchIdはRefで参照、depsから除外
 
   // DM send
   const handleDmSend = useCallback(async () => {

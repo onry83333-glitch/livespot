@@ -133,19 +133,31 @@ export default function AlertsPage() {
   useEffect(() => { loadInitial(); }, [loadInitial]);
 
   // Realtime: spy_messages INSERT (msg_type=enter)
+  const triggersRef = useRef(triggers);
+  triggersRef.current = triggers;
+  const lookupUserRef = useRef(lookupUser);
+  lookupUserRef.current = lookupUser;
+  const alertChannelRef = useRef<ReturnType<typeof sb.channel> | null>(null);
+
   useEffect(() => {
     if (!accountId) return;
 
+    // 重複subscribe防止
+    if (alertChannelRef.current) {
+      sb.removeChannel(alertChannelRef.current);
+      alertChannelRef.current = null;
+    }
+
     const channel = sb
-      .channel('alerts-enter')
+      .channel(`alerts-enter-${accountId}`)
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'spy_messages' },
+        { event: 'INSERT', schema: 'public', table: 'spy_messages', filter: `account_id=eq.${accountId}` },
         async (payload) => {
           const row = payload.new as { id: number; account_id: string; msg_type: string; user_name: string; cast_name: string; message_time: string };
-          if (row.account_id !== accountId || row.msg_type !== 'enter') return;
+          if (row.msg_type !== 'enter') return;
 
-          const info = await lookupUser(row.user_name || '');
+          const info = await lookupUserRef.current(row.user_name || '');
           const alert: EnterAlert = {
             id: row.id,
             user_name: row.user_name || '匿名',
@@ -154,15 +166,26 @@ export default function AlertsPage() {
             total_coins: info.total_coins,
             user_level: info.user_level,
             last_payment_date: info.last_payment_date,
-            vipLevel: classifyVip(info.total_coins, triggers),
+            vipLevel: classifyVip(info.total_coins, triggersRef.current),
           };
           setAlerts(prev => [alert, ...prev].slice(0, 100));
         }
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.warn('[Realtime] alerts-enter error:', status, err);
+        }
+      });
 
-    return () => { sb.removeChannel(channel); };
-  }, [sb, accountId, lookupUser, triggers]);
+    alertChannelRef.current = channel;
+
+    return () => {
+      if (alertChannelRef.current) {
+        sb.removeChannel(alertChannelRef.current);
+        alertChannelRef.current = null;
+      }
+    };
+  }, [accountId]); // sb はシングルトン、lookupUser/triggersはRefで参照
 
   // ユーザー詳細を取得
   const handleSelectUser = useCallback(async (userName: string) => {

@@ -445,20 +445,41 @@ export default function DmPage() {
     } catch { /* ignore */ }
   }, [sb, selectedAccount]);
 
+  const batchIdRef = useRef(batchId);
+  batchIdRef.current = batchId;
+  const pollStatusRef = useRef(pollStatus);
+  pollStatusRef.current = pollStatus;
+  const dmChannelRef = useRef<ReturnType<typeof sb.channel> | null>(null);
+
   useEffect(() => {
     if (!user || !selectedAccount) return;
+
+    // 前のチャネルをクリーンアップ
+    if (dmChannelRef.current) {
+      sb.removeChannel(dmChannelRef.current);
+      dmChannelRef.current = null;
+    }
+
     const channel = sb
       .channel(`dm-status-${selectedAccount}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: `account_id=eq.${selectedAccount}` }, () => {
-        if (batchId) pollStatus(batchId);
+        if (batchIdRef.current) pollStatusRef.current(batchIdRef.current);
       })
       .subscribe((status, err) => {
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           console.warn('[Realtime] dm-status error:', status, err);
         }
       });
-    return () => { sb.removeChannel(channel); };
-  }, [user, batchId, pollStatus, sb, selectedAccount]);
+
+    dmChannelRef.current = channel;
+
+    return () => {
+      if (dmChannelRef.current) {
+        sb.removeChannel(dmChannelRef.current);
+        dmChannelRef.current = null;
+      }
+    };
+  }, [user, selectedAccount]); // batchId/pollStatusはRefで参照、depsから除外
 
   const handleSend = async () => {
     if (targets.length === 0) { setError('ターゲットを1件以上入力してください'); return; }
