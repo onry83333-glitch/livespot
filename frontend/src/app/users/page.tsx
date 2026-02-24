@@ -12,6 +12,7 @@ interface UserSummary {
   messageCount: number;
   totalTokens: number;
   lastActivity: string;
+  churnRiskScore?: number;
 }
 
 export default function UsersPage() {
@@ -25,7 +26,7 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState<'tokens' | 'messages' | 'recent'>('tokens');
+  const [sortBy, setSortBy] = useState<'tokens' | 'messages' | 'recent' | 'risk'>('tokens');
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 50;
 
@@ -98,6 +99,26 @@ export default function UsersPage() {
     })();
   }, [accountId, sb]);
 
+  // 離脱リスクスコア取得
+  useEffect(() => {
+    if (!accountId || users.length === 0) return;
+    (async () => {
+      try {
+        const { data } = await sb.rpc('calc_churn_risk_score', { p_account_id: accountId });
+        if (data) {
+          const scoreMap = new Map<string, number>();
+          for (const r of data as { user_name: string; churn_risk_score: number }[]) {
+            scoreMap.set(r.user_name, r.churn_risk_score);
+          }
+          setUsers(prev => prev.map(u => ({
+            ...u,
+            churnRiskScore: scoreMap.get(u.user_name),
+          })));
+        }
+      } catch { /* RPC未適用時は無視 */ }
+    })();
+  }, [accountId, users.length, sb]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ページリセット（フィルター変更時）
   useEffect(() => { setPage(1); }, [search, sortBy]);
 
@@ -111,6 +132,7 @@ export default function UsersPage() {
     return [...list].sort((a, b) => {
       if (sortBy === 'tokens') return b.totalTokens - a.totalTokens;
       if (sortBy === 'messages') return b.messageCount - a.messageCount;
+      if (sortBy === 'risk') return (b.churnRiskScore ?? -1) - (a.churnRiskScore ?? -1);
       return new Date(b.lastActivity).getTime() - new Date(a.lastActivity).getTime();
     });
   }, [users, search, sortBy]);
@@ -148,6 +170,7 @@ export default function UsersPage() {
               { key: 'tokens', label: '💰 チップ順' },
               { key: 'messages', label: '💬 メッセージ順' },
               { key: 'recent', label: '🕐 最新順' },
+              { key: 'risk', label: '離脱リスク順' },
             ] as const).map(s => (
               <button
                 key={s.key}
@@ -237,6 +260,16 @@ export default function UsersPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    {u.churnRiskScore != null && u.churnRiskScore > 0 && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold" style={{
+                        background: u.churnRiskScore >= 61 ? 'rgba(239,68,68,0.15)' :
+                                    u.churnRiskScore >= 31 ? 'rgba(245,158,11,0.15)' : 'rgba(34,197,94,0.15)',
+                        color: u.churnRiskScore >= 61 ? '#ef4444' :
+                               u.churnRiskScore >= 31 ? '#f59e0b' : '#22c55e',
+                      }}>
+                        {u.churnRiskScore >= 61 ? '危' : u.churnRiskScore >= 31 ? '注' : '安'}{u.churnRiskScore}
+                      </span>
+                    )}
                     {u.totalTokens >= 1000 && (
                       <span className="badge-warning text-[9px]">WHALE</span>
                     )}

@@ -36,8 +36,8 @@ interface Stats {
 interface ChurnRiskUser {
   user_name: string;
   segment: string;
-  consecutive_absences: number;
-  total_tokens: number;
+  churn_risk_score: number;
+  total_coins: number;
 }
 
 function getSegmentBadgeClasses(segment: string): string {
@@ -177,13 +177,24 @@ export default function DashboardPage() {
     setRecommendations(recs);
   }, [sb]);
 
-  // Churn risk data loading
+  // Churn risk data loading (RPC: calc_churn_risk_score)
   const loadChurnRisk = useCallback(async (accountId: string, _accts: Account[]) => {
-    // FastAPIバックエンド未デプロイのため無効化
     if (churnFetchedRef.current === accountId) return;
     churnFetchedRef.current = accountId;
-    setChurnRiskUsers([]);
-  }, []);
+    try {
+      const { data } = await sb.rpc('calc_churn_risk_score', { p_account_id: accountId });
+      if (data) {
+        const top = (data as { user_name: string; segment: string; total_coins: number; churn_risk_score: number }[])
+          .filter(u => u.churn_risk_score >= 30)
+          .slice(0, 10);
+        setChurnRiskUsers(top);
+      } else {
+        setChurnRiskUsers([]);
+      }
+    } catch {
+      setChurnRiskUsers([]);
+    }
+  }, [sb]);
 
   // 初回ロード
   useEffect(() => {
@@ -546,7 +557,7 @@ export default function DashboardPage() {
           }}>
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold flex items-center gap-2">
-              {'\u26A0\uFE0F \u96E2\u8131\u30EA\u30B9\u30AF: '}{churnRiskUsers.length}{'\u540D'}
+              離脱リスク: {churnRiskUsers.length}名
             </h3>
             <Link href={churnDmUrl}
               className="text-xs font-medium px-3 py-1.5 rounded-lg transition-all hover:bg-rose-500/15"
@@ -562,11 +573,14 @@ export default function DashboardPage() {
                 <span className={`px-2 py-0.5 rounded-full font-medium ${getSegmentBadgeClasses(u.segment)}`}>
                   {u.segment}
                 </span>
-                <span style={{ color: 'var(--text-muted)' }}>
-                  {u.consecutive_absences}{'\u65E5\u9023\u7D9A\u4E0D\u5728'}
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold" style={{
+                  background: u.churn_risk_score >= 61 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                  color: u.churn_risk_score >= 61 ? '#ef4444' : '#f59e0b',
+                }}>
+                  {u.churn_risk_score}
                 </span>
                 <span className="text-emerald-400 font-semibold">
-                  {tokensToJPY(u.total_tokens)}
+                  {tokensToJPY(u.total_coins)}
                 </span>
               </div>
             ))}

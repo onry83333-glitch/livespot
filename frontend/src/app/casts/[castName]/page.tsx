@@ -15,7 +15,7 @@ import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 /* ============================================================
    Types
    ============================================================ */
-type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots' | 'persona' | 'overlap' | 'settings';
+type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots' | 'persona' | 'overlap' | 'health' | 'settings';
 
 interface CastStatsData {
   total_messages: number;
@@ -251,6 +251,7 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
   { key: 'persona',     icon: '🎭', label: 'ペルソナ' },
   { key: 'overlap',     icon: '🔄', label: '競合分析' },
+  { key: 'health',      icon: '🩺', label: '健全性' },
   { key: 'settings',    icon: '⚙', label: '設定' },
 ];
 
@@ -489,6 +490,22 @@ function CastDetailInner() {
   const [overlapLoading, setOverlapLoading] = useState(false);
   const [overlapRefreshing, setOverlapRefreshing] = useState(false);
   const [lastProfileUpdate, setLastProfileUpdate] = useState<string | null>(null);
+
+  // Health tab
+  interface CastHealth {
+    cast_name: string; schedule_consistency: number; revenue_trend: number;
+    dm_dependency: number; broadcast_quality: number; independence_risk: number;
+    mental_health_flag: boolean; overall_health: number;
+  }
+  const [castHealth, setCastHealth] = useState<CastHealth | null>(null);
+  const [castHealthLoading, setCastHealthLoading] = useState(false);
+  interface SessionQuality {
+    session_id: string; cast_name: string; session_date: string;
+    duration_minutes: number; peak_viewers: number; total_coins: number;
+    chat_count: number; tip_per_viewer: number; chat_per_minute: number;
+    quality_score: number;
+  }
+  const [sessionQualities, setSessionQualities] = useState<SessionQuality[]>([]);
 
   // Settings tab
   const [settingsModelId, setSettingsModelId] = useState<string>('');
@@ -1715,6 +1732,23 @@ function CastDetailInner() {
     }
     setOverlapRefreshing(false);
   }, [accountId, overlapRefreshing, sb]);
+
+  // ─── Health (健全性) データロード ───
+  useEffect(() => {
+    if (!accountId || activeTab !== 'health') return;
+    setCastHealthLoading(true);
+    (async () => {
+      try {
+        const [healthRes, qualityRes] = await Promise.all([
+          sb.rpc('calc_cast_health_score', { p_account_id: accountId, p_cast_name: castName }),
+          sb.rpc('calc_session_quality_score', { p_account_id: accountId, p_cast_name: castName, p_days: 30 }),
+        ]);
+        if (healthRes.data?.[0]) setCastHealth(healthRes.data[0]);
+        if (qualityRes.data) setSessionQualities(qualityRes.data.slice(0, 20));
+      } catch { /* ignore */ }
+      setCastHealthLoading(false);
+    })();
+  }, [accountId, activeTab, castName, sb]);
 
   const handlePersonaSave = useCallback(async () => {
     if (!accountId) return;
@@ -5403,6 +5437,160 @@ function CastDetailInner() {
                       </div>
                     )}
                   </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ============ HEALTH (健全性) ============ */}
+          {activeTab === 'health' && (
+            <div className="space-y-4">
+              {castHealthLoading ? (
+                <div className="flex items-center justify-center py-20">
+                  <div className="w-8 h-8 border-2 border-sky-400 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : !castHealth ? (
+                <div className="glass-card p-10 text-center">
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    健全性データなし — 直近30日間の配信データが必要です
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Mental Health Warning */}
+                  {castHealth.mental_health_flag && (
+                    <div className="glass-card p-4" style={{
+                      background: 'rgba(239,68,68,0.08)',
+                      borderLeft: '3px solid rgb(239,68,68)',
+                    }}>
+                      <p className="text-sm font-bold" style={{ color: 'var(--accent-pink)' }}>
+                        メンタル注意フラグ
+                      </p>
+                      <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+                        配信頻度または配信時間が前半15日間と比べて大幅に減少しています。ケアを検討してください。
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Overall Health Score */}
+                  <div className="glass-card p-5 text-center">
+                    <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>総合健全性スコア</p>
+                    <div className="inline-flex items-center justify-center w-24 h-24 rounded-full border-4" style={{
+                      borderColor: castHealth.overall_health >= 70 ? 'var(--accent-green)' :
+                                   castHealth.overall_health >= 40 ? 'var(--accent-amber)' : 'var(--accent-pink)',
+                    }}>
+                      <span className="text-3xl font-bold" style={{
+                        color: castHealth.overall_health >= 70 ? 'var(--accent-green)' :
+                               castHealth.overall_health >= 40 ? 'var(--accent-amber)' : 'var(--accent-pink)',
+                      }}>{castHealth.overall_health}</span>
+                    </div>
+                    <p className="text-xs mt-2" style={{ color: 'var(--text-secondary)' }}>
+                      {castHealth.overall_health >= 70 ? '良好' : castHealth.overall_health >= 40 ? '要観察' : '要注意'}
+                    </p>
+                  </div>
+
+                  {/* Radar Chart (CSS) */}
+                  <div className="glass-card p-5">
+                    <h3 className="text-sm font-bold mb-4">5軸レーダー</h3>
+                    {(() => {
+                      const axes = [
+                        { key: 'schedule_consistency', label: 'スケジュール安定度', value: castHealth.schedule_consistency },
+                        { key: 'revenue_trend', label: '売上トレンド', value: castHealth.revenue_trend },
+                        { key: 'broadcast_quality', label: '配信品質', value: castHealth.broadcast_quality },
+                        { key: 'dm_dependency_inv', label: '自力集客力', value: 100 - castHealth.dm_dependency },
+                        { key: 'independence_inv', label: '組織依存度', value: 100 - castHealth.independence_risk },
+                      ];
+                      return (
+                        <div className="space-y-3">
+                          {axes.map(a => (
+                            <div key={a.key}>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>{a.label}</span>
+                                <span className="text-[11px] font-bold" style={{
+                                  color: a.value >= 70 ? 'var(--accent-green)' : a.value >= 40 ? 'var(--accent-amber)' : 'var(--accent-pink)',
+                                }}>{a.value}</span>
+                              </div>
+                              <div className="w-full h-2 rounded-full" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                <div className="h-2 rounded-full transition-all duration-500" style={{
+                                  width: `${a.value}%`,
+                                  background: a.value >= 70 ? 'var(--accent-green)' : a.value >= 40 ? 'var(--accent-amber)' : 'var(--accent-pink)',
+                                }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Individual Gauges */}
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+                    {[
+                      { label: 'スケジュール安定度', value: castHealth.schedule_consistency, desc: '配信頻度と時刻の一貫性' },
+                      { label: '売上トレンド', value: castHealth.revenue_trend, desc: '50=横ばい、50超=成長' },
+                      { label: '配信品質', value: castHealth.broadcast_quality, desc: '視聴者数・チップ・チャット活性度' },
+                      { label: 'DM依存度', value: castHealth.dm_dependency, desc: '高い=DMがないと売上減少', invert: true },
+                      { label: '独立リスク', value: castHealth.independence_risk, desc: '高い=自力で成長中', invert: true },
+                    ].map(g => (
+                      <div key={g.label} className="glass-card p-4 text-center">
+                        <p className="text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>{g.label}</p>
+                        <p className="text-2xl font-bold" style={{
+                          color: (g as any).invert
+                            ? (g.value <= 30 ? 'var(--accent-green)' : g.value <= 60 ? 'var(--accent-amber)' : 'var(--accent-pink)')
+                            : (g.value >= 70 ? 'var(--accent-green)' : g.value >= 40 ? 'var(--accent-amber)' : 'var(--accent-pink)'),
+                        }}>{g.value}</p>
+                        <div className="w-full h-1.5 rounded-full mt-2" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                          <div className="h-1.5 rounded-full transition-all" style={{
+                            width: `${g.value}%`,
+                            background: (g as any).invert
+                              ? (g.value <= 30 ? 'var(--accent-green)' : g.value <= 60 ? 'var(--accent-amber)' : 'var(--accent-pink)')
+                              : (g.value >= 70 ? 'var(--accent-green)' : g.value >= 40 ? 'var(--accent-amber)' : 'var(--accent-pink)'),
+                          }} />
+                        </div>
+                        <p className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>{g.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Session Quality Table */}
+                  {sessionQualities.length > 0 && (
+                    <div className="glass-card p-5">
+                      <h3 className="text-sm font-bold mb-3">配信品質スコア（直近20セッション）</h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-[11px]">
+                          <thead>
+                            <tr style={{ color: 'var(--text-muted)' }}>
+                              <th className="text-left py-2 px-2">日付</th>
+                              <th className="text-right py-2 px-2">時間</th>
+                              <th className="text-right py-2 px-2">視聴者</th>
+                              <th className="text-right py-2 px-2">コイン</th>
+                              <th className="text-right py-2 px-2">チャット</th>
+                              <th className="text-right py-2 px-2">tk/人</th>
+                              <th className="text-right py-2 px-2">chat/分</th>
+                              <th className="text-right py-2 px-2">スコア</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sessionQualities.map(sq => (
+                              <tr key={sq.session_id} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                                <td className="py-2 px-2">{new Date(sq.session_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}</td>
+                                <td className="text-right py-2 px-2">{sq.duration_minutes}分</td>
+                                <td className="text-right py-2 px-2">{sq.peak_viewers}</td>
+                                <td className="text-right py-2 px-2" style={{ color: 'var(--accent-amber)' }}>{sq.total_coins.toLocaleString()}</td>
+                                <td className="text-right py-2 px-2">{sq.chat_count}</td>
+                                <td className="text-right py-2 px-2">{sq.tip_per_viewer}</td>
+                                <td className="text-right py-2 px-2">{sq.chat_per_minute}</td>
+                                <td className="text-right py-2 px-2 font-bold" style={{
+                                  color: sq.quality_score >= 70 ? 'var(--accent-green)' :
+                                         sq.quality_score >= 40 ? 'var(--accent-amber)' : 'var(--accent-pink)',
+                                }}>{sq.quality_score}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
