@@ -501,6 +501,38 @@ function CastDetailInner() {
   const [settingsMsg, setSettingsMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
+  // Cost settings (P/L)
+  const [costHourlyRate, setCostHourlyRate] = useState<string>('0');
+  const [costMonthlyFixed, setCostMonthlyFixed] = useState<string>('0');
+  const [costPlatformFee, setCostPlatformFee] = useState<string>('40.00');
+  const [costTokenJpy, setCostTokenJpy] = useState<string>('5.5');
+  const [costBonusRate, setCostBonusRate] = useState<string>('0');
+  const [costSaving, setCostSaving] = useState(false);
+  const [costMsg, setCostMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [costLoaded, setCostLoaded] = useState(false);
+
+  // Session P/L
+  interface SessionPL {
+    session_id: string; cast_name: string; session_date: string;
+    started_at: string; ended_at: string | null; duration_minutes: number;
+    total_tokens: number; peak_viewers: number;
+    gross_revenue_jpy: number; platform_fee_jpy: number; net_revenue_jpy: number;
+    cast_cost_jpy: number; gross_profit_jpy: number; profit_margin: number;
+    hourly_rate: number; token_to_jpy: number;
+  }
+  const [sessionPL, setSessionPL] = useState<SessionPL[]>([]);
+  const [sessionPLLoading, setSessionPLLoading] = useState(false);
+
+  // Monthly P/L
+  interface MonthlyPL {
+    month: string; cast_name: string; total_sessions: number; total_hours: number;
+    total_tokens: number; gross_revenue_jpy: number; platform_fee_jpy: number;
+    net_revenue_jpy: number; total_cast_cost_jpy: number; monthly_fixed_cost_jpy: number;
+    gross_profit_jpy: number; profit_margin: number;
+  }
+  const [monthlyPL, setMonthlyPL] = useState<MonthlyPL[]>([]);
+  const [monthlyPLLoading, setMonthlyPLLoading] = useState(false);
+
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
 
@@ -607,6 +639,50 @@ function CastDetailInner() {
     setSettingsDisplayName(castInfo.display_name || '');
     setSettingsNotes(castInfo.notes || '');
   }, [castInfo]);
+
+  // Cost settings: load from cast_cost_settings
+  useEffect(() => {
+    if (!accountId || activeTab !== 'settings' || costLoaded) return;
+    sb.from('cast_cost_settings')
+      .select('*')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .order('effective_from', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) {
+          setCostHourlyRate(String(data.hourly_rate || 0));
+          setCostMonthlyFixed(String(data.monthly_fixed_cost || 0));
+          setCostPlatformFee(String(data.platform_fee_rate || 40));
+          setCostTokenJpy(String(data.token_to_jpy || 5.5));
+          setCostBonusRate(String(data.bonus_rate || 0));
+        }
+        setCostLoaded(true);
+      });
+  }, [accountId, castName, activeTab, costLoaded, sb]);
+
+  // Session P/L: load when sales tab active
+  useEffect(() => {
+    if (!accountId || activeTab !== 'sales') return;
+    setSessionPLLoading(true);
+    sb.rpc('get_session_pl', { p_account_id: accountId, p_cast_name: castName, p_days: 90 })
+      .then(({ data, error }) => {
+        if (!error && data) setSessionPL(data as SessionPL[]);
+        setSessionPLLoading(false);
+      });
+  }, [accountId, castName, activeTab, sb]);
+
+  // Monthly P/L: load when sales tab active
+  useEffect(() => {
+    if (!accountId || activeTab !== 'sales') return;
+    setMonthlyPLLoading(true);
+    sb.rpc('get_monthly_pl', { p_account_id: accountId, p_cast_name: castName, p_months: 6 })
+      .then(({ data, error }) => {
+        if (!error && data) setMonthlyPL(data as MonthlyPL[]);
+        setMonthlyPLLoading(false);
+      });
+  }, [accountId, castName, activeTab, sb]);
 
   // Alert rules loading
   useEffect(() => {
@@ -4528,6 +4604,169 @@ function CastDetailInner() {
                       </div>
                     </div>
                   </div>
+
+                  {/* ============ セッション別P/L ============ */}
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                      📊 セッション別P/L（損益）
+                    </h3>
+                    {sessionPLLoading ? (
+                      <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    ) : sessionPL.length === 0 ? (
+                      <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
+                        コスト未設定 — 設定タブの「コスト設定」で時給・手数料を入力してください
+                      </p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                              <th className="text-left py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>日付</th>
+                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>時間</th>
+                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>トークン</th>
+                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>粗売上</th>
+                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>手数料</th>
+                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>人件費</th>
+                              <th className="text-right py-2 px-1.5 font-bold" style={{ color: 'var(--text-muted)' }}>粗利</th>
+                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>利益率</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sessionPL.slice(0, 20).map((row, i) => {
+                              const isProfit = row.gross_profit_jpy >= 0;
+                              return (
+                                <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                  <td className="py-1.5 px-1.5">
+                                    {row.started_at ? formatJST(row.started_at).slice(0, 10) : row.session_date}
+                                  </td>
+                                  <td className="py-1.5 px-1.5 text-right tabular-nums">
+                                    {row.duration_minutes > 0 ? `${Math.floor(row.duration_minutes / 60)}h${row.duration_minutes % 60}m` : '—'}
+                                  </td>
+                                  <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                    {formatTokens(row.total_tokens)}
+                                  </td>
+                                  <td className="py-1.5 px-1.5 text-right tabular-nums">
+                                    {Math.round(row.gross_revenue_jpy).toLocaleString()}
+                                  </td>
+                                  <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
+                                    -{Math.round(row.platform_fee_jpy).toLocaleString()}
+                                  </td>
+                                  <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
+                                    -{Math.round(row.cast_cost_jpy).toLocaleString()}
+                                  </td>
+                                  <td className="py-1.5 px-1.5 text-right tabular-nums font-bold"
+                                    style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                                    {isProfit ? '+' : ''}{Math.round(row.gross_profit_jpy).toLocaleString()}
+                                  </td>
+                                  <td className="py-1.5 px-1.5 text-right tabular-nums"
+                                    style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                                    {row.profit_margin > 0 ? '+' : ''}{row.profit_margin}%
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                        {sessionPL.length > 20 && (
+                          <p className="text-[10px] text-center mt-2" style={{ color: 'var(--text-muted)' }}>
+                            直近20件を表示（全{sessionPL.length}件）
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* ============ 月次P/L ============ */}
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                      📅 月次P/L
+                    </h3>
+                    {monthlyPLLoading ? (
+                      <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    ) : monthlyPL.length === 0 ? (
+                      <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
+                        コスト未設定 — 設定タブの「コスト設定」で時給・手数料を入力してください
+                      </p>
+                    ) : (
+                      <>
+                        {/* 月次バーチャート */}
+                        <div className="flex items-end gap-1 h-32 mb-4 px-2">
+                          {(() => {
+                            const maxRevenue = Math.max(...monthlyPL.map(m => Math.abs(m.net_revenue_jpy)), 1);
+                            return Array.from(monthlyPL).reverse().map((m, i) => {
+                              const isProfit = m.gross_profit_jpy >= 0;
+                              const barH = Math.max((Math.abs(m.net_revenue_jpy) / maxRevenue) * 100, 4);
+                              return (
+                                <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                                  <span className="text-[9px] font-bold tabular-nums"
+                                    style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                                    {Math.round(m.gross_profit_jpy / 1000)}k
+                                  </span>
+                                  <div className="w-full rounded-t-md transition-all" style={{
+                                    height: `${barH}%`,
+                                    background: isProfit
+                                      ? 'linear-gradient(to top, rgba(34,197,94,0.3), rgba(34,197,94,0.6))'
+                                      : 'linear-gradient(to top, rgba(244,63,94,0.3), rgba(244,63,94,0.6))',
+                                    border: `1px solid ${isProfit ? 'rgba(34,197,94,0.3)' : 'rgba(244,63,94,0.3)'}`,
+                                  }} />
+                                  <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                    {m.month.slice(5)}月
+                                  </span>
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+
+                        {/* 月次テーブル */}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                <th className="text-left py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>月</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>配信数</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>時間</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>ネット売上</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>人件費</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>固定費</th>
+                                <th className="text-right py-2 px-1.5 font-bold" style={{ color: 'var(--text-muted)' }}>粗利</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>利益率</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {monthlyPL.map((m, i) => {
+                                const isProfit = m.gross_profit_jpy >= 0;
+                                return (
+                                  <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                    <td className="py-1.5 px-1.5 font-medium">{m.month}</td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums">{m.total_sessions}</td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums">{m.total_hours}h</td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums">
+                                      {Math.round(m.net_revenue_jpy).toLocaleString()}円
+                                    </td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
+                                      -{Math.round(m.total_cast_cost_jpy).toLocaleString()}
+                                    </td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
+                                      {m.monthly_fixed_cost_jpy > 0 ? `-${m.monthly_fixed_cost_jpy.toLocaleString()}` : '—'}
+                                    </td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums font-bold"
+                                      style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                                      {isProfit ? '+' : ''}{Math.round(m.gross_profit_jpy).toLocaleString()}円
+                                    </td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums"
+                                      style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                                      {m.profit_margin > 0 ? '+' : ''}{m.profit_margin}%
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </>
               )}
             </div>
@@ -5367,7 +5606,89 @@ function CastDetailInner() {
                 </div>
               </div>
 
-              {/* セクション2: Collector設定 */}
+              {/* セクション2: コスト設定（P/L） */}
+              <div className="glass-card p-5">
+                <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                  💰 コスト設定（P/L算出用）
+                </h3>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                        キャスト時給（円）
+                      </label>
+                      <input type="number" className="input-glass w-full px-3 py-2 text-sm rounded-xl"
+                        value={costHourlyRate} onChange={e => setCostHourlyRate(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                        月額固定費（円）
+                      </label>
+                      <input type="number" className="input-glass w-full px-3 py-2 text-sm rounded-xl"
+                        value={costMonthlyFixed} onChange={e => setCostMonthlyFixed(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                        手数料率（%）
+                      </label>
+                      <input type="number" step="0.1" className="input-glass w-full px-3 py-2 text-sm rounded-xl"
+                        value={costPlatformFee} onChange={e => setCostPlatformFee(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                        1tk = 円
+                      </label>
+                      <input type="number" step="0.1" className="input-glass w-full px-3 py-2 text-sm rounded-xl"
+                        value={costTokenJpy} onChange={e => setCostTokenJpy(e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-muted)' }}>
+                        ボーナス率（%）
+                      </label>
+                      <input type="number" step="0.1" className="input-glass w-full px-3 py-2 text-sm rounded-xl"
+                        value={costBonusRate} onChange={e => setCostBonusRate(e.target.value)} />
+                    </div>
+                  </div>
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                    Stripchat標準: 手数料40%、1tk=約5.5円。設定するとセッション別・月次のP/L（損益）が売上タブに表示されます。
+                  </p>
+                  <div className="flex items-center gap-2 justify-end pt-1">
+                    {costMsg && (
+                      <span className="text-[11px]" style={{ color: costMsg.type === 'ok' ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                        {costMsg.text}
+                      </span>
+                    )}
+                    <button
+                      onClick={async () => {
+                        if (!accountId) return;
+                        setCostSaving(true);
+                        setCostMsg(null);
+                        const { error } = await sb.from('cast_cost_settings').upsert({
+                          account_id: accountId,
+                          cast_name: castName,
+                          hourly_rate: parseInt(costHourlyRate) || 0,
+                          monthly_fixed_cost: parseInt(costMonthlyFixed) || 0,
+                          platform_fee_rate: parseFloat(costPlatformFee) || 40,
+                          token_to_jpy: parseFloat(costTokenJpy) || 5.5,
+                          bonus_rate: parseFloat(costBonusRate) || 0,
+                          effective_from: new Date().toISOString().slice(0, 10),
+                        }, { onConflict: 'account_id,cast_name,effective_from' });
+                        setCostSaving(false);
+                        setCostMsg(error ? { type: 'err', text: `保存失敗: ${error.message}` } : { type: 'ok', text: 'コスト設定を保存しました' });
+                      }}
+                      disabled={costSaving}
+                      className="btn-primary text-xs px-5 py-2"
+                      style={{ opacity: costSaving ? 0.5 : 1 }}
+                    >
+                      {costSaving ? '保存中...' : 'コスト設定を保存'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* セクション3: Collector設定 */}
               <div className="glass-card p-5">
                 <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
                   📡 Collector設定
