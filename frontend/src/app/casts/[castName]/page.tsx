@@ -125,11 +125,9 @@ interface ScreenshotItem {
   id: string;
   cast_name: string;
   session_id: string | null;
-  filename: string;
-  storage_path: string | null;
-  thumbnail_url: string | null;
+  image_url: string;
+  thumbnail_type: string | null;
   captured_at: string;
-  signedUrl?: string | null;
 }
 
 interface AcquisitionUser {
@@ -1652,8 +1650,8 @@ function CastDetailInner() {
     if (!accountId || activeTab !== 'screenshots') return;
     setScreenshotsLoading(true);
     (async () => {
-      const { data, error } = await sb.from('screenshots')
-        .select('id, cast_name, session_id, filename, storage_path, thumbnail_url, captured_at')
+      const { data, error } = await sb.from('cast_screenshots')
+        .select('id, cast_name, session_id, image_url, thumbnail_type, captured_at')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
         .order('captured_at', { ascending: false })
@@ -1664,22 +1662,7 @@ function CastDetailInner() {
         return;
       }
 
-      // storage_path から signed URL を一括生成（privateバケット対応）
-      const withUrls = await Promise.all(
-        (data as ScreenshotItem[]).map(async (ss) => {
-          if (!ss.storage_path) return ss;
-          // storage_path = "screenshots/castName/filename" — バケット名を除いたパスが必要
-          const pathInBucket = ss.storage_path.startsWith('screenshots/')
-            ? ss.storage_path.slice('screenshots/'.length)
-            : ss.storage_path;
-          const { data: signedData } = await sb.storage
-            .from('screenshots')
-            .createSignedUrl(pathInBucket, 3600); // 1時間有効
-          return { ...ss, signedUrl: signedData?.signedUrl || null };
-        })
-      );
-
-      setScreenshots(withUrls);
+      setScreenshots(data as ScreenshotItem[]);
       setScreenshotsLoading(false);
     })();
   }, [accountId, castName, activeTab, sb]);
@@ -5035,14 +5018,13 @@ function CastDetailInner() {
                 ) : (
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                     {screenshots.map((ss) => {
-                      const imageUrl = ss.thumbnail_url || ss.signedUrl || null;
                       return (
                         <div key={ss.id} className="glass-panel rounded-xl overflow-hidden">
-                          {imageUrl ? (
-                            <a href={imageUrl} target="_blank" rel="noopener noreferrer">
+                          {ss.image_url ? (
+                            <a href={ss.image_url} target="_blank" rel="noopener noreferrer">
                               <img
-                                src={imageUrl}
-                                alt={ss.filename}
+                                src={ss.image_url}
+                                alt={`${ss.cast_name} ${formatJST(ss.captured_at)}`}
                                 className="w-full aspect-video object-cover hover:opacity-80 transition-opacity"
                                 loading="lazy"
                               />
@@ -5050,21 +5032,18 @@ function CastDetailInner() {
                           ) : (
                             <div className="w-full aspect-video flex items-center justify-center text-[10px]"
                               style={{ background: 'rgba(15,23,42,0.6)', color: 'var(--text-muted)' }}>
-                              Storage未設定
+                              画像なし
                             </div>
                           )}
                           <div className="p-2">
                             <p className="text-[10px] truncate flex items-center" style={{ color: 'var(--text-secondary)' }}>
-                              {ss.filename}
-                              {ss.thumbnail_url && (
+                              {formatJST(ss.captured_at)}
+                              {ss.thumbnail_type && (
                                 <span className="text-[8px] px-1 py-0.5 rounded ml-1"
                                   style={{ background: 'rgba(34,197,94,0.1)', color: 'var(--accent-green)' }}>
-                                  CDN
+                                  {ss.thumbnail_type}
                                 </span>
                               )}
-                            </p>
-                            <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                              {formatJST(ss.captured_at)}
                             </p>
                           </div>
                         </div>
