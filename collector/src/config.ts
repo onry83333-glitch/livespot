@@ -33,6 +33,19 @@ export const AUTH_CONFIG = {
   autoRefresh: process.env.AUTH_AUTO_REFRESH !== 'false',
 };
 
+// ----- Playwright auth config -----
+function parseHeadless(val: string | undefined): boolean {
+  if (val === 'false') return false;
+  return true; // default = new headless mode (Cloudflare対策)
+}
+
+export const PLAYWRIGHT_CONFIG = {
+  timeoutMs: parseInt(process.env.PLAYWRIGHT_TIMEOUT || '60000', 10),
+  headless: parseHeadless(process.env.PLAYWRIGHT_HEADLESS),
+  username: process.env.STRIPCHAT_USERNAME || '',
+  password: process.env.STRIPCHAT_PASSWORD || '',
+};
+
 // ----- Polling config -----
 export const POLL_INTERVALS = {
   statusSec: parseInt(process.env.STATUS_POLL_INTERVAL || '180', 10),

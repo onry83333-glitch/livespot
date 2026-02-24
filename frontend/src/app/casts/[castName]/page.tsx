@@ -328,6 +328,11 @@ function CastDetailInner() {
   const [dmSchedules, setDmSchedules] = useState<DmScheduleItem[]>([]);
   const [dmScheduleSaving, setDmScheduleSaving] = useState(false);
 
+  // DM Image
+  const [dmImageFile, setDmImageFile] = useState<File | null>(null);
+  const [dmImagePreview, setDmImagePreview] = useState<string | null>(null);
+  const dmImageInputRef = useRef<HTMLInputElement>(null);
+
   // DM Safety: 3-step confirmation
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [sendUnlocked, setSendUnlocked] = useState(false);
@@ -1058,14 +1063,44 @@ function CastDetailInner() {
         console.warn('[DM-Cast] Step1 RPC exception, fallback to INSERT:', rpcException);
       }
 
+      // Step 1.5: 画像があればSupabase Storageにアップロード
+      let uploadedImageUrl: string | null = null;
+      if (dmImageFile) {
+        const ext = dmImageFile.name.split('.').pop() || 'jpg';
+        const path = `dm/${accountId}/${timestamp}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const { error: uploadErr } = await sb.storage.from('dm-images').upload(path, dmImageFile, {
+          contentType: dmImageFile.type,
+          upsert: false,
+        });
+        if (uploadErr) {
+          console.error('[DM-Cast] 画像アップロード失敗:', uploadErr.message);
+          setDmError(`画像アップロード失敗: ${uploadErr.message}`);
+          setDmSending(false);
+          return;
+        }
+        const { data: urlData } = sb.storage.from('dm-images').getPublicUrl(path);
+        uploadedImageUrl = urlData.publicUrl;
+        console.log('[DM-Cast] 画像アップロード完了:', uploadedImageUrl);
+      }
+
       // Step 2: RPC失敗時のフォールバック — 直接INSERT
-      if (!usedRpc) {
+      // 画像付きの場合もRPCは非対応なので直接INSERT
+      if (!usedRpc || uploadedImageUrl) {
+        if (usedRpc && uploadedImageUrl) {
+          // RPC成功したが画像ありなので、RPC登録分にimage_urlを一括更新
+          await sb.from('dm_send_log')
+            .update({ image_url: uploadedImageUrl, image_sent: true })
+            .eq('campaign', originalBid);
+          console.log('[DM-Cast] RPC登録分にimage_url付与:', originalBid);
+        } else if (!usedRpc) {
         console.log('[DM-Cast] Step2: direct INSERT for', usernames.length, 'users');
         originalBid = `bulk_${timestamp}`;
         const rows = usernames.map(un => ({
           account_id: accountId,
           user_name: un,
           message: dmMessage,
+          image_url: uploadedImageUrl,
+          image_sent: !!uploadedImageUrl,
           status: 'queued',
           campaign: originalBid,
           cast_name: castName,
@@ -1079,6 +1114,7 @@ function CastDetailInner() {
           return;
         }
         console.log('[DM-Cast] Step2 INSERT success:', rows.length, 'rows');
+        }
       }
 
       // Step 3: キャンペーン名更新
@@ -1092,6 +1128,8 @@ function CastDetailInner() {
       setDmTargets(new Set());
       setDmMessage('');
       setDmCampaign('');
+      setDmImageFile(null);
+      if (dmImagePreview) { URL.revokeObjectURL(dmImagePreview); setDmImagePreview(null); }
 
       // ログ再取得
       const { data: logs } = await sb.from('dm_send_log')
@@ -1106,7 +1144,7 @@ function CastDetailInner() {
       setDmError(errMsg);
     }
     setDmSending(false);
-  }, [dmTargets, dmMessage, dmCampaign, dmSendMode, dmTabs, accountId, castName, sb]);
+  }, [dmTargets, dmMessage, dmCampaign, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview]);
 
   const toggleTarget = useCallback((un: string) => {
     setDmTargets(prev => { const n = new Set(prev); if (n.has(un)) n.delete(un); else n.add(un); return n; });
@@ -2741,6 +2779,56 @@ function CastDetailInner() {
                         <textarea value={dmMessage} onChange={e => setDmMessage(e.target.value)}
                           className="input-glass text-xs w-full h-24 resize-none"
                           placeholder="メッセージを入力... {username}でユーザー名置換" />
+                      </div>
+
+                      {/* 画像添付 */}
+                      <div className="mb-3">
+                        <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>画像添付（任意）</label>
+                        <input
+                          ref={dmImageInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setDmImageFile(file);
+                              if (dmImagePreview) URL.revokeObjectURL(dmImagePreview);
+                              setDmImagePreview(URL.createObjectURL(file));
+                            }
+                            e.target.value = '';
+                          }}
+                        />
+                        {dmImagePreview ? (
+                          <div className="flex items-start gap-3">
+                            <div className="relative">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={dmImagePreview} alt="DM画像プレビュー" className="w-20 h-20 rounded-lg object-cover border" style={{ borderColor: 'var(--border-glass)' }} />
+                              <button
+                                onClick={() => {
+                                  setDmImageFile(null);
+                                  if (dmImagePreview) URL.revokeObjectURL(dmImagePreview);
+                                  setDmImagePreview(null);
+                                }}
+                                className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px]"
+                                style={{ background: 'var(--accent-pink)', color: 'white' }}
+                              >
+                                x
+                              </button>
+                            </div>
+                            <div className="text-[10px] pt-1" style={{ color: 'var(--text-muted)' }}>
+                              <p>{dmImageFile?.name}</p>
+                              <p>{dmImageFile ? `${(dmImageFile.size / 1024).toFixed(0)}KB` : ''}</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => dmImageInputRef.current?.click()}
+                            className="btn-ghost text-[10px] px-3 py-1.5 rounded-lg"
+                          >
+                            🖼 画像を選択
+                          </button>
+                        )}
                       </div>
 
                       {/* 送信モード: 即時 / スケジュール */}
@@ -6041,6 +6129,14 @@ function CastDetailInner() {
                 <div className="glass-panel p-3 rounded-xl">
                   <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>キャンペーン</p>
                   <p className="text-xs">{dmCampaign}</p>
+                </div>
+              )}
+
+              {dmImagePreview && (
+                <div className="glass-panel p-3 rounded-xl">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>添付画像</p>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={dmImagePreview} alt="DM添付画像" className="w-16 h-16 rounded-lg object-cover" />
                 </div>
               )}
 

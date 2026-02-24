@@ -42,7 +42,18 @@ app/
   reports/page.tsx    # /reports — AIレポート
   feed/page.tsx       # /feed — フィード
   settings/page.tsx   # /settings — セキュリティ・レート制限設定
+  casts/[castName]/sessions/[sessionId]/page.tsx  # セッション詳細（配信前/中/後3モード）
+  spy/analysis/page.tsx  # SPY分析
   admin/command-center/page.tsx  # /admin/command-center — Wisteria コマンドセンター（4タブ: コマンド/戦略/オペレーション/アセット）
+  admin/health/page.tsx  # /admin/health — 品質チェックダッシュボード（5項目ワンクリック）
+  api/transcribe/route.ts  # POST Whisper API文字起こし
+  api/screenshot/route.ts  # GET Stripchat CDNプロキシ+DB保存
+  api/analyze-session/route.ts  # POST 配信AI分析（ルールベース）
+  api/persona/route.ts  # GET/POST/PUT ペルソナCRUD+DM生成
+  api/dm/send/route.ts  # POST DM送信（サーバーサイド）
+  api/dm/batch/route.ts  # POST DM一括送信
+  api/ai-report/route.ts  # POST AIレポート生成
+  api/stripchat/test/route.ts  # GET Stripchat API接続テスト
 components/
   auth-provider.tsx   # AuthContext (user, session, loading, signOut) + リダイレクト制御
   app-shell.tsx       # publicページ判定、サイドバー表示/非表示、ローディングスピナー
@@ -55,7 +66,15 @@ hooks/
 lib/
   supabase/client.ts  # createBrowserClient (@supabase/ssr)
   api.ts              # 認証付きfetch wrapper (Bearer token自動付与)
-  utils.ts            # cn(), formatTokens(), tokensToJPY(), formatJST(), timeAgo()
+  api-auth.ts         # API Route認証ユーティリティ（JWT検証+account_id検証+レート制限）
+  dm-sender.ts        # DM送信キュー汎用ユーティリティ（RPC+フォールバックINSERT）
+  scenario-engine.ts  # DMシナリオエンジン（ステップ進行+ゴール検出+AI文面生成）
+  stripchat-api.ts    # Stripchat API統合クライアント（モデル情報/視聴者/DM送信/サムネイル）
+  cvr-calculator.ts   # CVR計算ユーティリティ
+  realtime-helpers.ts # Realtime購読ヘルパー
+  stripchat-levels.ts # Stripchatレベル判定
+  ticket-show-detector.ts  # チケットショー検出
+  utils.ts            # cn(), formatTokens(), tokensToJPY(), formatJST(), timeAgo(), COIN_RATE
 types/
   index.ts            # 全TypeScript型定義
 ```
@@ -119,10 +138,52 @@ migrations/
   015_user_acquisition_dashboard.sql  # get_user_acquisition_dashboard RPC
   016_dashboard_improvements.sql  # dashboard v2 (p_max_coins) + search_user_detail
   017_search_users_bulk.sql   # search_users_bulk RPC（完全一致 + 該当なし対応）
+  018_dm_campaign_cvr.sql     # DMキャンペーンCVR計算
+  018_get_cast_paid_users.sql # キャスト別課金ユーザーRPC
+  019_coin_tx_cast_name_and_reassign.sql  # coin_transactions cast_name再割当
   020_check_data_integrity.sql  # check_data_integrity RPC（16項目データ整合性チェック）
   021_fix_dm_send_log_cast_name.sql  # dm_send_log cast_name NULL修正（2,309行バックフィル）
   022_dedup_coin_transactions.sql  # coin_transactions重複削除 + ユニークインデックス
   023_pipeline_status.sql     # pipeline_status テーブル + 自動検出RPC（update_pipeline_auto_status）
+  024_coin_tx_tokens_positive_check.sql  # coin_transactions tokens正値チェック
+  025_competitive_analysis_rpc.sql  # 他社SPY分析RPC
+  026_thankyou_dm_and_churn.sql  # お礼DM + 離脱防止RPC
+  027_spy_user_color.sql      # SPYユーザーカラー設定
+  028_spy_user_league_level.sql  # SPYユーザーリーグ・レベル
+  029_viewer_stats_breakdown.sql  # 視聴者統計内訳
+  030_cast_tags.sql           # キャストタグ管理
+  031_session_broadcast_title.sql  # セッション配信タイトル
+  032_cast_profiles_feeds_survival.sql  # キャストプロフィール・フィード・生存率
+  033_ticket_show_analysis.sql  # チケットショー分析
+  034_screenshots.sql         # スクリーンショットテーブル
+  035_cast_types.sql          # キャスト種別
+  035_screenshots_thumbnail_url.sql  # スクリーンショットサムネイルURL追加
+  036_coin_sync_status_rpc.sql  # コイン同期ステータスRPC
+  037_screenshot_interval.sql  # スクリーンショット間隔設定
+  038_refresh_segments.sql    # セグメントリフレッシュ
+  039_cast_persona.sql        # キャストペルソナ（初期版）
+  040_gc_rate_per_minute.sql  # GCレート（分単位）
+  041_dm_scenarios.sql        # DMシナリオテーブル
+  042_dm_send_log_ai_columns.sql  # dm_send_log AI関連カラム追加
+  043_stripchat_sessions.sql  # Stripchatセッション同期テーブル
+  044_spy_viewers.sql         # spy_viewers テーブル（視聴者リアルタイム取得）
+  045_create_dm_batch_rpc.sql  # create_dm_batch RPC（プラン上限チェック+一括INSERT）
+  046_spy_messages_bigint.sql  # spy_messages ID bigint化
+  047_get_new_users_by_session.sql  # セッション別新規ユーザーRPC
+  048_get_session_revenue_breakdown.sql  # セッション売上内訳RPC
+  049_get_session_list_and_summary.sql  # セッション一覧+サマリーRPC
+  050_fix_session_rpcs.sql    # セッションRPC修正
+  051_get_session_actions.sql  # 配信後アクションRPC
+  052_cast_transcripts.sql    # 文字起こしテーブル
+  053_session_merge_and_coin_match.sql  # セッション統合+コイン突合
+  054_cast_screenshots.sql    # キャストスクリーンショット管理
+  055_transcript_timeline.sql  # 時刻突合タイムラインRPC（文字起こし+チャット+課金）
+  056_cast_personas.sql       # cast_personas テーブル + デフォルトデータ（Phase 3）
+  057_dm_scenarios_v2.sql     # DMシナリオv2（steps+enrollments+初期3件）
+  058_spy_market_analysis.sql  # 他社SPYマーケット分析RPC 3関数
+  059_fix_dm_batch_cast_name.sql  # create_dm_batch RPC cast_name パラメータ追加
+  064_dm_triggers.sql           # DMトリガーエンジン（dm_triggers + dm_trigger_logs + デフォルト7件）
+  065_spy_analysis_rpcs.sql      # SPY集計・トレンド分析RPC 5関数（配信/課金パターン/成長曲線/ゴール/マーケットトレンド）
 ```
 
 ---
@@ -157,6 +218,16 @@ migrations/
 | ai_reports | id (UUID) | AI生成レポート |
 | audio_recordings | id (UUID) | 音声録音 |
 | pipeline_status | id (SERIAL) | パイプライン稼働状態（10プロセス、自動検出RPC連携） |
+| cast_transcripts | id (UUID) | 文字起こしセグメント（Whisper API結果） |
+| cast_screenshots | id (UUID) | キャストスクリーンショット（CDNプロキシ） |
+| cast_personas | id (UUID) | キャストペルソナ設定（System Prompt 3層） |
+| dm_scenarios | id (UUID) | DMシナリオ定義（お礼/離脱防止/復帰等） |
+| dm_scenario_steps | id (UUID) | シナリオ内ステップ定義 |
+| dm_scenario_enrollments | id (UUID) | ユーザーのシナリオ進行状態 |
+| spy_viewers | id (UUID) | 視聴者リアルタイム取得結果 |
+| stripchat_sessions | id (UUID) | Stripchatセッション同期 |
+| dm_triggers | id (UUID) | DM自動トリガー定義（7種） |
+| dm_trigger_logs | id (BIGSERIAL) | トリガー発火ログ（クールダウン管理） |
 
 ### spy_messages カラム
 ```
@@ -213,6 +284,28 @@ created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
 | check_data_integrity | (p_valid_since) | 16項目データ整合性チェック（JSONB返却） |
 | update_pipeline_auto_status | () | SPY/コイン同期/DM最新タイムスタンプから pipeline_status 自動更新 |
 | update_pipeline_timestamp | () | pipeline_status updated_at 自動更新トリガー関数 |
+
+### RPC関数（追加分 024〜059）
+| 関数 | 引数 | 説明 |
+|---|---|---|
+| get_cast_paid_users | (account_id, cast_name) | キャスト別課金ユーザー一覧 |
+| create_dm_batch | (account_id, cast_name, targets[], message, template_name) | DM一括キュー登録（プラン上限チェック付き） |
+| get_new_users_by_session | (account_id, cast_name, session_id) | セッション別新規課金ユーザー |
+| get_session_revenue_breakdown | (account_id, session_id) | セッション売上内訳（タイプ別） |
+| get_session_list | (account_id, cast_name, limit) | セッション一覧（spy_messages GROUP BY） |
+| get_session_summary | (account_id, cast_name, session_id) | セッション詳細サマリー |
+| get_session_list_v2 | (account_id, cast_name, limit) | セッション一覧v2（統合+コイン突合） |
+| get_session_summary_v2 | (account_id, cast_name, session_id) | セッション詳細v2（コイン突合付き） |
+| get_session_actions | (account_id, cast_name, session_id) | 配信後アクション（初課金/高額/来訪無アクション/DM未来訪） |
+| get_transcript_timeline | (account_id, session_id) | 時刻突合タイムライン（文字起こし+チャット+課金統合） |
+| get_spy_market_now | (account_id, days) | 他社SPY現在時刻のマーケット概況 |
+| get_spy_viewer_trends | (account_id, days) | 他社SPY視聴者トレンド（時間×キャスト） |
+| get_spy_revenue_types | (account_id, days) | 他社SPY収入タイプ分布 |
+| get_spy_cast_schedule_pattern | (account_id, cast_name?, days) | 配信パターン分析（曜日×時間帯の配信頻度・売上） |
+| get_user_payment_pattern | (account_id, cast_name?, days) | 課金パターン分析（金額帯・リピート率・時間帯） |
+| get_cast_growth_curve | (account_id, cast_name?, days) | 成長曲線（日次KPIトレンド＋7日移動平均） |
+| get_goal_achievement_analysis | (account_id, cast_name?, days) | ゴール達成分析（頻度・金額・時間帯） |
+| get_market_trend | (account_id, days) | マーケットトレンド（自社vs他社の日次シェア推移） |
 
 ### ヘルパー関数（001_initial_schema.sql）
 | 関数 | 説明 |
@@ -320,6 +413,18 @@ AuthProvider (onAuthStateChange監視)
 | PUT | /{script_id} | 台本更新 |
 | DELETE | /{script_id} | 台本削除 |
 
+### Next.js API Routes（フロントエンド内サーバーサイド）
+| Method | Path | 説明 |
+|---|---|---|
+| POST | /api/transcribe | Whisper API文字起こし（FormData: audio, session_id, cast_name, account_id） |
+| GET | /api/screenshot | Stripchat CDNプロキシ + cast_screenshots DB保存 |
+| POST | /api/analyze-session | 配信AI分析（ルールベース Phase 1） |
+| GET/POST/PUT | /api/persona | ペルソナCRUD + DM文面生成（cast_personas連携） |
+| POST | /api/dm/send | DM送信（サーバーサイド） |
+| POST | /api/dm/batch | DM一括送信（認証cookie-based） |
+| POST | /api/ai-report | AIレポート生成 |
+| GET | /api/stripchat/test | Stripchat API接続テスト（認証不要） |
+
 ---
 
 ## フロントエンド ページ状態
@@ -344,7 +449,9 @@ AuthProvider (onAuthStateChange監視)
 | /reports | app/reports/page.tsx | 実装済み（AIレポート） |
 | /feed | app/feed/page.tsx | 実装済み（フィード） |
 | /settings | app/settings/page.tsx | 実装済み（セキュリティ・設定） |
+| /casts/[castName]/sessions/[sessionId] | app/casts/[castName]/sessions/[sessionId]/page.tsx | 実装済み（配信前/中/後3モード、DM送信接続、マーケット分析） |
 | /admin/command-center | app/admin/command-center/page.tsx | 実装済み（Wisteria 4タブ、pipeline_status連携、60sポーリング） |
+| /admin/health | app/admin/health/page.tsx | 実装済み（5項目品質チェック） |
 
 ---
 
@@ -354,7 +461,9 @@ AuthProvider (onAuthStateChange監視)
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://ujgbhkllfeacbgpdbjto.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbG...
+SUPABASE_SERVICE_ROLE_KEY=eyJhbG...（サービスロールキー、API Routes用）
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+OPENAI_API_KEY=sk-...（Whisper API文字起こし用）
 ```
 
 ### backend/.env
@@ -491,29 +600,29 @@ claude
 ### スキーマで対応済み（1個）
 - #1 DMキャンペーン追跡 → dm_send_log.campaign カラム
 
-### Phase 1 で対応（4個）
-- #5 VIPアラート → spy_messages + paid_users ルックアップ（vip_checker.py 実装済み、フロント未接続）
-- #8 お礼DM自動 → dm_send_log + トリガー/Edge Function
-- #10 DM効果測定 → dm_effectiveness RPC関数（実装済み、フロント未接続）
-- #11 太客リアルタイム参照 → paying_users マテビュー + top_users_detail RPC
+### Phase 1 で対応（4個） — ✅ 完了
+- #5 VIPアラート → ✅ spy_messages + paid_users ルックアップ（vip_checker.py + フロント接続済み）
+- #8 お礼DM自動 → ✅ DMシナリオエンジン（gift_thank シナリオ）
+- #10 DM効果測定 → ✅ dm_effectiveness RPC + ダッシュボード実装済み
+- #11 太客リアルタイム参照 → ✅ paying_users マテビュー + top_users_detail RPC + UI表示
 
-### Phase 2 で対応（4個）
-- #7 Lead層識別 → coin_transactions からライフサイクル分類（active/dormant/churned/new）
-- #22 離脱→DM導線 → リテンションコホート → DM自動トリガー
-- #31 二重送信防止 → dm_send_log で user_name + campaign の重複チェック
-- #32 ブラックリスト → paid_users に blacklist フラグ追加（要マイグレーション）
+### Phase 2 で対応（4個） — ✅ 3/4完了
+- #7 Lead層識別 → ✅ 10セグメント分類（get_user_segments RPC）
+- #22 離脱→DM導線 → ✅ churn_recovery シナリオ + リテンションコホート
+- #31 二重送信防止 → 未着手
+- #32 ブラックリスト → 未着手
 
-### Phase 3 で対応（4個）
-- #29 キャスト横並び比較 → ダッシュボードにキャスト別集計ビュー
-- #35 user_timeline 統合 → 新テーブル or ビューで課金/DM/入室/チャットを統合
-- #6 音声紐付け → audio_recordings テーブル（スキーマ済み、処理未実装）
-- #34 GPU外出し → AI処理をCloud Run等に分離
+### Phase 3 で対応（4個） — ✅ 2/4完了
+- #29 キャスト横並び比較 → ✅ /analytics/compare 実装済み
+- #35 user_timeline 統合 → ✅ get_transcript_timeline RPC（文字起こし+チャット+課金の時刻突合）
+- #6 音声紐付け → cast_transcripts テーブル実装済み、クラウド化未着手
+- #34 GPU外出し → 未着手
 
 ---
 
-## ロードマップ
+## ロードマップ — 現在 Phase 4 実装中（進捗 85%）
 
-### Phase 1: MVP完成 — 完了
+### Phase 1: MVP完成 — ✅ 完了
 | タスク | 状態 |
 |---|---|
 | 認証（ログイン/新規登録/AuthProvider） | 完了 |
@@ -528,33 +637,121 @@ claude
 | セッション管理 + 視聴者統計 | 完了 |
 | アラートルール管理 | 完了 |
 
-### Phase 2: 運用品質
+### Phase 2: 運用品質 — ✅ 完了
 | タスク | 状態 |
 |---|---|
-| DM効果測定ダッシュボード（campaign別集計） | 完了 |
-| ユーザーセグメント分析（10セグメント RPC） | 完了 |
-| キャスト横並び比較（/analytics/compare） | 完了 |
-| お礼DM自動送信（ギフト検出→DM自動キュー登録） | 完了（シナリオエンジン Phase 1） |
-| 離脱ユーザー→DM自動トリガー | 完了（churn_recovery シナリオ） |
-| DMシナリオエンジン（ステップ配信 + ゴール検出） | 完了（Phase 1 + Phase 2 AI統合） |
-| Persona Agent統合（AI DM文面生成） | 完了（Phase 2） |
-| キャスト間データ分離修正 | 完了（品質巡回で発見・修正） |
+| DM効果測定ダッシュボード（campaign別集計） | ✅ 完了 |
+| ユーザーセグメント分析（10セグメント RPC） | ✅ 完了 |
+| キャスト横並び比較（/analytics/compare） | ✅ 完了 |
+| お礼DM自動送信（ギフト検出→DM自動キュー登録） | ✅ 完了（シナリオエンジン） |
+| 離脱ユーザー→DM自動トリガー | ✅ 完了（churn_recovery シナリオ） |
+| DMシナリオエンジン（ステップ配信 + ゴール検出） | ✅ 完了（AI統合済み） |
+| Persona Agent統合（AI DM文面生成） | ✅ 完了（Phase 3で3層化） |
+| キャスト間データ分離修正 | ✅ 完了（品質巡回で発見・修正） |
 | 二重送信防止ロジック | 未着手 |
 | ブラックリスト機能 | 未着手 |
 
-### Phase 3: スケーリング
+### Phase 3: AI・品質・コンテンツ分析 — ✅ 完了
+| タスク | 状態 |
+|---|---|
+| Persona Agent Phase 3（cast_personas + System Prompt 3層） | ✅ 完了（Migration 056） |
+| 時刻突合タイムライン（文字起こし+チャット+課金統合） | ✅ 完了（Migration 055） |
+| DM管理構造変更（キャスト選択→ユーザー別履歴→集計） | ✅ 完了 |
+| 配信分析タブ（broadcast analysis） | ✅ 完了 |
+| 品質チェックダッシュボード（/admin/health） | ✅ 完了 |
+| UX改善62件（品質巡回+UX巡回） | ✅ 完了（32件一括修正） |
+| Stripchat API統合レイヤー | ✅ 完了 |
+| セッション詳細強化（コインAPI並列表示+タイムライン） | ✅ 完了 |
+
+### Phase 4: プロダクション準備 — 🚧 実装中（進捗 85%）
 | タスク | 状態 |
 |---|---|
 | 本番デプロイ（Vercel + Cloud Run + Supabase） | 未着手 |
 | Stripe決済連携（プラン管理、課金） | 未着手 |
 | Chrome Web Store 公開 | 未着手 |
-| user_timeline 統合ビュー | 未着手 |
-| 音声クラウド化（録音→文字起こし→分析） | 未着手 |
+| 二重送信防止 | 未着手 |
+| ブラックリスト機能 | 未着手 |
+| CORS本番ドメイン限定 | 未着手 |
+| Chrome拡張メモリリーク対策 | 未着手 |
+| Backend例外処理改善 | 未着手 |
 | パフォーマンス最適化・負荷テスト | 未着手 |
 
 ---
 
 ## Recent Changes
+
+### [2026-02-24] SPY集計UI・トレンド分析
+
+**新規RPC関数（Migration 065）:**
+- get_spy_cast_schedule_pattern: 配信パターン分析（曜日×時間帯の配信頻度・視聴者・売上）
+- get_user_payment_pattern: 課金パターン分析（金額帯分布・リピート率・時間帯別課金行動）
+- get_cast_growth_curve: 成長曲線（日次KPIトレンド＋7日移動平均）
+- get_goal_achievement_analysis: ゴール達成分析（頻度・金額・時間帯傾向）
+- get_market_trend: マーケットトレンド（自社vs他社の日次シェア推移）
+
+**フロントエンド:**
+- SPYページ自社キャストに「分析」サブタブ追加（spy-analysis-tabs.tsx）
+- 4つの分析タブ: 配信パターン / 課金パターン / 成長曲線 / マーケットトレンド
+- recharts による対話的チャート（BarChart, LineChart, AreaChart）
+- キャストフィルタ、期間選択（7/30/90日）、曜日×時間帯ヒートマップ
+
+### [2026-02-24] DMトリガーエンジン実装
+
+**新規テーブル（Migration 064）:**
+- dm_triggers: DM自動トリガー定義（7種: first_visit/vip_no_tip/churn_risk/segment_upgrade/competitor_outflow/post_session/cross_promotion）
+- dm_trigger_logs: 発火ログ（クールダウン管理、効果測定用）
+- dm_send_log.trigger_log_id カラム追加
+
+**Collector拡張（collector/src/triggers/）:**
+- TriggerEngine クラス: トリガー定義5分キャッシュ、イベント/定期評価、遅延キュー
+- 7つの評価関数: first-visit, vip-no-tip, post-session, churn-risk, segment-upgrade, competitor-outflow, cross-promotion
+- collector.ts にフック3箇所挿入（session start/end、viewer list update）
+- index.ts にsetInterval 3つ追加（定期評価1h、遅延キュー1m、定義リフレッシュ5m）
+- ウォームアップ対策: 再起動後2サイクルはイベントトリガーをスキップ
+
+**フロントエンド:**
+- Settings画面に「DMトリガー」タブ追加（ON/OFFトグル、テンプレート編集、変数プレビュー、発火ログ100件）
+- types/index.ts に DmTrigger/DmTriggerLog 型追加
+
+### [2026-02-23] 26タスク完了 — Phase 4コア機能完成
+
+**配信単位ビュー基盤（7件）:**
+- セッション一覧 + RPC (Migration 049-050)
+- spy_messages GROUP BY修正（sessionsテーブル依存廃止）
+- 配信後モードUI + get_session_actions (Migration 051)
+- 配信前モードUI（セグメント別DM準備+テンプレート選択）
+- 配信中モードUI（Realtime + 3カラム）
+- cast_transcripts + 録画アップロードUI (Migration 052)
+- UXレビュー29件検出→24件修正
+
+**データ基盤（2件）:**
+- セッション統合 + coin_transactions突合 (Migration 053)
+- DM送信本実装（dm-sender.ts汎用化 + 配信前/中/後モード接続）
+
+**新機能（4件）:**
+- Persona Agent Phase 3: cast_personas + 統一API + System Prompt 3層 (Migration 056)
+- DMシナリオエンジン Phase 1: テーブル+エンロール+ゴール検出 (Migration 057)
+- 他社SPY マーケット分析: 3 RPC + 配信前モード/SPYページUI (Migration 058)
+- create_dm_batch RPC cast_name修正 (Migration 059)
+
+**品質管理・QA（4件）:**
+- COIN_RATE定数 lib/utils.ts 一元化（8ファイル統合）
+- 本番巡回テスト: RPC cast_name欠落修正 + Map iteration修正
+- Whisper API エラーハンドリング強化（ファイル形式チェック+日本語エラー+タイミングログ）
+- transcribe 25MBサイズチェック + coin_bar除算ゼロ防止 + DMリダイレクトループ防止
+
+**UI/UX改善（4件）:**
+- スクリーンショット撮影機能 (Migration 054)
+- DM管理構造変更（サイドバー→キャスト配下統合）
+- 週次集計ビュー（期間フィルタ+トレンドグラフ+CSVエクスポート）
+- DM送信前ユーザーリスト確認モーダル
+
+**Prompt 23-27完全実装（5件）:**
+- P-23: Realtime WebSocket無限ループ修正（6ファイル）
+- P-24: 品質チェック自動化 /admin/health
+- P-25: 配信分析ダッシュボード（キャスト詳細タブ）
+- P-26: 時刻突合 get_transcript_timeline RPC (Migration 055)
+- P-27: AI分析レイヤー /api/analyze-session（ルールベース Phase 1）
 
 ### [2026-02-22] 大規模更新
 - UX改善バッチ2: 32件修正（CVR丸め、Unicode 1,106個修正、ペルソナタブ非表示、売上2カラム化）
@@ -598,8 +795,11 @@ claude
 - [Low] use-realtime-spy.ts:179: delete に account_id なし（RLSで保護済み）
 
 - [2026-02-20] ✅ GC（グループチャット）検出＋課金トラッキング — content_spy.js + background.js + migration 040
-- [2026-02-20] ✅ DMシナリオエンジン Phase 1 — dm_scenarios + dm_scenario_enrollments テーブル、エンロール/ステップ進行/ゴール検出
-- [2026-02-20] ✅ DM Phase 2: Persona Agent統合 — generateDmMessage() + AI文面生成 + フォールバック + 承認UI + migration 042
+- [2026-02-20] ✅ DMシナリオエンジン — dm_scenarios + dm_scenario_enrollments テーブル、エンロール/ステップ進行/ゴール検出
+- [2026-02-20] ✅ Persona Agent統合 — generateDmMessage() + AI文面生成 + フォールバック + 承認UI + migration 042
+- [2026-02-23] ✅ Persona Agent Phase 3 — cast_personas + System Prompt 3層 + 統一API + ペルソナタブ（Migration 056）
+- [2026-02-23] ✅ 時刻突合タイムライン — get_transcript_timeline RPC（文字起こし+チャット+課金統合）（Migration 055）
+- [2026-02-23] ✅ DM管理構造変更 — キャスト選択画面化・ユーザー別DM履歴・キャンペーン集計
 - [2026-02-20] ✅ キャスト間データ分離修正 — paid_usersキャッシュ cast_name欠落 + screenshots account_id欠落
 - [2026-02-20] ✅ UIアコーディオン — セグメントS1-S10折りたたみ + エンロールメントリスト折りたたみ
 - [2026-02-20] 🔍 品質巡回実施 — SPY vs コインAPI乖離は設計上の仕様（SPYはchat tip/giftのみ）
@@ -637,11 +837,26 @@ claude
 - [ ] DM送信ステータスバリデーション
 - [ ] Input validation強化（cast_name, payload size）
 
+### [2026-02-23] Stripchat WebSocket/APIリバースエンジニアリング
+- 詳細レポート: `docs/stripchat-websocket-protocol.md`
+- **発見**: チャットはFlashphonerではなく **Stripchat独自のBayeux/CometD風プロトコル** をWebSocket上で使用
+- **ドメイン**: `websocket.stripchat.com`（Cloudflare CDN経由）
+- **認証**: WebSocket接続は匿名可能（ヘッダー/Cookie不要）
+- **プロトコル**: 接続→clientId取得→JSON購読メッセージ送信→イベント受信
+- **イベント18種**: newChatMessage, modelStatusChanged, tip, groupShow, goalChanged, etc.
+- **メッセージ形式**: `{"subscriptionKey": "event:modelId", "params": {"message": {"type": "tip", "userdata": {"username": "..."}, "details": {"amount": 100}}}}`
+- **Node.js直接接続可能** → Chrome拡張なしでサーバーサイド監視が実現可能
+- **未確認**: WebSocket URLの完全パス（DevToolsで要確認）、newChatMessageの全typeバリエーション
+
 ---
 
-## 次のタスク
+## 次のタスク — Phase 4 残タスク
 
-1. **テストDMデータ削除** — dm_send_log の test/bulk キャンペーン削除（SQL確認待ち）
-2. **セッション詳細にコインAPI売上を並列表示** — SPYベース + コインAPIベースの二重表示
-3. **二重送信防止** — dm_send_log で user_name + campaign の重複チェック
+1. **WebSocket直接監視PoC** — Node.jsからStripchat WebSocket接続テスト（docs/stripchat-websocket-protocol.md参照）
+2. **API Routes認証追加** — transcribe/screenshot/analyze-session/persona に Bearer token検証
+3. **DMシナリオエンジン定期実行基盤** — Chrome拡張 or cron でステップ進行を自動実行
 4. **本番デプロイ** — Vercel（フロントエンド）+ Cloud Run（バックエンド）+ Supabase本番
+5. **二重送信防止** — dm_send_log で user_name + campaign の重複チェック
+6. **CORS・セキュリティ強化** — 本番ドメイン限定、Backend例外処理改善
+7. **Stripe決済連携** — プラン管理、課金フロー
+8. **テストDMデータ削除** — dm_send_log の test/bulk キャンペーン削除（SQL確認待ち）

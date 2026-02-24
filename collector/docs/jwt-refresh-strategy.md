@@ -59,38 +59,30 @@ Centrifugo JWT は **Stripchat フロントエンド JavaScript** がランタ�
 
 ## 3. 実用的な取得方法（推奨順）
 
-### 方法A: Chrome拡張経由（推奨）
+### 方法A: Playwright headless（実装済み ✅ — 推奨）
 
-**現在の実装:** `content_jwt_capture.js` が XHR/fetch の Authorization ヘッダーをキャプチャ。
+**ファイル:** `src/auth/playwright-auth.ts`
 
-**問題:** REST API JWT は捕捉するが、Centrifugo WS トークンは異なるソース（WS 第1フレーム）。
+Playwright headless Chrome でモデルページにアクセスし、CDP で WS 送信フレームから JWT を傍受。
 
-**改修案:**
-1. `content_jwt_capture.js` で `WebSocket.send()` をモンキーパッチ
-2. 最初の `{"connect":{"token":"eyJ..."}}` フレームから Centrifugo JWT を抽出
-3. `window.postMessage({type: 'LS_CENTRIFUGO_JWT', jwt: ...})` で送信
-4. `background.js` で受信 → `stripchat_sessions.jwt_token` に保存
-5. Collector は `stripchat_sessions.jwt_token` を読み取って使用
+**フロー:**
+1. Chromium起動 → モデルページへアクセス
+2. 年齢確認ゲート突破（「私は18歳以上です」ボタンクリック）
+3. CDP `Network.webSocketFrameSent` で `{"connect":{"token":"eyJ..."}}` を傍受
+4. cf_clearance cookie をブラウザコンテキストから取得
+5. StripchatAuth を返却（55分 TTL）
 
-```javascript
-// content_jwt_capture.js に追加
-const origWsSend = WebSocket.prototype.send;
-WebSocket.prototype.send = function(data) {
-  try {
-    if (typeof data === 'string' && data.includes('"connect"')) {
-      const msg = JSON.parse(data);
-      if (msg.connect?.token) {
-        window.postMessage({
-          type: 'LS_CENTRIFUGO_JWT',
-          jwt: msg.connect.token,
-          timestamp: Date.now(),
-        }, '*');
-      }
-    }
-  } catch {}
-  return origWsSend.call(this, data);
-};
-```
+**性能:**
+- 所要時間: 8〜20秒（モデルページの読み込み速度次第）
+- ゲストJWT: ログイン不要（userId は負数のゲストID）
+- Cloudflare: headless でも突破可能（2026-02 時点）
+- オフラインモデル: WS接続が確立される（配信中モデルへのフォールバックも用意）
+
+**重要な発見:**
+- 年齢確認ゲートを突破しないと WS 接続が確立されない
+- ゲストでも Centrifugo WS JWT が発行される（ログイン不要）
+- CDP `Network.webSocketCreated` → `webSocketFrameSent` の順で検出
+- Centrifugo クライアントは複数コマンドを1フレームで送信（改行区切り）
 
 ### 方法B: .env 手動設定（フォールバック）
 
@@ -102,12 +94,10 @@ STRIPCHAT_CF_CLEARANCE=lWm9B5Eo8xDy8ONh7XuB...
 DevTools → Network → WS → 最初の送信フレーム → `connect.token` をコピー。
 有効期限: 推定30分〜1時間（3501エラーで切断される）。
 
-### 方法C: Headless Chrome（最終手段）
+### 方法C: Chrome拡張経由（将来検討）
 
-Playwright/Puppeteer で Stripchat にログイン → WS フレームを傍受。
-- 重い（Chrome起動必要）
-- Cloudflare 対策が必要
-- 本番向けではない
+`WebSocket.send()` モンキーパッチで JWT を自動キャプチャ。
+方法Aが十分に機能するため、現時点では不要。
 
 ---
 
@@ -123,9 +113,10 @@ auth/stripchat-auth.ts — 方式B/C の実装
 ### フォールバックチェーン
 
 1. **メモリキャッシュ** — 有効期限5分前まで再利用
-2. **方式C: ページHTML** — `__PRELOADED_STATE__` から JWT 検索
-3. **方式B: REST API** — `/api/front/v2/config` から JWT 検索
-4. **.env フォールバック** — 手動設定 JWT
+2. **方式C: ページHTML** — `__PRELOADED_STATE__` から JWT 検索（通常失敗）
+3. **方式B: REST API** — `/api/front/v2/config` から JWT 検索（通常失敗）
+4. **方式A: Playwright** — headless Chrome で WS フレームから JWT 傍受 ✅
+5. **.env フォールバック** — 手動設定 JWT
 
 ### 3501 エラー時のリカバリ
 
@@ -138,19 +129,17 @@ auth/stripchat-auth.ts — 方式B/C の実装
 
 ## 5. 次のアクション
 
-### 短期（即実行可能）
-- [ ] Chrome拡張に WebSocket.send() モンキーパッチ追加
-- [ ] Centrifugo JWT を `stripchat_sessions.jwt_token` に保存
-- [ ] Collector が起動時に DB から JWT 読み込み
+### 完了 ✅
+- [x] Playwright headless JWT 自動取得（方式A）
+- [x] 年齢確認ゲート自動突破
+- [x] cf_clearance cookie 自動取得
+- [x] フォールバックチェーンに Playwright 統合
+- [x] 3501 エラー時の自動リカバリ（invalidateAuth → 再取得）
 
-### 中期
-- [ ] JWT 有効期限の実測（何分で 3501 切断されるか）
-- [ ] Supabase Realtime で jwt_token 更新を購読（Chrome拡張がリフレッシュしたら即反映）
+### 残タスク
+- [ ] JWT 有効期限の実測（何分で 3501 切断されるか → 55分 TTL で運用中）
 - [ ] 複数アカウント対応（account_id 別に JWT 管理）
-
-### 長期（検討中）
-- [ ] Headless Chrome 自動 JWT 取得（Cloudflare 対策含む）
-- [ ] JS バンドル解析による直接 API エンドポイント特定
+- [ ] Cloudflare がheadless をブロックした場合の対策（xvfb + headless:false）
 
 ---
 

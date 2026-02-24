@@ -1,0 +1,28 @@
+{
+  "name": "livespot",
+  "version": "1.0.0",
+  "description": "Stripchat配信管理SaaS — DM送信、チャット監視、売上分析、AIレポート",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/onry83333-glitch/livespot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/onry83333-glitch/livespot/issues"
+  },
+  "homepage": "https://github.com/onry83333-glitch/livespot#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@supabase/supabase-js": "^2.97.0"
+  }
+}

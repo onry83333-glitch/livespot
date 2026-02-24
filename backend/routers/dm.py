@@ -66,6 +66,7 @@ async def create_dm_batch(body: DMBatchCreate, user=Depends(get_current_user)):
             "user_name": user_name,
             "profile_url": profile_url,
             "message": body.message,
+            "image_url": body.image_url,
             "image_sent": body.image_url is not None,
             "status": "queued",
             "campaign": batch_id,

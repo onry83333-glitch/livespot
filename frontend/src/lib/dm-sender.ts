@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-interface QueueTarget {
+export interface QueueTarget {
   username: string;
   message: string;
+  imageUrl?: string;
 }
 
 interface QueueResult {
@@ -103,8 +104,9 @@ export async function queueDmBatch(
   let count = filteredTargets.length;
   let usedRpc = false;
 
-  // Step 1: RPC で一括登録を試行（全員同一メッセージの場合のみ）
-  if (allSameMessage) {
+  // Step 1: RPC で一括登録を試行（全員同一メッセージ＆画像なしの場合のみ）
+  const hasImage = targets.some(t => t.imageUrl);
+  if (allSameMessage && !hasImage) {
     try {
       const { data, error: rpcErr } = await supabase.rpc('create_dm_batch', {
         p_account_id: accountId,
@@ -135,6 +137,8 @@ export async function queueDmBatch(
       cast_name: castName,
       user_name: t.username,
       message: t.message,
+      image_url: t.imageUrl || null,
+      image_sent: !!t.imageUrl,
       status: 'queued',
       campaign: campaign,
       queued_at: now.toISOString(),

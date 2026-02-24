@@ -74,7 +74,7 @@ export default function AnalyticsPage() {
   const supabaseRef = useRef(createClient());
   const sb = supabaseRef.current;
 
-  const [tab, setTab] = useState<'payroll' | 'dm' | 'funnel'>('dm');
+  const [tab, setTab] = useState<'monthly_pl' | 'dm' | 'funnel'>('dm');
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<string>('');
 
@@ -95,6 +95,28 @@ export default function AnalyticsPage() {
   const [funnelUsers, setFunnelUsers] = useState<FunnelUser[]>([]);
   const [funnelLoading, setFunnelLoading] = useState(false);
   const [funnelFilter, setFunnelFilter] = useState<string>('all');
+
+  // 月次P/L state
+  interface MonthlyPL {
+    month: string;
+    cast_name: string;
+    total_sessions: number;
+    total_hours: number;
+    total_tokens: number;
+    gross_revenue_jpy: number;
+    platform_fee_jpy: number;
+    net_revenue_jpy: number;
+    total_cast_cost_jpy: number;
+    monthly_fixed_cost_jpy: number;
+    gross_profit_jpy: number;
+    profit_margin: number;
+  }
+  const [monthlyPL, setMonthlyPL] = useState<MonthlyPL[]>([]);
+  const [plMonths, setPlMonths] = useState(6);
+  const [plCastFilter, setPlCastFilter] = useState('');
+  const [plLoading, setPlLoading] = useState(false);
+  const [plError, setPlError] = useState<string | null>(null);
+  const [plCasts, setPlCasts] = useState<string[]>([]);
 
   // アカウント取得
   useEffect(() => {
@@ -308,6 +330,38 @@ export default function AnalyticsPage() {
     if (tab === 'funnel') loadFunnel();
   }, [tab, loadFunnel]);
 
+  // 月次P/Lデータ取得
+  const loadMonthlyPL = useCallback(async () => {
+    if (!selectedAccount) return;
+    setPlLoading(true);
+    setPlError(null);
+    try {
+      const { data, error } = await sb.rpc('get_monthly_pl', {
+        p_account_id: selectedAccount,
+        p_cast_name: plCastFilter || null,
+        p_months: plMonths,
+      });
+      if (error) throw error;
+      const rows = (data || []) as MonthlyPL[];
+      setMonthlyPL(rows);
+      // Extract unique cast names
+      setPlCasts(Array.from(new Set(rows.map(r => r.cast_name))).sort());
+    } catch (e: unknown) {
+      if (e instanceof Error && e.message.includes('cast_cost_settings')) {
+        setPlError('コスト設定がありません。設定 → コスト設定タブでキャストのコストを登録してください。');
+      } else {
+        setPlError(e instanceof Error ? e.message : 'データ取得に失敗しました');
+      }
+      setMonthlyPL([]);
+    } finally {
+      setPlLoading(false);
+    }
+  }, [selectedAccount, plCastFilter, plMonths, sb]);
+
+  useEffect(() => {
+    if (tab === 'monthly_pl') loadMonthlyPL();
+  }, [tab, loadMonthlyPL]);
+
   if (!user) return null;
 
   // ============================================================
@@ -332,7 +386,7 @@ export default function AnalyticsPage() {
           >
             📊 キャスト比較
           </button>
-        {(tab === 'dm' || tab === 'funnel') && accounts.length > 0 && (
+        {(tab === 'dm' || tab === 'funnel' || tab === 'monthly_pl') && accounts.length > 0 && (
           <select
             className="input-glass text-xs px-3 py-2 w-48"
             value={selectedAccount}
@@ -351,7 +405,7 @@ export default function AnalyticsPage() {
         {([
           { key: 'dm' as const, label: 'DM効果測定' },
           { key: 'funnel' as const, label: 'ファネル分析' },
-          { key: 'payroll' as const, label: '給与計算' },
+          { key: 'monthly_pl' as const, label: '月次P/L' },
         ]).map((t) => (
           <button
             key={t.key}
@@ -886,16 +940,200 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {/* ============ Payroll Tab (既存モック) ============ */}
-      {tab === 'payroll' && (
+      {/* ============ 月次P/L Tab ============ */}
+      {tab === 'monthly_pl' && (
         <div className="space-y-6 anim-fade-up">
-          {/* Demo warning - prominent */}
-          <div className="glass-card p-5 text-center" style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)' }}>
-            <p className="text-base font-semibold text-amber-400 mb-1">開発中</p>
-            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-              給与計算機能は現在開発中です。以下はデモデータです。
-            </p>
+          {/* Controls */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>期間</label>
+              <select
+                className="input-glass text-xs px-3 py-2 w-28"
+                value={plMonths}
+                onChange={(e) => setPlMonths(Number(e.target.value))}
+              >
+                <option value={3}>3ヶ月</option>
+                <option value={6}>6ヶ月</option>
+                <option value={12}>12ヶ月</option>
+              </select>
+            </div>
+            {plCasts.length > 1 && (
+              <div>
+                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>キャスト</label>
+                <select
+                  className="input-glass text-xs px-3 py-2 w-36"
+                  value={plCastFilter}
+                  onChange={(e) => setPlCastFilter(e.target.value)}
+                >
+                  <option value="">全キャスト</option>
+                  {plCasts.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
           </div>
+
+          {/* Error */}
+          {plError && (
+            <div className="glass-card p-4 text-center" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.2)' }}>
+              <p className="text-xs" style={{ color: 'var(--accent-amber)' }}>{plError}</p>
+              <button onClick={() => window.location.href = '/settings'} className="btn-ghost text-[10px] px-4 py-1.5 mt-2">
+                設定画面へ
+              </button>
+            </div>
+          )}
+
+          {/* Loading */}
+          {plLoading && (
+            <div className="grid grid-cols-4 gap-4">
+              {[...Array(4)].map((_, i) => (
+                <div key={i} className="glass-card p-5 h-28 animate-pulse" />
+              ))}
+            </div>
+          )}
+
+          {/* Summary Cards */}
+          {!plLoading && !plError && monthlyPL.length > 0 && (() => {
+            const latest = monthlyPL[0];
+            const totalGrossProfit = monthlyPL
+              .filter(r => r.month === latest.month)
+              .reduce((s, r) => s + (r.gross_profit_jpy || 0), 0);
+            const totalNetRevenue = monthlyPL
+              .filter(r => r.month === latest.month)
+              .reduce((s, r) => s + (r.net_revenue_jpy || 0), 0);
+            const totalSessions = monthlyPL
+              .filter(r => r.month === latest.month)
+              .reduce((s, r) => s + r.total_sessions, 0);
+            const totalHours = monthlyPL
+              .filter(r => r.month === latest.month)
+              .reduce((s, r) => s + r.total_hours, 0);
+            const isProfit = totalGrossProfit >= 0;
+
+            return (
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="glass-card p-5">
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>ネット売上（{latest.month}）</p>
+                  <p className="text-2xl font-bold mt-2 text-emerald-400">{'\u00A5'}{Math.round(totalNetRevenue).toLocaleString()}</p>
+                </div>
+                <div className="glass-card p-5">
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>粗利（{latest.month}）</p>
+                  <p className={`text-2xl font-bold mt-2 ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    {isProfit ? '' : '-'}{'\u00A5'}{Math.abs(Math.round(totalGrossProfit)).toLocaleString()}
+                  </p>
+                </div>
+                <div className="glass-card p-5">
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>配信数（{latest.month}）</p>
+                  <p className="text-2xl font-bold mt-2 text-sky-400">{totalSessions}回</p>
+                  <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>{totalHours.toFixed(1)}時間</p>
+                </div>
+                <div className="glass-card p-5">
+                  <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>赤字/黒字比率</p>
+                  {(() => {
+                    const latestMonthRows = monthlyPL.filter(r => r.month === latest.month);
+                    const profitCount = latestMonthRows.filter(r => r.gross_profit_jpy >= 0).length;
+                    const lossCount = latestMonthRows.filter(r => r.gross_profit_jpy < 0).length;
+                    return (
+                      <>
+                        <p className="text-2xl font-bold mt-2">
+                          <span className="text-emerald-400">{profitCount}</span>
+                          <span className="text-xs mx-1" style={{ color: 'var(--text-muted)' }}>/</span>
+                          <span className="text-rose-400">{lossCount}</span>
+                        </p>
+                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>黒字/赤字キャスト</p>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            );
+          })()}
+
+          {/* Monthly P/L Table */}
+          {!plLoading && !plError && monthlyPL.length > 0 && (
+            <div className="glass-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold">月次P/L明細</h3>
+                <button
+                  onClick={() => exportCSV(monthlyPL.map(r => ({
+                    月: r.month,
+                    キャスト: r.cast_name,
+                    配信数: r.total_sessions,
+                    時間: r.total_hours,
+                    トークン: r.total_tokens,
+                    粗売上: Math.round(r.gross_revenue_jpy),
+                    手数料: Math.round(r.platform_fee_jpy),
+                    ネット売上: Math.round(r.net_revenue_jpy),
+                    キャスト費用: Math.round(r.total_cast_cost_jpy),
+                    固定費: r.monthly_fixed_cost_jpy,
+                    粗利: Math.round(r.gross_profit_jpy),
+                    粗利率: `${r.profit_margin}%`,
+                  })), 'monthly_pl')}
+                  className="btn-ghost text-[10px] px-3 py-1.5"
+                >
+                  CSVエクスポート
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left" style={{ color: 'var(--text-muted)' }}>
+                      <th className="pb-3 font-medium">月</th>
+                      <th className="pb-3 font-medium">キャスト</th>
+                      <th className="pb-3 font-medium text-right">配信</th>
+                      <th className="pb-3 font-medium text-right">時間</th>
+                      <th className="pb-3 font-medium text-right">ネット売上</th>
+                      <th className="pb-3 font-medium text-right">キャスト費用</th>
+                      <th className="pb-3 font-medium text-right">固定費</th>
+                      <th className="pb-3 font-medium text-right">粗利</th>
+                      <th className="pb-3 font-medium text-right">粗利率</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monthlyPL.map((r, i) => {
+                      const isProfit = r.gross_profit_jpy >= 0;
+                      return (
+                        <tr key={i} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                          <td className="py-2.5 font-mono">{r.month}</td>
+                          <td className="py-2.5" style={{ color: 'var(--accent-primary)' }}>{r.cast_name}</td>
+                          <td className="py-2.5 text-right tabular-nums">{r.total_sessions}回</td>
+                          <td className="py-2.5 text-right tabular-nums">{r.total_hours}h</td>
+                          <td className="py-2.5 text-right tabular-nums text-emerald-400">{'\u00A5'}{Math.round(r.net_revenue_jpy).toLocaleString()}</td>
+                          <td className="py-2.5 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>{'\u00A5'}{Math.round(r.total_cast_cost_jpy).toLocaleString()}</td>
+                          <td className="py-2.5 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>{'\u00A5'}{r.monthly_fixed_cost_jpy.toLocaleString()}</td>
+                          <td className={`py-2.5 text-right tabular-nums font-bold ${isProfit ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {isProfit ? '' : '-'}{'\u00A5'}{Math.abs(Math.round(r.gross_profit_jpy)).toLocaleString()}
+                          </td>
+                          <td className="py-2.5 text-right tabular-nums">
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                              r.profit_margin >= 20 ? 'bg-emerald-500/10 text-emerald-400' :
+                              r.profit_margin >= 0 ? 'bg-amber-500/10 text-amber-400' :
+                              'bg-rose-500/10 text-rose-400'
+                            }`}>
+                              {r.profit_margin}%
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Empty state */}
+          {!plLoading && !plError && monthlyPL.length === 0 && (
+            <div className="glass-card p-10 text-center">
+              <p className="text-lg mb-2" style={{ color: 'var(--text-secondary)' }}>
+                P/Lデータがありません
+              </p>
+              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                コスト設定を登録し、配信セッションデータがある場合に表示されます。
+              </p>
+              <button onClick={() => window.location.href = '/settings'} className="btn-ghost text-xs px-4 py-2 mt-3">
+                コスト設定へ
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

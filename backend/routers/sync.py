@@ -28,6 +28,7 @@ router = APIRouter()
 class CoinSyncRequest(BaseModel):
     account_id: str
     cookie_encrypted: str  # Stripchatのセッションcookie
+    cast_name: Optional[str] = None  # キャスト名（データ分離用）
 
 
 class CoinSyncResponse(BaseModel):
@@ -144,6 +145,7 @@ async def sync_coins(body: CoinSyncRequest, user=Depends(get_current_user)):
         tx_rows.append(
             {
                 "account_id": body.account_id,
+                "cast_name": getattr(body, "cast_name", None),
                 "user_name": user_name,
                 "tokens": tokens,
                 "type": tx_type,
@@ -156,7 +158,7 @@ async def sync_coins(body: CoinSyncRequest, user=Depends(get_current_user)):
     if tx_rows:
         result = (
             sb.table("coin_transactions")
-            .upsert(tx_rows, on_conflict="account_id,user_name,date,type")
+            .upsert(tx_rows, on_conflict="account_id,user_name,cast_name,tokens,date")
             .execute()
         )
         synced_tx = len(result.data)

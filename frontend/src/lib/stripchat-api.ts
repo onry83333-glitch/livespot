@@ -44,6 +44,13 @@ export interface DMResult {
   sessionExpired?: boolean;
 }
 
+export interface PhotoUploadResult {
+  success: boolean;
+  mediaId?: number;
+  error?: string;
+  sessionExpired?: boolean;
+}
+
 export interface ConnectionTestResult {
   ok: boolean;
   status: number;
@@ -199,6 +206,7 @@ export class StripchatAPI {
     targetUserId: string,
     message: string,
     targetUsername?: string,
+    mediaOptions?: { mediaId: number; mediaSource?: string },
   ): Promise<DMResult> {
     const csrf = await this.getCsrfToken();
     if (!csrf) {
@@ -212,6 +220,20 @@ export class StripchatAPI {
     const uniq = crypto.randomBytes(12).toString('hex').slice(0, 16);
     const cookieStr = this.buildCookieString();
     const refererUser = targetUsername || targetUserId;
+
+    // メッセージbody構築（画像パラメータがある場合は追加）
+    const msgBody: Record<string, unknown> = {
+      body: message,
+      csrfToken: csrf.token,
+      csrfTimestamp: csrf.timestamp,
+      csrfNotifyTimestamp: csrf.notifyTimestamp,
+      uniq,
+    };
+    if (mediaOptions) {
+      msgBody.mediaId = mediaOptions.mediaId;
+      msgBody.mediaSource = mediaOptions.mediaSource || 'upload';
+      msgBody.platform = 'Web';
+    }
 
     try {
       const res = await fetch(
@@ -227,13 +249,7 @@ export class StripchatAPI {
             'front-version':
               this.session.front_version || DEFAULT_FRONT_VERSION,
           },
-          body: JSON.stringify({
-            body: message,
-            csrfToken: csrf.token,
-            csrfTimestamp: csrf.timestamp,
-            csrfNotifyTimestamp: csrf.notifyTimestamp,
-            uniq,
-          }),
+          body: JSON.stringify(msgBody),
         },
       );
 
@@ -247,6 +263,80 @@ export class StripchatAPI {
       }
 
       // セッション期限切れ判定
+      if (res.status === 401 || res.status === 403) {
+        return {
+          success: false,
+          error: JSON.stringify(data).slice(0, 500),
+          sessionExpired: true,
+        };
+      }
+
+      return {
+        success: false,
+        error: JSON.stringify(data).slice(0, 500),
+        sessionExpired: false,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: String(err),
+        sessionExpired: false,
+      };
+    }
+  }
+
+  // ----------------------------------------------------------
+  // uploadPhoto — DM用画像をStripchatにアップロード
+  // ----------------------------------------------------------
+  async uploadPhoto(
+    photoBlob: Blob,
+    filename: string = 'image.jpg',
+  ): Promise<PhotoUploadResult> {
+    const csrf = await this.getCsrfToken();
+    if (!csrf) {
+      return {
+        success: false,
+        error: 'csrfToken取得失敗',
+        sessionExpired: false,
+      };
+    }
+
+    const cookieStr = this.buildCookieString();
+
+    const formData = new FormData();
+    formData.append('photo', photoBlob, filename);
+    formData.append('source', 'upload');
+    formData.append('messenger', '1');
+    formData.append('csrfToken', csrf.token);
+    formData.append('csrfTimestamp', csrf.timestamp);
+    formData.append('csrfNotifyTimestamp', csrf.notifyTimestamp);
+
+    try {
+      const res = await fetch(
+        `https://ja.stripchat.com/api/front/users/${this.session.stripchat_user_id}/albums/0/photos`,
+        {
+          method: 'POST',
+          headers: {
+            Cookie: cookieStr,
+            Origin: 'https://ja.stripchat.com',
+            Referer: 'https://ja.stripchat.com/',
+            'User-Agent': USER_AGENT,
+            'front-version':
+              this.session.front_version || DEFAULT_FRONT_VERSION,
+          },
+          body: formData,
+        },
+      );
+
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok && data.photo?.id) {
+        return {
+          success: true,
+          mediaId: data.photo.id,
+        };
+      }
+
       if (res.status === 401 || res.status === 403) {
         return {
           success: false,
