@@ -29,12 +29,16 @@ COMMENT ON COLUMN cast_cost_settings.bonus_rate IS 'ボーナス率（%）';
 -- RLS
 ALTER TABLE cast_cost_settings ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "cast_cost_settings_select" ON cast_cost_settings;
 CREATE POLICY "cast_cost_settings_select" ON cast_cost_settings
   FOR SELECT USING (account_id IN (SELECT user_account_ids()));
+DROP POLICY IF EXISTS "cast_cost_settings_insert" ON cast_cost_settings;
 CREATE POLICY "cast_cost_settings_insert" ON cast_cost_settings
   FOR INSERT WITH CHECK (account_id IN (SELECT user_account_ids()));
+DROP POLICY IF EXISTS "cast_cost_settings_update" ON cast_cost_settings;
 CREATE POLICY "cast_cost_settings_update" ON cast_cost_settings
   FOR UPDATE USING (account_id IN (SELECT user_account_ids()));
+DROP POLICY IF EXISTS "cast_cost_settings_delete" ON cast_cost_settings;
 CREATE POLICY "cast_cost_settings_delete" ON cast_cost_settings
   FOR DELETE USING (account_id IN (SELECT user_account_ids()));
 
@@ -74,34 +78,34 @@ CREATE OR REPLACE FUNCTION get_session_pl(
       THEN EXTRACT(EPOCH FROM (s.ended_at - s.started_at))::INTEGER / 60
       ELSE 0
     END AS duration_minutes,
-    COALESCE(s.total_tokens, 0)::BIGINT AS total_tokens,
+    COALESCE(s.total_coins, 0)::BIGINT AS total_tokens,
     COALESCE(s.peak_viewers, 0) AS peak_viewers,
     -- 粗売上
-    COALESCE(s.total_tokens, 0) * c.token_to_jpy AS gross_revenue_jpy,
+    COALESCE(s.total_coins, 0) * c.token_to_jpy AS gross_revenue_jpy,
     -- 手数料
-    COALESCE(s.total_tokens, 0) * c.token_to_jpy * (c.platform_fee_rate / 100) AS platform_fee_jpy,
+    COALESCE(s.total_coins, 0) * c.token_to_jpy * (c.platform_fee_rate / 100) AS platform_fee_jpy,
     -- ネット売上
-    COALESCE(s.total_tokens, 0) * c.token_to_jpy * (1 - c.platform_fee_rate / 100) AS net_revenue_jpy,
+    COALESCE(s.total_coins, 0) * c.token_to_jpy * (1 - c.platform_fee_rate / 100) AS net_revenue_jpy,
     -- キャスト費用
     CASE WHEN s.ended_at IS NOT NULL
       THEN (EXTRACT(EPOCH FROM (s.ended_at - s.started_at)) / 3600) * c.hourly_rate
       ELSE 0
     END AS cast_cost_jpy,
     -- 粗利
-    COALESCE(s.total_tokens, 0) * c.token_to_jpy * (1 - c.platform_fee_rate / 100)
+    COALESCE(s.total_coins, 0) * c.token_to_jpy * (1 - c.platform_fee_rate / 100)
       - CASE WHEN s.ended_at IS NOT NULL
           THEN (EXTRACT(EPOCH FROM (s.ended_at - s.started_at)) / 3600) * c.hourly_rate
           ELSE 0
         END AS gross_profit_jpy,
     -- 粗利率
-    CASE WHEN COALESCE(s.total_tokens, 0) > 0
+    CASE WHEN COALESCE(s.total_coins, 0) > 0
       THEN ROUND(
-        ((COALESCE(s.total_tokens, 0) * c.token_to_jpy * (1 - c.platform_fee_rate / 100)
+        ((COALESCE(s.total_coins, 0) * c.token_to_jpy * (1 - c.platform_fee_rate / 100)
           - CASE WHEN s.ended_at IS NOT NULL
               THEN (EXTRACT(EPOCH FROM (s.ended_at - s.started_at)) / 3600) * c.hourly_rate
               ELSE 0
             END)
-        / (COALESCE(s.total_tokens, 0) * c.token_to_jpy)) * 100, 1)
+        / (COALESCE(s.total_coins, 0) * c.token_to_jpy)) * 100, 1)
       ELSE 0
     END AS profit_margin,
     c.hourly_rate,
@@ -113,7 +117,7 @@ CREATE OR REPLACE FUNCTION get_session_pl(
     AND s.started_at::DATE >= c.effective_from
     AND (c.effective_to IS NULL OR s.started_at::DATE <= c.effective_to)
   WHERE s.account_id = p_account_id
-    AND (p_session_id IS NULL OR s.session_id = p_session_id)
+    AND (p_session_id IS NULL OR s.session_id = p_session_id::UUID)
     AND (p_cast_name IS NULL OR s.cast_name = p_cast_name)
     AND s.started_at >= NOW() - (p_days || ' days')::INTERVAL
   ORDER BY s.started_at DESC;
@@ -150,13 +154,13 @@ CREATE OR REPLACE FUNCTION get_monthly_pl(
         ELSE 0
       END
     )::NUMERIC, 1) AS total_hours,
-    COALESCE(SUM(s.total_tokens), 0)::BIGINT AS total_tokens,
+    COALESCE(SUM(s.total_coins), 0)::BIGINT AS total_tokens,
     -- 粗売上
-    COALESCE(SUM(s.total_tokens), 0) * AVG(c.token_to_jpy) AS gross_revenue_jpy,
+    COALESCE(SUM(s.total_coins), 0) * AVG(c.token_to_jpy) AS gross_revenue_jpy,
     -- 手数料
-    COALESCE(SUM(s.total_tokens), 0) * AVG(c.token_to_jpy) * (AVG(c.platform_fee_rate) / 100) AS platform_fee_jpy,
+    COALESCE(SUM(s.total_coins), 0) * AVG(c.token_to_jpy) * (AVG(c.platform_fee_rate) / 100) AS platform_fee_jpy,
     -- ネット売上
-    COALESCE(SUM(s.total_tokens), 0) * AVG(c.token_to_jpy) * (1 - AVG(c.platform_fee_rate) / 100) AS net_revenue_jpy,
+    COALESCE(SUM(s.total_coins), 0) * AVG(c.token_to_jpy) * (1 - AVG(c.platform_fee_rate) / 100) AS net_revenue_jpy,
     -- キャスト費用合計
     ROUND(SUM(
       CASE WHEN s.ended_at IS NOT NULL
@@ -167,7 +171,7 @@ CREATE OR REPLACE FUNCTION get_monthly_pl(
     -- 月額固定費
     MAX(c.monthly_fixed_cost) AS monthly_fixed_cost_jpy,
     -- 粗利（ネット売上 - キャスト費用 - 固定費）
-    COALESCE(SUM(s.total_tokens), 0) * AVG(c.token_to_jpy) * (1 - AVG(c.platform_fee_rate) / 100)
+    COALESCE(SUM(s.total_coins), 0) * AVG(c.token_to_jpy) * (1 - AVG(c.platform_fee_rate) / 100)
       - SUM(
           CASE WHEN s.ended_at IS NOT NULL
             THEN (EXTRACT(EPOCH FROM (s.ended_at - s.started_at)) / 3600) * c.hourly_rate
@@ -176,9 +180,9 @@ CREATE OR REPLACE FUNCTION get_monthly_pl(
         )
       - MAX(c.monthly_fixed_cost) AS gross_profit_jpy,
     -- 粗利率
-    CASE WHEN COALESCE(SUM(s.total_tokens), 0) > 0
+    CASE WHEN COALESCE(SUM(s.total_coins), 0) > 0
       THEN ROUND(
-        ((COALESCE(SUM(s.total_tokens), 0) * AVG(c.token_to_jpy) * (1 - AVG(c.platform_fee_rate) / 100)
+        ((COALESCE(SUM(s.total_coins), 0) * AVG(c.token_to_jpy) * (1 - AVG(c.platform_fee_rate) / 100)
           - SUM(
               CASE WHEN s.ended_at IS NOT NULL
                 THEN (EXTRACT(EPOCH FROM (s.ended_at - s.started_at)) / 3600) * c.hourly_rate
@@ -186,7 +190,7 @@ CREATE OR REPLACE FUNCTION get_monthly_pl(
               END
             )
           - MAX(c.monthly_fixed_cost))
-        / (COALESCE(SUM(s.total_tokens), 0) * AVG(c.token_to_jpy))) * 100, 1)
+        / (COALESCE(SUM(s.total_coins), 0) * AVG(c.token_to_jpy))) * 100, 1)
       ELSE 0
     END AS profit_margin
   FROM sessions s
