@@ -3395,7 +3395,7 @@ async function fetchNextDMTask() {
     + `?account_id=eq.${accountId}&status=eq.queued`
     + `&created_at=lt.${encodeURIComponent(graceThreshold)}`
     + `&order=created_at.asc&limit=1`
-    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url`;
+    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order`;
 
   const res = await fetch(url, {
     headers: {
@@ -3427,7 +3427,7 @@ async function fetchDMBatch(limit = 50) {
   const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
     + `?account_id=eq.${accountId}&status=eq.queued`
     + `&order=created_at.asc&limit=${limit}`
-    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url`;
+    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order`;
 
   const res = await fetch(url, {
     headers: {
@@ -3764,13 +3764,15 @@ async function tryDMviaAPI(task, tab) {
     // ---- 3. executeScript (MAIN world) でCSRF取得 + DM送信 ----
     const messageBody = (task.message || '').replace(/\{username\}/g, task.user_name || '');
     const imageUrl = task.image_url || null;
+    const sendOrder = task.send_order || 'text_only';
 
     // 画像ありの場合: Service Worker側で先にBlob取得 → base64化してexecuteScriptに渡す
     // （MAINワールドのfetchはStripchatオリジンになりCORSで失敗するため）
+    // text_onlyの場合は画像取得をスキップ
     let imageBase64 = null;
-    if (imageUrl) {
+    if (imageUrl && sendOrder !== 'text_only') {
       try {
-        console.log('[LS-BG] DM画像取得中:', imageUrl.substring(0, 80) + '...');
+        console.log('[LS-BG] DM画像取得中 (sendOrder=' + sendOrder + '):', imageUrl.substring(0, 80) + '...');
         const imgRes = await fetch(imageUrl);
         if (!imgRes.ok) throw new Error('HTTP ' + imgRes.status);
         const imgBlob = await imgRes.blob();
@@ -3783,18 +3785,21 @@ async function tryDMviaAPI(task, tab) {
         imageBase64 = btoa(binary);
         console.log('[LS-BG] DM画像取得成功:', (imageBase64.length / 1024).toFixed(1), 'KB (base64)');
       } catch (e) {
-        console.error('[LS-BG] DM画像取得失敗:', e.message, '→ テキストのみ送信');
+        console.error('[LS-BG] DM画像取得失敗:', e.message, '→ テキストのみ送信にフォールバック');
         imageBase64 = null;
       }
     }
 
-    console.log('[LS-BG] DM API executeScript:', { tabId, myUserId, targetUserId, messageLen: messageBody.length, hasImage: !!imageBase64 });
+    // 画像が必要なのに取得失敗 → text_onlyにフォールバック
+    const effectiveSendOrder = (sendOrder !== 'text_only' && !imageBase64) ? 'text_only' : sendOrder;
+
+    console.log('[LS-BG] DM API executeScript:', { tabId, myUserId, targetUserId, messageLen: messageBody.length, hasImage: !!imageBase64, sendOrder: effectiveSendOrder });
 
     const execDmSend = async () => {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
         world: 'MAIN',
-        func: (myUid, targetUid, msgBody, imgB64) => {
+        func: (myUid, targetUid, msgBody, imgB64, sendOrd) => {
           // ページコンテキストで実行（window.__loggerにアクセス可能）
           var csrf = window.__logger && window.__logger.kibanaLogger
             && window.__logger.kibanaLogger.api && window.__logger.kibanaLogger.api.csrfParams;
@@ -3807,8 +3812,6 @@ async function tryDMviaAPI(task, tab) {
               hasApi: !!(window.__logger && window.__logger.kibanaLogger && window.__logger.kibanaLogger.api),
             };
           }
-
-          var uniq = Math.random().toString(36).substring(2, 18);
 
           // レスポンス解析の共通処理
           function parseResponse(r) {
@@ -3825,67 +3828,11 @@ async function tryDMviaAPI(task, tab) {
             return { success: false, error: 'HTTP ' + resp.status + ': ' + resp.text, httpStatus: resp.status };
           }
 
-          // 画像付きDM → 2ステップ（アップロード → mediaId付き送信）
-          if (imgB64) {
-            try {
-              // base64 → Blob変換
-              var binaryStr = atob(imgB64);
-              var bytes = new Uint8Array(binaryStr.length);
-              for (var i = 0; i < binaryStr.length; i++) {
-                bytes[i] = binaryStr.charCodeAt(i);
-              }
-              var blob = new Blob([bytes], { type: 'image/jpeg' });
+          // ---- ヘルパー関数 ----
 
-              // Step 1: Stripchat写真アップロード
-              var fd = new FormData();
-              fd.append('photo', blob, 'image.jpg');
-              fd.append('source', 'upload');
-              fd.append('messenger', '1');
-              fd.append('csrfToken', csrf.csrfToken);
-              fd.append('csrfTimestamp', csrf.csrfTimestamp);
-              fd.append('csrfNotifyTimestamp', csrf.csrfNotifyTimestamp);
-
-              return fetch('/api/front/users/' + myUid + '/albums/0/photos', {
-                method: 'POST',
-                credentials: 'include',
-                body: fd,
-              })
-              .then(function (r) { return r.json(); })
-              .then(function (photoData) {
-                if (!photoData.photo || !photoData.photo.id) {
-                  return { success: false, error: '写真アップロード失敗: ' + JSON.stringify(photoData).substring(0, 200), httpStatus: 0 };
-                }
-                // Step 2: mediaId付きメッセージ送信
-                return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  credentials: 'include',
-                  body: JSON.stringify({
-                    body: msgBody || '',
-                    mediaId: photoData.photo.id,
-                    mediaSource: 'upload',
-                    platform: 'Web',
-                    csrfToken: csrf.csrfToken,
-                    csrfTimestamp: csrf.csrfTimestamp,
-                    csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
-                    uniq: uniq,
-                  }),
-                })
-                .then(parseResponse)
-                .then(handleMessageResponse);
-              })
-              .catch(function (e) {
-                return { success: false, error: '画像DM送信エラー: ' + e.message };
-              });
-            } catch (e) {
-              return Promise.resolve({ success: false, error: '画像変換エラー: ' + e.message });
-            }
-          }
-
-          // テキストのみDM（既存ロジック）
-          return fetch(
-            '/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages',
-            {
+          // テキストメッセージ送信
+          function sendTextMessage(uniqId) {
+            return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               credentials: 'include',
@@ -3894,17 +3841,129 @@ async function tryDMviaAPI(task, tab) {
                 csrfToken: csrf.csrfToken,
                 csrfTimestamp: csrf.csrfTimestamp,
                 csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
-                uniq: uniq,
+                uniq: uniqId,
               }),
+            })
+            .then(parseResponse)
+            .then(handleMessageResponse);
+          }
+
+          // 写真アップロード → mediaId返却
+          function uploadPhoto() {
+            var binaryStr = atob(imgB64);
+            var bytes = new Uint8Array(binaryStr.length);
+            for (var i = 0; i < binaryStr.length; i++) {
+              bytes[i] = binaryStr.charCodeAt(i);
             }
-          )
-          .then(parseResponse)
-          .then(handleMessageResponse)
-          .catch(function (e) {
-            return { success: false, error: e.message };
-          });
+            var blob = new Blob([bytes], { type: 'image/jpeg' });
+
+            var fd = new FormData();
+            fd.append('photo', blob, 'image.jpg');
+            fd.append('source', 'upload');
+            fd.append('messenger', '1');
+            fd.append('csrfToken', csrf.csrfToken);
+            fd.append('csrfTimestamp', csrf.csrfTimestamp);
+            fd.append('csrfNotifyTimestamp', csrf.csrfNotifyTimestamp);
+
+            return fetch('/api/front/users/' + myUid + '/albums/0/photos', {
+              method: 'POST',
+              credentials: 'include',
+              body: fd,
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (photoData) {
+              if (!photoData.photo || !photoData.photo.id) {
+                throw new Error('写真アップロード失敗: ' + JSON.stringify(photoData).substring(0, 200));
+              }
+              return photoData.photo.id;
+            });
+          }
+
+          // mediaId付きメッセージ送信（bodyは空文字可）
+          function sendMessageWithMedia(mediaId, body, uniqId) {
+            return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({
+                body: body || '',
+                mediaId: mediaId,
+                mediaSource: 'upload',
+                platform: 'Web',
+                csrfToken: csrf.csrfToken,
+                csrfTimestamp: csrf.csrfTimestamp,
+                csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
+                uniq: uniqId,
+              }),
+            })
+            .then(parseResponse)
+            .then(handleMessageResponse);
+          }
+
+          // ---- send_order 4パターン分岐 ----
+          try {
+            var uniq1 = Math.random().toString(36).substring(2, 18);
+            var uniq2 = Math.random().toString(36).substring(2, 18);
+
+            if (sendOrd === 'image_only') {
+              // 画像のみ: アップロード → mediaId付き送信（body空）
+              return uploadPhoto().then(function (mediaId) {
+                return sendMessageWithMedia(mediaId, '', uniq1);
+              }).catch(function (e) {
+                return { success: false, error: '画像DM送信エラー: ' + e.message };
+              });
+            }
+
+            if (sendOrd === 'text_then_image') {
+              // テキスト先 → 画像後（2通）
+              return sendTextMessage(uniq1).then(function (textResult) {
+                if (!textResult.success) return textResult;
+                return uploadPhoto().then(function (mediaId) {
+                  return sendMessageWithMedia(mediaId, '', uniq2);
+                }).then(function (imgResult) {
+                  return {
+                    success: imgResult.success,
+                    messageId: imgResult.messageId,
+                    httpStatus: imgResult.httpStatus,
+                    sentMessages: 2,
+                    textMessageId: textResult.messageId,
+                  };
+                });
+              }).catch(function (e) {
+                return { success: false, error: 'text_then_image エラー: ' + e.message };
+              });
+            }
+
+            if (sendOrd === 'image_then_text') {
+              // 画像先 → テキスト後（2通）
+              return uploadPhoto().then(function (mediaId) {
+                return sendMessageWithMedia(mediaId, '', uniq1);
+              }).then(function (imgResult) {
+                if (!imgResult.success) return imgResult;
+                return sendTextMessage(uniq2).then(function (textResult) {
+                  return {
+                    success: textResult.success,
+                    messageId: textResult.messageId,
+                    httpStatus: textResult.httpStatus,
+                    sentMessages: 2,
+                    imageMessageId: imgResult.messageId,
+                  };
+                });
+              }).catch(function (e) {
+                return { success: false, error: 'image_then_text エラー: ' + e.message };
+              });
+            }
+
+            // text_only（デフォルト）: テキストのみ
+            return sendTextMessage(uniq1).catch(function (e) {
+              return { success: false, error: e.message };
+            });
+
+          } catch (e) {
+            return Promise.resolve({ success: false, error: 'send_order処理エラー: ' + e.message });
+          }
         },
-        args: [myUserId, targetUserId, messageBody, imageBase64],
+        args: [myUserId, targetUserId, messageBody, imageBase64, effectiveSendOrder],
       });
 
       return results?.[0]?.result || null;
@@ -3935,8 +3994,9 @@ async function tryDMviaAPI(task, tab) {
 
     if (result.success) {
       dmApiConsecutiveErrors = 0;
-      console.log('[LS-BG] DM API送信成功!', task.user_name, 'messageId:', result.messageId);
-      return { success: true, error: null, httpStatus: result.httpStatus, via: 'api' };
+      const sentCount = result.sentMessages || 1;
+      console.log('[LS-BG] DM API送信成功!', task.user_name, 'messageId:', result.messageId, 'sendOrder:', effectiveSendOrder, 'sentMessages:', sentCount);
+      return { success: true, error: null, httpStatus: result.httpStatus, via: 'api', sentMessages: sentCount };
     }
 
     // 失敗処理
@@ -3969,8 +4029,8 @@ async function tryDMviaAPI(task, tab) {
  */
 async function sendDMviaDOM(task, tab) {
   // 画像付きDMはDOM方式で非対応（API送信のみ）
-  if (task.image_url) {
-    console.warn('[LS-BG] [DOM] 画像付きDMはDOM方式非対応。テキストのみ送信:', task.user_name);
+  if (task.image_url && task.send_order !== 'text_only') {
+    console.warn('[LS-BG] [DOM] 画像付きDMはDOM方式非対応 (send_order=' + (task.send_order || 'text_only') + ')。テキストのみ送信:', task.user_name);
   }
   // プロフィールURLに遷移
   const profileUrl = task.profile_url
