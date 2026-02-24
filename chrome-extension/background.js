@@ -3765,13 +3765,36 @@ async function tryDMviaAPI(task, tab) {
     const messageBody = (task.message || '').replace(/\{username\}/g, task.user_name || '');
     const imageUrl = task.image_url || null;
 
-    console.log('[LS-BG] DM API executeScript:', { tabId, myUserId, targetUserId, messageLen: messageBody.length, hasImage: !!imageUrl });
+    // 画像ありの場合: Service Worker側で先にBlob取得 → base64化してexecuteScriptに渡す
+    // （MAINワールドのfetchはStripchatオリジンになりCORSで失敗するため）
+    let imageBase64 = null;
+    if (imageUrl) {
+      try {
+        console.log('[LS-BG] DM画像取得中:', imageUrl.substring(0, 80) + '...');
+        const imgRes = await fetch(imageUrl);
+        if (!imgRes.ok) throw new Error('HTTP ' + imgRes.status);
+        const imgBlob = await imgRes.blob();
+        const arrayBuf = await imgBlob.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuf);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        imageBase64 = btoa(binary);
+        console.log('[LS-BG] DM画像取得成功:', (imageBase64.length / 1024).toFixed(1), 'KB (base64)');
+      } catch (e) {
+        console.error('[LS-BG] DM画像取得失敗:', e.message, '→ テキストのみ送信');
+        imageBase64 = null;
+      }
+    }
+
+    console.log('[LS-BG] DM API executeScript:', { tabId, myUserId, targetUserId, messageLen: messageBody.length, hasImage: !!imageBase64 });
 
     const execDmSend = async () => {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
         world: 'MAIN',
-        func: (myUid, targetUid, msgBody, imgUrl) => {
+        func: (myUid, targetUid, msgBody, imgB64) => {
           // ページコンテキストで実行（window.__loggerにアクセス可能）
           var csrf = window.__logger && window.__logger.kibanaLogger
             && window.__logger.kibanaLogger.api && window.__logger.kibanaLogger.api.csrfParams;
@@ -3803,25 +3826,29 @@ async function tryDMviaAPI(task, tab) {
           }
 
           // 画像付きDM → 2ステップ（アップロード → mediaId付き送信）
-          if (imgUrl) {
-            return fetch(imgUrl)
-              .then(function (r) {
-                if (!r.ok) throw new Error('画像取得失敗: HTTP ' + r.status);
-                return r.blob();
-              })
-              .then(function (blob) {
-                var fd = new FormData();
-                fd.append('photo', blob, 'image.jpg');
-                fd.append('source', 'upload');
-                fd.append('messenger', '1');
-                fd.append('csrfToken', csrf.csrfToken);
-                fd.append('csrfTimestamp', csrf.csrfTimestamp);
-                fd.append('csrfNotifyTimestamp', csrf.csrfNotifyTimestamp);
-                return fetch('/api/front/users/' + myUid + '/albums/0/photos', {
-                  method: 'POST',
-                  credentials: 'include',
-                  body: fd,
-                });
+          if (imgB64) {
+            try {
+              // base64 → Blob変換
+              var binaryStr = atob(imgB64);
+              var bytes = new Uint8Array(binaryStr.length);
+              for (var i = 0; i < binaryStr.length; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+              }
+              var blob = new Blob([bytes], { type: 'image/jpeg' });
+
+              // Step 1: Stripchat写真アップロード
+              var fd = new FormData();
+              fd.append('photo', blob, 'image.jpg');
+              fd.append('source', 'upload');
+              fd.append('messenger', '1');
+              fd.append('csrfToken', csrf.csrfToken);
+              fd.append('csrfTimestamp', csrf.csrfTimestamp);
+              fd.append('csrfNotifyTimestamp', csrf.csrfNotifyTimestamp);
+
+              return fetch('/api/front/users/' + myUid + '/albums/0/photos', {
+                method: 'POST',
+                credentials: 'include',
+                body: fd,
               })
               .then(function (r) { return r.json(); })
               .then(function (photoData) {
@@ -3850,6 +3877,9 @@ async function tryDMviaAPI(task, tab) {
               .catch(function (e) {
                 return { success: false, error: '画像DM送信エラー: ' + e.message };
               });
+            } catch (e) {
+              return Promise.resolve({ success: false, error: '画像変換エラー: ' + e.message });
+            }
           }
 
           // テキストのみDM（既存ロジック）
@@ -3874,7 +3904,7 @@ async function tryDMviaAPI(task, tab) {
             return { success: false, error: e.message };
           });
         },
-        args: [myUserId, targetUserId, messageBody, imageUrl],
+        args: [myUserId, targetUserId, messageBody, imageBase64],
       });
 
       return results?.[0]?.result || null;
