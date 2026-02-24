@@ -5137,6 +5137,31 @@ async function exportSessionCookie() {
       const errText = await upsertRes.text().catch(() => '');
       console.warn('[LS-BG] SessionExport: upsert失敗:', upsertRes.status, errText);
     }
+
+    // ── 方式B: Backend API に cookies.json 書き出し ──
+    // collector/auth.py が Chrome DBロックなしで読める
+    try {
+      const cookieSyncRes = await fetch(`${CONFIG.API_BASE_URL}/api/sync/cookies`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          cookies: cookiesJson,
+        }),
+      });
+      if (cookieSyncRes.ok) {
+        const result = await cookieSyncRes.json();
+        console.log(`[LS-BG] CookieSync: cookies.json 書き出し完了 (${result.cookie_count}件)`);
+      } else {
+        console.warn('[LS-BG] CookieSync: 書き出し失敗:', cookieSyncRes.status);
+      }
+    } catch (cookieErr) {
+      // Backend未起動時は静かに失敗（Supabase同期は成功済み）
+      console.debug('[LS-BG] CookieSync: Backend未到達:', cookieErr.message);
+    }
   } catch (err) {
     console.error('[LS-BG] SessionExport: エラー:', err.message);
   }
@@ -5164,8 +5189,8 @@ restoreBuffers().then(() => {
         startScreenshotCapture(); // SW再起動時にSPY有効ならスクショ再開
         chrome.alarms.create('viewerMembers', { periodInMinutes: 1 }); // Viewer memberポーリング再開
       }
-      // セッション同期: 1時間ごと + 即時1回
-      chrome.alarms.create('sessionSync', { periodInMinutes: 60 });
+      // セッション同期 + Cookie書き出し: 30分ごと + 即時1回
+      chrome.alarms.create('sessionSync', { periodInMinutes: 30 });
       exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync初回:', e.message));
       console.log('[LS-BG] 初期化完了 DM/Whisperポーリング開始');
       // SW再起動時: currentSessionIdが復元されていたらsessionsレコード存在チェック

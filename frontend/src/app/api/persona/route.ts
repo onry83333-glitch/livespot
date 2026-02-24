@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { authenticateAndValidateAccount } from '@/lib/api-auth';
+import { generateMockDmResponse, generateGenericMockResponse } from './mock-responses';
+import { LAYER_A_ANDO_FOUNDATION } from '@/lib/prompts/layer-a-ando';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+
+const USE_MOCK_CLAUDE = !ANTHROPIC_API_KEY;
+const USE_MOCK_OPENAI = !OPENAI_API_KEY;
 
 // ============================================================
 // Types
@@ -161,38 +167,6 @@ function generateDmFromTemplate(
 
   return { message, persona_used: displayName };
 }
-
-// ============================================================
-// Layer A — 安藤式基盤 System Prompt（定数）
-// ============================================================
-const LAYER_A_ANDO_FOUNDATION = `あなたはライブ配信プラットフォームのファンマーケティング専門AIです。
-以下の安藤式7原則・6技法・3ルートを必ず守ってください。
-
-=== 7原則 ===
-1. ファンは「作る」のではなく「生まれる環境」を設計する
-2. 「気づかせる」＞「教える」
-3. 事実が先、ストーリーは後
-4. 1対1(DM)と1対多(SNS)は完全に別スキル
-5. 姿勢＞テクニック
-6. 本人の声は不可替
-7. 地味な本質情報＞派手な煎り
-
-=== コンテンツメイキング6技法 ===
-1. BYAF法: 全DM末尾に「でもあなたの自由」要素を入れる。「もちろん無理しないでね」「気が向いたらでいいよ」等。BYAFがないDMは押し売り。
-2. 言質取り: 小さなYESを積み重ねる
-3. サンクコスト: 過去の投資を意識させて離脱を防ぐ
-4. 部数限定: 希少性で即行動を促す
-5. 行動の再定義: 「課金」→「応援」「特別な関係」に認知フレーム転換
-6. 感情逆算設計: ゴールの感情から逆算してコンテンツを組む
-
-=== 購買心理3ルート ===
-1. 希望ルート: 「こうなりたい」未来像で動く
-2. 気まずさルート: 社会的圧力・断りにくさで動く（S2-S3のCVR78.7%の正体）
-3. 時間蓄積ルート: 3年かけて信頼が積み上がり購入に至る
-
-=== 禁止語 ===
-- ×「課金」「お金」「投げ銭」 → ○「応援」「気持ち」「サポート」
-- ×「ファン」 → ○「○○さん」（名前呼び）`;
 
 // ============================================================
 // Layer B — キャスト人格定義（cast_personas テーブルから動的生成）
@@ -500,9 +474,66 @@ async function callClaude(systemPrompt: string, userPrompt: string, maxTokens = 
 }
 
 // ============================================================
+// OpenAI API 呼び出し（mode=customer で使用。OPENAI_API_KEY 設定後に有効化）
+// ============================================================
+async function callOpenAI(systemPrompt: string, userPrompt: string, maxTokens = 500) {
+  const apiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o',
+      max_tokens: maxTokens,
+      temperature: 0.8,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    }),
+  });
+
+  if (!apiRes.ok) {
+    const errBody = await apiRes.json().catch(() => ({}));
+    if (apiRes.status === 401) {
+      throw Object.assign(new Error('OpenAI APIキーが無効です'), { statusCode: 502 });
+    }
+    if (apiRes.status === 429) {
+      throw Object.assign(new Error('OpenAI レート制限中です'), { statusCode: 429 });
+    }
+    throw Object.assign(
+      new Error((errBody as Record<string, string>).error || `OpenAI API error: ${apiRes.status}`),
+      { statusCode: 502 },
+    );
+  }
+
+  const apiData = await apiRes.json();
+  const text = apiData.choices[0].message.content;
+  const inputTokens = apiData.usage?.prompt_tokens || 0;
+  const outputTokens = apiData.usage?.completion_tokens || 0;
+  return {
+    text,
+    tokensUsed: inputTokens + outputTokens,
+    // gpt-4o pricing: $2.50/1M input, $10/1M output
+    costUsd: (inputTokens * 2.5 + outputTokens * 10) / 1_000_000,
+  };
+}
+
+// ============================================================
+// キャスト別デフォルト表示名（DBアクセスなしのフォールバック）
+// ============================================================
+const CAST_DISPLAY_NAMES: Record<string, string> = {
+  Risa_06: 'りさ',
+  hanshakun: 'はんしゃくん',
+};
+
+// ============================================================
 // POST /api/persona
-// mode=generate → Phase 1テンプレート文面生成
-// mode=ai       → Phase 2 Claude API文面生成
+// mode=customer  → OpenAI DM生成（モック/実API自動切替）
+// mode=generate  → Phase 1 テンプレート文面生成
+// mode=ai        → Phase 2 Claude API文面生成
 // (後方互換) task_type指定 → Phase 2
 // ============================================================
 export async function POST(req: NextRequest) {
@@ -510,7 +541,108 @@ export async function POST(req: NextRequest) {
   const mode = body.mode as string || (body.task_type ? 'ai' : 'generate');
   const reqAccountId = body.account_id as string | null;
 
-  // 認証 + account_id 検証
+  // ── mode=customer: OpenAI DM生成パス ──
+  // OPENAI_API_KEY なし → モック（認証不要）
+  // OPENAI_API_KEY あり → 認証 + DB + OpenAI
+  if (mode === 'customer') {
+    const castName = body.cast_name as string;
+    const taskType = body.task_type as string;
+    const ctx = body.context as Record<string, unknown> | undefined;
+
+    if (!castName || !ctx?.username) {
+      return NextResponse.json({ error: 'cast_name と context.username は必須です' }, { status: 400 });
+    }
+    if (taskType && taskType !== 'dm_generate') {
+      return NextResponse.json({ error: 'mode=customer は現在 dm_generate のみ対応' }, { status: 400 });
+    }
+
+    const username = ctx.username as string;
+    const segment = (ctx.segment as string) || 'S10';
+    const scenario = (ctx.scenario as string) || 'A';
+    const stepNumber = (ctx.step_number as number) || 1;
+    const recentMessage = ctx.recent_message as string | undefined;
+    const lastDmTone = ctx.last_dm_tone as string | undefined;
+
+    // ── モック: OPENAI_API_KEY 未設定 ──
+    if (USE_MOCK_OPENAI) {
+      const displayName = CAST_DISPLAY_NAMES[castName] || castName;
+      const mockRes = generateMockDmResponse({
+        username,
+        segment,
+        scenario,
+        castDisplayName: displayName,
+      });
+      return NextResponse.json(mockRes);
+    }
+
+    // ── 実API: 認証 + DB + OpenAI ──
+    const auth = await authenticateAndValidateAccount(req, reqAccountId);
+    if (!auth.authenticated) return auth.error;
+
+    try {
+      const sb = getAuthClient(auth.token);
+      const { data: persona } = await sb
+        .from('cast_personas')
+        .select('*')
+        .eq('cast_name', castName)
+        .single();
+
+      const activePersona: CastPersona = persona
+        ? (persona as CastPersona)
+        : { ...DEFAULT_PERSONA, cast_name: castName };
+
+      const systemPrompt = [
+        LAYER_A_ANDO_FOUNDATION,
+        '',
+        buildLayerB(activePersona),
+        '',
+        activePersona.system_prompt_context ? `=== 直近コンテキスト ===\n${activePersona.system_prompt_context}` : '',
+        '',
+        LAYER_C_RULES.dm_generate,
+      ].filter(Boolean).join('\n');
+
+      const SCENARIO_LABELS: Record<string, string> = { A: 'お礼', B: '離脱防止', C: '配信前告知', D: 'VIP特別', E: '復帰促進' };
+      const scenarioLabel = SCENARIO_LABELS[scenario] || scenario;
+
+      const userPrompt = `ユーザー名: ${username}
+セグメント: ${segment}
+シナリオ: ${scenarioLabel} (Step ${stepNumber})
+${recentMessage ? `直近発言: ${recentMessage}` : ''}
+${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーンで）` : ''}
+
+上記ユーザーに最適なDMを生成してください。`;
+
+      const result = await callOpenAI(systemPrompt, userPrompt, 500);
+
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(result.text);
+      } catch {
+        parsed = { message: result.text, reasoning: 'JSON parse failed', tone: 'emotional', byaf_used: activePersona.byaf_style || '' };
+      }
+
+      return NextResponse.json({
+        message: (parsed.message as string) || result.text,
+        reasoning: (parsed.reasoning as string) || '',
+        tone: (parsed.tone as string) || 'emotional',
+        byaf_used: (parsed.byaf_used as string) || activePersona.byaf_style || '',
+        persona_used: activePersona.display_name || activePersona.cast_name,
+        persona_found: !!persona,
+        is_mock: false,
+        model: 'gpt-4o',
+        cost_tokens: result.tokensUsed,
+        cost_usd: result.costUsd,
+      });
+    } catch (e: unknown) {
+      const err = e as { message?: string; statusCode?: number };
+      return NextResponse.json(
+        { error: err.message || 'OpenAI DM生成エラー' },
+        { status: err.statusCode || 500 },
+      );
+    }
+  }
+
+  // ── 以下は既存モード（認証必須） ──
   const auth = await authenticateAndValidateAccount(req, reqAccountId);
   if (!auth.authenticated) return auth.error;
 
@@ -547,8 +679,21 @@ export async function POST(req: NextRequest) {
   if (!LAYER_C_RULES[task_type]) {
     return NextResponse.json({ error: `未対応のtask_type: ${task_type}` }, { status: 400 });
   }
-  if (!ANTHROPIC_API_KEY) {
-    return NextResponse.json({ error: 'ANTHROPIC_API_KEY が未設定です' }, { status: 500 });
+  // APIキー未設定 → モックレスポンスで返却（認証済みユーザー向け）
+  if (USE_MOCK_CLAUDE) {
+    if (task_type === 'dm_generate') {
+      const username = (context?.username || context?.user_name || 'user') as string;
+      const segment = (context?.segment) as string | undefined;
+      const scenario = (context?.scenario || context?.scenario_type) as string | undefined;
+      const mockRes = generateMockDmResponse({
+        username,
+        segment,
+        scenario,
+        castDisplayName: cast_name,
+      });
+      return NextResponse.json(mockRes);
+    }
+    return NextResponse.json(generateGenericMockResponse(task_type, cast_name));
   }
 
   try {
@@ -570,7 +715,6 @@ export async function POST(req: NextRequest) {
       '',
       buildLayerB(activePersona),
       '',
-      // L3: 動的コンテキスト（設定されていれば追加）
       activePersona.system_prompt_context ? `=== 直近コンテキスト ===\n${activePersona.system_prompt_context}` : '',
       '',
       LAYER_C_RULES[task_type],

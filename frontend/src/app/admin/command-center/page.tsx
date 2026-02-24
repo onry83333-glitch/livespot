@@ -195,6 +195,14 @@ export default function CommandCenterPage() {
   const [expandedPhase, setExpandedPhase] = useState<number | null>(0);
   const [revenue, setRevenue] = useState({ thisWeek: 0, lastWeek: 0, activeCasts: 0 });
   const [pipelines, setPipelines] = useState<{ id: number; pipeline_name: string; status: string; source: string | null; destination: string | null; detail: string | null; last_run_at: string | null; last_success: boolean }[]>([]);
+
+  // P0-4: テストデータ削除
+  const [testDataCount, setTestDataCount] = useState<{ test_count: number; bulk_count: number; total: number } | null>(null);
+  const [testDataLoading, setTestDataLoading] = useState(false);
+  const [testDataDeleting, setTestDataDeleting] = useState(false);
+  const [testDataConfirm, setTestDataConfirm] = useState(false);
+  const [testDataResult, setTestDataResult] = useState<string | null>(null);
+
   const t = TK[mode];
   const g = useCallback((k: string) => t[k] || k, [t]);
   const ff = "'DM Sans', 'Segoe UI', system-ui, sans-serif";
@@ -266,6 +274,36 @@ export default function CommandCenterPage() {
     fetchPipelines();
     const iv = setInterval(fetchPipelines, 60000);
     return () => clearInterval(iv);
+  }, [supabase]);
+
+  // ── P0-4: テストデータ件数チェック ──
+  const handleCountTestData = useCallback(async () => {
+    setTestDataLoading(true);
+    setTestDataResult(null);
+    try {
+      const { data, error } = await supabase.rpc('count_test_dm_data', {});
+      if (error) throw error;
+      setTestDataCount(data);
+    } catch (e: unknown) {
+      setTestDataResult(`エラー: ${e instanceof Error ? e.message : '不明'}`);
+    }
+    setTestDataLoading(false);
+  }, [supabase]);
+
+  // ── P0-4: テストデータ削除実行 ──
+  const handleDeleteTestData = useCallback(async () => {
+    setTestDataDeleting(true);
+    setTestDataResult(null);
+    setTestDataConfirm(false);
+    try {
+      const { data, error } = await supabase.rpc('cleanup_test_dm_data', {});
+      if (error) throw error;
+      setTestDataResult(`${data.deleted}件のテストデータを削除しました (${new Date().toLocaleTimeString('ja-JP')})`);
+      setTestDataCount(null);
+    } catch (e: unknown) {
+      setTestDataResult(`削除エラー: ${e instanceof Error ? e.message : '不明'}`);
+    }
+    setTestDataDeleting(false);
   }, [supabase]);
 
   // ── Derived pipe arrays ──
@@ -678,6 +716,133 @@ export default function CommandCenterPage() {
                   <div style={{ fontSize: 10, color: g("dim"), fontFamily: fm, marginTop: 4 }}>{a.count}/{a.total} プロセス</div>
                 </div>
               ))}
+            </div>
+          </Card>
+
+          {/* P0-4: データメンテナンス */}
+          <Card style={{ padding: "18px 22px", marginTop: 22 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: "1.5px", color: g("red") }}>🗑️ データメンテナンス</span>
+            </div>
+
+            <div style={{
+              background: g("cardAlt"), borderRadius: 8, padding: "14px 16px", border: `1px solid ${g("bdr")}`,
+            }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>テストDMデータ削除</div>
+                  <div style={{ fontSize: 11, color: g("mid"), lineHeight: 1.5 }}>
+                    campaign に &quot;test&quot; または &quot;bulk&quot; を含む dm_send_log レコードを削除します。
+                    <br />対象: bulk_*, pipe3_bulk_*, 20250217_test_* 等
+                  </div>
+                </div>
+                <button
+                  onClick={handleCountTestData}
+                  disabled={testDataLoading}
+                  style={{
+                    background: g("cynDim"), color: g("cyn"), border: `1px solid ${g("bdr")}`,
+                    borderRadius: 6, padding: "6px 14px", fontSize: 11, fontWeight: 700,
+                    cursor: testDataLoading ? "not-allowed" : "pointer", fontFamily: ff,
+                    opacity: testDataLoading ? 0.5 : 1, whiteSpace: "nowrap",
+                  }}
+                >
+                  {testDataLoading ? "確認中..." : "件数チェック"}
+                </button>
+              </div>
+
+              {/* 件数表示 */}
+              {testDataCount && (
+                <div style={{
+                  background: g("redDim"), borderRadius: 6, padding: "12px 14px",
+                  border: `1px solid ${g("bdr")}`, marginBottom: 10,
+                }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: g("dim"), letterSpacing: "0.5px", marginBottom: 2 }}>test系</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, fontFamily: fm, color: g("red") }}>{testDataCount.test_count.toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: g("dim"), letterSpacing: "0.5px", marginBottom: 2 }}>bulk系</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, fontFamily: fm, color: g("amb") }}>{testDataCount.bulk_count.toLocaleString()}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, fontWeight: 700, color: g("dim"), letterSpacing: "0.5px", marginBottom: 2 }}>合計</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, fontFamily: fm, color: g("red") }}>{testDataCount.total.toLocaleString()}</div>
+                    </div>
+                  </div>
+
+                  {testDataCount.total > 0 && !testDataConfirm && (
+                    <button
+                      onClick={() => setTestDataConfirm(true)}
+                      style={{
+                        background: g("red"), color: "#fff", border: "none",
+                        borderRadius: 6, padding: "8px 18px", fontSize: 12, fontWeight: 700,
+                        cursor: "pointer", fontFamily: ff, width: "100%",
+                      }}
+                    >
+                      {testDataCount.total.toLocaleString()}件を削除
+                    </button>
+                  )}
+
+                  {/* 確認ダイアログ */}
+                  {testDataConfirm && (
+                    <div style={{
+                      background: g("card"), borderRadius: 8, padding: "14px",
+                      border: `2px solid ${g("red")}`,
+                    }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: g("red"), marginBottom: 8, textAlign: "center" }}>
+                        本当に {testDataCount.total.toLocaleString()} 件を削除しますか？
+                      </div>
+                      <div style={{ fontSize: 11, color: g("mid"), marginBottom: 12, textAlign: "center" }}>
+                        この操作は取り消せません
+                      </div>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          onClick={() => setTestDataConfirm(false)}
+                          style={{
+                            flex: 1, background: g("bdr"), color: g("txt"), border: "none",
+                            borderRadius: 6, padding: "8px", fontSize: 12, fontWeight: 600,
+                            cursor: "pointer", fontFamily: ff,
+                          }}
+                        >
+                          キャンセル
+                        </button>
+                        <button
+                          onClick={handleDeleteTestData}
+                          disabled={testDataDeleting}
+                          style={{
+                            flex: 1, background: g("red"), color: "#fff", border: "none",
+                            borderRadius: 6, padding: "8px", fontSize: 12, fontWeight: 700,
+                            cursor: testDataDeleting ? "not-allowed" : "pointer", fontFamily: ff,
+                            opacity: testDataDeleting ? 0.5 : 1,
+                          }}
+                        >
+                          {testDataDeleting ? "削除中..." : "削除実行"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {testDataCount.total === 0 && (
+                    <div style={{ fontSize: 11, color: g("pri"), fontWeight: 600, textAlign: "center" }}>
+                      テストデータはありません
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 結果メッセージ */}
+              {testDataResult && (
+                <div style={{
+                  fontSize: 11, fontWeight: 600, padding: "8px 12px", borderRadius: 6,
+                  background: testDataResult.startsWith('エラー') || testDataResult.startsWith('削除エラー')
+                    ? g("redDim") : g("priDim"),
+                  color: testDataResult.startsWith('エラー') || testDataResult.startsWith('削除エラー')
+                    ? g("red") : g("pri"),
+                }}>
+                  {testDataResult}
+                </div>
+              )}
             </div>
           </Card>
           </>)}

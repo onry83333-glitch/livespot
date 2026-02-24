@@ -44,8 +44,12 @@ frontend/playwright-report/
 # Claude Code
 .claude/
 
-# Collector logs
+# Collector logs & secrets
 collector/logs/*.log
+backend/collector/cookies.json
+
+# Supabase temp
+supabase/.temp/
 
 # Windows artifacts
 nul

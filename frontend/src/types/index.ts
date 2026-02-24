@@ -401,6 +401,35 @@ export interface PersonaApiResponse {
   cost_usd: number;
   persona_used: string;
   persona_found: boolean;
+  is_mock?: boolean;
+}
+
+// ── dm_generate (mode=customer) 専用型 ──
+export interface DmGenerateRequest {
+  task_type: 'dm_generate';
+  mode: 'customer';
+  cast_name: string;
+  context: {
+    username: string;
+    segment: string;       // S1〜S10
+    scenario: string;      // A=お礼, B=離脱防止, C=配信前, D=VIP特別, E=復帰
+    step_number?: number;  // シナリオ内ステップ (default: 1)
+    recent_message?: string; // ユーザーの直近発言（個別感用）
+    last_dm_tone?: string;   // 前回DMのトーン（交互制御用）
+  };
+}
+
+export interface DmGenerateResponse {
+  message: string;
+  reasoning: string;
+  tone: 'emotional' | 'factual' | 'playful';
+  byaf_used: string;
+  persona_used: string;
+  persona_found: boolean;
+  is_mock: boolean;
+  model: string;           // 'mock' | 'gpt-4o' | 'gpt-4o-mini' | 'claude-sonnet-4'
+  cost_tokens: number;
+  cost_usd: number;
 }
 
 // ============================================================

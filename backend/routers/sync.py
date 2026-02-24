@@ -1,15 +1,23 @@
-"""Sync router - Coin API同期, CSVアップロード, デモデータ, ステータス"""
+"""Sync router - Coin API同期, CSVアップロード, デモデータ, Cookie同期, ステータス"""
 import csv
 import io
+import json
+import logging
 import random
 import string
 import httpx
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query
 from pydantic import BaseModel
 from typing import Optional
 from config import get_supabase_admin
 from routers.auth import get_current_user
+
+logger = logging.getLogger(__name__)
+
+# Cookie JSONファイルの保存先
+COOKIE_FILE = Path(__file__).resolve().parent.parent / "collector" / "cookies.json"
 
 router = APIRouter()
 
@@ -427,3 +435,43 @@ async def upload_coin_transactions(
         pass
 
     return {"inserted": len(rows)}
+
+
+# ============================================================
+# Cookie同期 — Chrome拡張 → cookies.json
+# ============================================================
+class CookieSyncRequest(BaseModel):
+    account_id: str
+    cookies: dict[str, str]  # {"cookie_name": "cookie_value", ...}
+
+
+@router.post("/cookies")
+async def sync_cookies(body: CookieSyncRequest, user=Depends(get_current_user)):
+    """
+    Chrome拡張から Stripchat Cookie を受信し cookies.json に保存。
+    Chrome DB ロック問題を完全回避する方式B。
+    """
+    sb = get_supabase_admin()
+    _verify_account_ownership(sb, body.account_id, user["user_id"])
+
+    if not body.cookies:
+        raise HTTPException(status_code=400, detail="cookies が空です")
+
+    # cookies.json に書き出し
+    payload = {
+        "account_id": body.account_id,
+        "cookies": body.cookies,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "source": "chrome_extension",
+    }
+
+    COOKIE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    COOKIE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"Cookie同期完了: {len(body.cookies)}件 → {COOKIE_FILE}")
+
+    return {
+        "ok": True,
+        "saved_to": str(COOKIE_FILE),
+        "cookie_count": len(body.cookies),
+        "exported_at": payload["exported_at"],
+    }

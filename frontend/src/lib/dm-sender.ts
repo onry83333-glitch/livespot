@@ -7,11 +7,55 @@ interface QueueTarget {
 
 interface QueueResult {
   queued: number;
+  skipped: number;
+  skippedUsers: string[];
   batchId: string;
+}
+
+interface DuplicateCheckResult {
+  duplicates: string[];
+  duplicate_count: number;
+  checked_count: number;
+}
+
+/**
+ * P0-5: 24時間以内の重複チェック
+ * 同一キャスト + 同一ユーザーに24h以内にDM送信済みならスキップ
+ */
+export async function checkDmDuplicates(
+  supabase: SupabaseClient,
+  accountId: string,
+  castName: string,
+  usernames: string[],
+  hours = 24,
+): Promise<DuplicateCheckResult> {
+  try {
+    const { data, error } = await supabase.rpc('check_dm_duplicate', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_user_names: usernames,
+      p_hours: hours,
+    });
+
+    if (error || !data) {
+      console.warn('[dm-sender] Duplicate check RPC failed, skipping check:', error?.message);
+      return { duplicates: [], duplicate_count: 0, checked_count: usernames.length };
+    }
+
+    return {
+      duplicates: data.duplicates || [],
+      duplicate_count: data.duplicate_count || 0,
+      checked_count: data.checked_count || usernames.length,
+    };
+  } catch {
+    // RPC未作成でも続行（フォールバック: チェックなし）
+    return { duplicates: [], duplicate_count: 0, checked_count: usernames.length };
+  }
 }
 
 /**
  * DM送信キューに一括登録する汎用ユーティリティ。
+ * P0-5: 24時間以内の重複を自動スキップ。
  * RPC create_dm_batch を試行し、失敗時は直接INSERTにフォールバック。
  */
 export async function queueDmBatch(
@@ -20,16 +64,43 @@ export async function queueDmBatch(
   castName: string,
   targets: QueueTarget[],
   campaign: string,
+  options: { skipDuplicates?: boolean } = {},
 ): Promise<QueueResult> {
   if (targets.length === 0) throw new Error('送信対象が0件です');
 
+  const { skipDuplicates = true } = options;
   const now = new Date();
-  const usernames = targets.map(t => t.username);
-  const firstMessage = targets[0].message;
-  const allSameMessage = targets.every(t => t.message === firstMessage);
+  let usernames = targets.map(t => t.username);
+  let filteredTargets = [...targets];
+  let skipped = 0;
+  let skippedUsers: string[] = [];
+
+  // P0-5: 送信前に重複チェック
+  if (skipDuplicates && castName) {
+    const dupCheck = await checkDmDuplicates(supabase, accountId, castName, usernames);
+    if (dupCheck.duplicate_count > 0) {
+      const dupSet = new Set(dupCheck.duplicates);
+      skippedUsers = dupCheck.duplicates;
+      skipped = dupCheck.duplicate_count;
+      filteredTargets = targets.filter(t => !dupSet.has(t.username));
+      usernames = filteredTargets.map(t => t.username);
+
+      console.info(
+        `[dm-sender] 重複スキップ: ${skipped}件 (${skippedUsers.join(', ')})`,
+      );
+
+      // 全員スキップされた場合
+      if (filteredTargets.length === 0) {
+        return { queued: 0, skipped, skippedUsers, batchId: campaign };
+      }
+    }
+  }
+
+  const firstMessage = filteredTargets[0].message;
+  const allSameMessage = filteredTargets.every(t => t.message === firstMessage);
 
   let batchId = campaign;
-  let count = targets.length;
+  let count = filteredTargets.length;
   let usedRpc = false;
 
   // Step 1: RPC で一括登録を試行（全員同一メッセージの場合のみ）
@@ -41,11 +112,12 @@ export async function queueDmBatch(
         p_targets: usernames,
         p_message: firstMessage,
         p_template_name: null,
+        p_skip_duplicates: false, // 既にアプリ側でチェック済み
       });
 
       if (!rpcErr && data && !data.error) {
         batchId = data.batch_id || campaign;
-        count = data.count || targets.length;
+        count = data.count || filteredTargets.length;
         usedRpc = true;
       } else if (data?.error) {
         throw new Error(`${data.error} (使用済み: ${data.used}/${data.limit})`);
@@ -58,7 +130,7 @@ export async function queueDmBatch(
 
   // Step 2: RPC未使用 → 直接INSERT
   if (!usedRpc) {
-    const rows = targets.map(t => ({
+    const rows = filteredTargets.map(t => ({
       account_id: accountId,
       cast_name: castName,
       user_name: t.username,
@@ -76,7 +148,7 @@ export async function queueDmBatch(
     if (insertErr) {
       throw new Error(`キュー登録失敗: ${insertErr.message}`);
     }
-    count = insertData?.length || targets.length;
+    count = insertData?.length || filteredTargets.length;
   }
 
   // Step 3: RPC使用時はcampaignを上書き + cast_name補完
@@ -87,5 +159,5 @@ export async function queueDmBatch(
     batchId = campaign;
   }
 
-  return { queued: count, batchId };
+  return { queued: count, skipped, skippedUsers, batchId };
 }

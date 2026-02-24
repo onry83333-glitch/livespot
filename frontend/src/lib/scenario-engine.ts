@@ -60,6 +60,7 @@ export interface EnrollResult {
 export interface ProcessResult {
   processed: number;
   errors: number;
+  skipped: number;
 }
 
 // ============================================================
@@ -163,6 +164,7 @@ export async function processScenarioQueue(
 ): Promise<ProcessResult> {
   let processed = 0;
   let errors = 0;
+  let skipped = 0;
 
   // 1. 期日到来のエンロールメントを取得（シナリオ情報を結合）
   const { data: dueEnrollments, error: fetchError } = await supabase
@@ -176,11 +178,11 @@ export async function processScenarioQueue(
 
   if (fetchError) {
     console.warn('[scenario-engine] Failed to fetch due enrollments:', fetchError.message);
-    return { processed: 0, errors: 0 };
+    return { processed: 0, errors: 0, skipped: 0 };
   }
 
   if (!dueEnrollments || dueEnrollments.length === 0) {
-    return { processed: 0, errors: 0 };
+    return { processed: 0, errors: 0, skipped: 0 };
   }
 
   for (const raw of dueEnrollments) {
@@ -215,6 +217,24 @@ export async function processScenarioQueue(
       // メッセージテンプレートの {username} を置換
       const message = (step.message || step.template || '')
         .replace(/\{username\}/g, enrollment.username);
+
+      // P0-5: 24時間以内の重複チェック（シナリオ経由のDMも対象）
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: recentDm } = await supabase
+        .from('dm_send_log')
+        .select('id')
+        .eq('account_id', accountId)
+        .eq('cast_name', enrollment.cast_name)
+        .eq('user_name', enrollment.username)
+        .neq('status', 'error')
+        .gte('queued_at', cutoff)
+        .limit(1);
+
+      if (recentDm && recentDm.length > 0) {
+        console.info(`[scenario-engine] 重複スキップ: ${enrollment.username} (24h以内に送信済み)`);
+        skipped++;
+        continue;
+      }
 
       // dm_send_log にDMをキュー登録
       // 注意: dm_send_log は user_name カラム、dm_scenario_enrollments は username カラム
@@ -277,7 +297,7 @@ export async function processScenarioQueue(
     }
   }
 
-  return { processed, errors };
+  return { processed, errors, skipped };
 }
 
 // ============================================================

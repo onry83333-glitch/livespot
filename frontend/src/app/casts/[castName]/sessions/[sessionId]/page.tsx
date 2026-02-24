@@ -917,7 +917,7 @@ export default function SessionDetailPage() {
           const targets = selectedUsers.map(u => ({ username: u, message: msg }));
           const result = await queueDmBatch(sb, accountId, castName, targets, campaign);
           setDmSentCampaign(campaign);
-          setToast(`${result.queued}件のDMをキューに登録しました`);
+          setToast(`${result.queued}件のDMをキューに登録しました${result.skipped ? ` (${result.skipped}件重複スキップ)` : ''}`);
         } catch (e: unknown) {
           setToast(e instanceof Error ? e.message : '送信エラー');
         }
@@ -949,7 +949,7 @@ export default function SessionDetailPage() {
           }));
           const result = await queueDmBatch(sb, accountId, castName, targets, campaign);
           setDmSentCampaign(campaign);
-          setToast(`${result.queued}件のお礼DMをキューに登録しました`);
+          setToast(`${result.queued}件のお礼DMをキューに登録しました${result.skipped ? ` (${result.skipped}件重複スキップ)` : ''}`);
           setActions(prev => prev ? {
             ...prev,
             first_time_payers: prev.first_time_payers.map(p =>
@@ -992,7 +992,7 @@ export default function SessionDetailPage() {
           }));
           const result = await queueDmBatch(sb, accountId, castName, dmTargets, campaign);
           setDmSentCampaign(campaign);
-          setToast(`${result.queued}件のフォローDMをキューに登録しました`);
+          setToast(`${result.queued}件のフォローDMをキューに登録しました${result.skipped ? ` (${result.skipped}件重複スキップ)` : ''}`);
 
           // シナリオ自動エンロール（来訪フォロー）
           for (const u of selectedUsers) {
