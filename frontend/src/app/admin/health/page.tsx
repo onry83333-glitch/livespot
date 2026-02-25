@@ -330,6 +330,9 @@ export default function HealthPage() {
               最終実行: {lastRun.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}
             </p>
           )}
+          <Link href="/admin/data-quality" className="text-[11px] mt-1 hover:underline" style={{ color: 'var(--accent-primary)' }}>
+            SPYデータ品質管理 →
+          </Link>
         </div>
         <button
           onClick={runChecks}

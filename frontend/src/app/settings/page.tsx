@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { COIN_RATE } from '@/lib/utils';
@@ -420,6 +421,10 @@ export default function SettingsPage() {
             {t.label}
           </button>
         ))}
+        <Link href="/settings/casts"
+          className="px-5 py-2.5 rounded-lg text-xs font-medium transition-all text-slate-400 hover:text-slate-200">
+          SPYキャスト管理
+        </Link>
       </div>
 
       {/* ============ Account Settings Tab ============ */}
