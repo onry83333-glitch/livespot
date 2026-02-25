@@ -1,6 +1,15 @@
 /**
- * Strip Live Spot - DM Executor v5.1
+ * Strip Live Spot - DM Executor v6.1
  * Background から SEND_DM メッセージを受け取りStripchat上でDM送信を実行
+ *
+ * v6.1: 画像DM送信改善
+ *   - findFileInput を MutationObserver ベースに改善（ポーリング廃止）
+ *   - Clipboard API フォールバック追加（input[type=file] 未検出時）
+ *
+ * v6.0: 画像DM送信対応（DOM方式）
+ *   - input[type=file] DataTransfer操作で画像添付
+ *   - send_order 4パターン対応 (text_only/image_only/text_then_image/image_then_text)
+ *   - 画像プレビュー待ち + 送信確認
  *
  * v5.1: タイムアウト問題修正
  *   - 各ステップにタイミングログ追加（ボトルネック特定用）
@@ -408,21 +417,439 @@
   }
 
   // ============================================================
+  // 画像添付: input[type=file] を探してDataTransferで画像セット
+  // ============================================================
+
+  /**
+   * PMダイアログ内のinput[type=file]を即座に検索（同期版）
+   */
+  function findFileInputImmediate() {
+    const inputs = document.querySelectorAll('input[type="file"]');
+    // Strategy 1: ダイアログ/メッセンジャー内のものを優先
+    for (const inp of inputs) {
+      if (inp.closest('[role="dialog"], [class*="messenger" i], [class*="message" i], [class*="chat" i], [class*="modal" i]')) {
+        console.log(LOG, '画像添付: input[type=file] 発見 (ダイアログ内)', inp.accept || '');
+        return inp;
+      }
+    }
+    // Strategy 2: accept="image/*" のinput
+    for (const inp of inputs) {
+      if ((inp.accept || '').includes('image')) {
+        console.log(LOG, '画像添付: input[type=file] 発見 (accept=image)');
+        return inp;
+      }
+    }
+    // Strategy 3: ページ上の任意のinput[type=file]
+    if (inputs.length > 0) {
+      console.log(LOG, '画像添付: input[type=file] 発見 (フォールバック)');
+      return inputs[0];
+    }
+    return null;
+  }
+
+  /**
+   * PMダイアログ内のinput[type=file]を探す（MutationObserver版）
+   * Stripchat PMダイアログにはファイル添付用の隠しinputがある
+   */
+  async function findFileInput(maxWait = 5000) {
+    console.log(LOG, '画像添付: input[type=file] 検索 (MutationObserver)...');
+
+    // まず既存の要素をチェック
+    const existing = findFileInputImmediate();
+    if (existing) return existing;
+
+    // MutationObserverで動的生成を監視
+    return new Promise((resolve) => {
+      const observer = new MutationObserver(() => {
+        const el = findFileInputImmediate();
+        if (el) {
+          observer.disconnect();
+          resolve(el);
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => {
+        observer.disconnect();
+        console.warn(LOG, '画像添付: input[type=file] 未検出 (タイムアウト)');
+        resolve(null);
+      }, maxWait);
+    });
+  }
+
+  /**
+   * 添付ボタン（クリップアイコン等）をクリックしてファイル入力を有効化
+   */
+  async function clickAttachButton() {
+    // PMダイアログ/メッセンジャー内のコンテナを特定
+    const container = document.querySelector(
+      '[role="dialog"], [class*="messenger" i], [class*="message-form" i], [class*="chat-form" i]'
+    );
+    if (!container) return false;
+
+    // 添付アイコンボタンを探す
+    const buttons = container.querySelectorAll('button, label, [role="button"]');
+    for (const btn of buttons) {
+      const aria = (btn.getAttribute('aria-label') || '').toLowerCase();
+      const cls = (btn.className || '').toString().toLowerCase();
+      const title = (btn.getAttribute('title') || '').toLowerCase();
+
+      // 添付・画像・写真関連のボタン
+      if (/attach|photo|image|upload|画像|写真|添付|clip|ファイル/i.test(aria + cls + title)) {
+        console.log(LOG, '画像添付: 添付ボタン発見', aria || cls.substring(0, 40));
+        btn.click();
+        await sleep(300);
+        return true;
+      }
+
+      // SVGアイコンのみのlabel（input[type=file]のトリガー）
+      if (btn.tagName === 'LABEL' && btn.querySelector('svg') && btn.htmlFor) {
+        console.log(LOG, '画像添付: label[for] ボタン発見', btn.htmlFor);
+        btn.click();
+        await sleep(300);
+        return true;
+      }
+    }
+
+    // input[type=file]のlabelを直接探す
+    const fileInputs = container.querySelectorAll('input[type="file"]');
+    for (const fi of fileInputs) {
+      if (fi.id) {
+        const label = container.querySelector(`label[for="${fi.id}"]`);
+        if (label) {
+          console.log(LOG, '画像添付: label[for=fileInput] クリック');
+          label.click();
+          await sleep(300);
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * base64画像をinput[type=file]にセットしてアップロードトリガー
+   */
+  async function attachImageToFileInput(fileInput, imageBase64) {
+    console.log(LOG, '画像添付: DataTransfer操作開始...');
+
+    try {
+      // base64 → Blob
+      const binaryStr = atob(imageBase64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: 'image/jpeg' });
+      const file = new File([blob], 'dm_image.jpg', { type: 'image/jpeg', lastModified: Date.now() });
+
+      // DataTransfer で input.files にセット
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      fileInput.files = dt.files;
+
+      // change + input イベント発火（React/Vue等のフレームワーク対応）
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+      fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+      console.log(LOG, '画像添付: DataTransfer完了, files.length=', fileInput.files.length, ', size=', (blob.size / 1024).toFixed(1), 'KB');
+      return true;
+    } catch (e) {
+      console.error(LOG, '画像添付: DataTransfer失敗:', e.message);
+      return false;
+    }
+  }
+
+  /**
+   * 画像プレビューの出現を待つ
+   * Stripchatのメッセンジャーは画像添付後にプレビューを表示する
+   */
+  async function waitForImagePreview(maxWait = 5000) {
+    console.log(LOG, '画像添付: プレビュー待ち...');
+    const start = Date.now();
+
+    while (Date.now() - start < maxWait) {
+      // プレビュー画像（img タグ、thumbnail、preview等）
+      const container = document.querySelector(
+        '[role="dialog"], [class*="messenger" i], [class*="message-form" i]'
+      );
+      if (container) {
+        // プレビュー系のクラス/要素を探す
+        const preview = container.querySelector(
+          '[class*="preview" i], [class*="thumbnail" i], [class*="attachment" i], [class*="upload" i] img, [class*="photo" i] img'
+        );
+        if (preview) {
+          console.log(LOG, '画像添付: プレビュー検出!', preview.tagName, (preview.className || '').toString().substring(0, 40));
+          return true;
+        }
+
+        // img要素でblob: or data: URLのもの
+        const imgs = container.querySelectorAll('img');
+        for (const img of imgs) {
+          if (img.src && (img.src.startsWith('blob:') || img.src.startsWith('data:'))) {
+            console.log(LOG, '画像添付: blob/data画像プレビュー検出');
+            return true;
+          }
+        }
+      }
+
+      await sleep(300);
+    }
+
+    console.warn(LOG, '画像添付: プレビュー未検出（タイムアウト）— そのまま送信を試行');
+    return false;
+  }
+
+  // ============================================================
+  // DM送信メインフロー（画像対応版）
+  // ============================================================
+
+  /**
+   * 画像DM送信: PMダイアログ上でinput[type=file]に画像をセットして送信
+   * @param {string} username - 送信先ユーザー名
+   * @param {string} message - メッセージ本文（image_onlyの場合は空）
+   * @param {string} imageBase64 - 画像のbase64データ
+   * @param {string} sendOrder - 送信順序 (text_only/image_only/text_then_image/image_then_text)
+   */
+  async function executeDMWithImage(username, message, imageBase64, sendOrder) {
+    const t0 = Date.now();
+    const elapsed = () => `${Date.now() - t0}ms`;
+
+    console.log(LOG, '========================================');
+    console.log(LOG, `画像DM送信開始: ${username} (sendOrder=${sendOrder})`);
+    console.log(LOG, `URL: ${window.location.href}`);
+    console.log(LOG, `画像データ: ${(imageBase64.length / 1024).toFixed(1)}KB (base64)`);
+
+    try {
+      // Step 1: PMボタンクリック
+      const pmOk = await clickPMButton();
+      console.log(LOG, `[TIMING] Step1 PMボタン: ${elapsed()}`);
+      if (!pmOk) {
+        throw new Error('PMボタンが見つかりません');
+      }
+
+      // PMダイアログ待ち
+      await sleep(500);
+      console.log(LOG, `[TIMING] PMダイアログ待ち後: ${elapsed()}`);
+
+      // Step 2: DM入力欄を探す
+      const chatInput = await findDMInput(5000);
+      console.log(LOG, `[TIMING] Step2 DM入力欄: ${elapsed()}`);
+      if (!chatInput) {
+        throw new Error('DM入力欄が見つかりません');
+      }
+
+      // ---- send_order に応じた送信パターン ----
+
+      if (sendOrder === 'text_only') {
+        // テキストのみ（既存と同じ）
+        return await sendTextViaDOM(chatInput, username, message, elapsed);
+      }
+
+      if (sendOrder === 'image_only') {
+        // 画像のみ送信
+        return await sendImageViaDOM(chatInput, username, imageBase64, elapsed);
+      }
+
+      if (sendOrder === 'text_then_image') {
+        // テキスト先 → 画像後
+        const textResult = await sendTextViaDOM(chatInput, username, message, elapsed);
+        if (!textResult.success) return textResult;
+
+        // テキスト送信後、入力欄を再取得（UIリフレッシュ対応）
+        await sleep(800);
+        const chatInput2 = await findDMInput(3000);
+        if (!chatInput2) {
+          console.warn(LOG, 'テキスト送信後の入力欄再取得失敗 — 画像スキップ');
+          return { success: true, error: null, sentMessages: 1, note: '画像送信スキップ（入力欄再取得失敗）' };
+        }
+
+        const imgResult = await sendImageViaDOM(chatInput2, username, imageBase64, elapsed);
+        return {
+          success: imgResult.success,
+          error: imgResult.error,
+          sentMessages: imgResult.success ? 2 : 1,
+          note: imgResult.success ? 'text_then_image 2通完了' : 'テキストのみ成功',
+        };
+      }
+
+      if (sendOrder === 'image_then_text') {
+        // 画像先 → テキスト後
+        const imgResult = await sendImageViaDOM(chatInput, username, imageBase64, elapsed);
+        if (!imgResult.success) return imgResult;
+
+        // 画像送信後、入力欄を再取得
+        await sleep(800);
+        const chatInput2 = await findDMInput(3000);
+        if (!chatInput2) {
+          console.warn(LOG, '画像送信後の入力欄再取得失敗 — テキストスキップ');
+          return { success: true, error: null, sentMessages: 1, note: 'テキスト送信スキップ（入力欄再取得失敗）' };
+        }
+
+        const textResult = await sendTextViaDOM(chatInput2, username, message, elapsed);
+        return {
+          success: textResult.success,
+          error: textResult.error,
+          sentMessages: textResult.success ? 2 : 1,
+          note: textResult.success ? 'image_then_text 2通完了' : '画像のみ成功',
+        };
+      }
+
+      // 不明なsendOrder → テキストのみ
+      console.warn(LOG, '不明なsendOrder:', sendOrder, '→ テキストのみ送信');
+      return await sendTextViaDOM(chatInput, username, message, elapsed);
+
+    } catch (err) {
+      console.error(LOG, `画像DM送信失敗 (${username}): ${err.message} [${elapsed()}]`);
+      console.log(LOG, '========================================');
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * テキストのみDOM送信（ヘルパー）
+   */
+  async function sendTextViaDOM(chatInput, username, message, elapsed) {
+    if (!message) {
+      console.log(LOG, 'テキストなし — スキップ');
+      return { success: true, error: null, note: 'テキストなし' };
+    }
+
+    await typeMessage(chatInput, message);
+    console.log(LOG, `[TIMING] テキスト入力: ${elapsed()}`);
+
+    const sendOk = await clickSendButton(chatInput);
+    console.log(LOG, `[TIMING] 送信ボタン: ${elapsed()}`);
+    if (!sendOk) {
+      return { success: false, error: '送信ボタンが見つかりません' };
+    }
+
+    await sleep(500);
+
+    const remaining = chatInput.value || chatInput.textContent || '';
+    if (remaining.trim() === message.trim()) {
+      console.warn(LOG, '入力欄未クリア — 送信失敗の可能性');
+    }
+
+    console.log(LOG, `テキストDM送信完了: ${username} [${elapsed()}]`);
+    console.log(LOG, '========================================');
+    return { success: true, error: null };
+  }
+
+  /**
+   * Clipboard API 経由で画像をペーストする（input[type=file]未検出時のフォールバック）
+   */
+  async function sendImageViaClipboard(chatInput, imageBase64, elapsed) {
+    console.log(LOG, '画像添付: Clipboard APIフォールバック...');
+    try {
+      const binaryStr = atob(imageBase64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: 'image/png' });
+
+      // contentEditable or textarea にフォーカス
+      const target = chatInput.closest('[role="dialog"]')?.querySelector('[contenteditable="true"]') || chatInput;
+      target.focus();
+      await sleep(200);
+
+      // paste イベントをディスパッチ
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'image.png', { type: 'image/png' }));
+      const pasteEvent = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dt,
+      });
+      target.dispatchEvent(pasteEvent);
+
+      console.log(LOG, `[TIMING] Clipboard paste: ${elapsed()}`);
+      await sleep(1000);
+      return true;
+    } catch (e) {
+      console.warn(LOG, 'Clipboard APIフォールバック失敗:', e.message);
+      return false;
+    }
+  }
+
+  /**
+   * 画像のみDOM送信（ヘルパー）
+   */
+  async function sendImageViaDOM(chatInput, username, imageBase64, elapsed) {
+    // 添付ボタンクリック（input[type=file]のトリガー）
+    await clickAttachButton();
+    console.log(LOG, `[TIMING] 添付ボタンクリック: ${elapsed()}`);
+
+    // input[type=file] を探す
+    const fileInput = await findFileInput(3000);
+    if (!fileInput) {
+      // Clipboard APIフォールバック
+      console.log(LOG, '画像添付: input[type=file]未検出 → Clipboard APIフォールバック');
+      const clipOk = await sendImageViaClipboard(chatInput, imageBase64, elapsed);
+      if (clipOk) {
+        await waitForImagePreview(5000);
+        await sleep(300);
+        const sendOk = await clickSendButton(chatInput);
+        if (sendOk) {
+          await sleep(800);
+          return { success: true, error: null };
+        }
+        return { success: false, error: 'Clipboard添付後の送信ボタン失敗' };
+      }
+      return { success: false, error: 'input[type=file]もClipboard APIも失敗' };
+    }
+
+    // DataTransferで画像セット
+    const attached = await attachImageToFileInput(fileInput, imageBase64);
+    console.log(LOG, `[TIMING] 画像添付: ${elapsed()}`);
+    if (!attached) {
+      return { success: false, error: '画像DataTransfer失敗' };
+    }
+
+    // プレビュー待ち
+    await waitForImagePreview(5000);
+    console.log(LOG, `[TIMING] プレビュー待ち: ${elapsed()}`);
+
+    // 送信ボタンクリック
+    await sleep(300);
+    const sendOk = await clickSendButton(chatInput);
+    console.log(LOG, `[TIMING] 画像送信ボタン: ${elapsed()}`);
+    if (!sendOk) {
+      return { success: false, error: '画像送信: 送信ボタンが見つかりません' };
+    }
+
+    await sleep(800);
+
+    console.log(LOG, `画像DM送信完了: ${username} [${elapsed()}]`);
+    console.log(LOG, '========================================');
+    return { success: true, error: null };
+  }
+
+  // ============================================================
   // Message Handler
   // ============================================================
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'SEND_DM') {
-      console.log(LOG, `SEND_DM受信: user=${msg.username}, taskId=${msg.taskId}`);
+      const hasImage = !!(msg.imageBase64 && msg.sendOrder && msg.sendOrder !== 'text_only');
+      console.log(LOG, `SEND_DM受信: user=${msg.username}, taskId=${msg.taskId}, sendOrder=${msg.sendOrder || 'text_only'}, hasImage=${hasImage}`);
 
       // {username}プレースホルダーをターゲットユーザー名に置換
       const finalMessage = (msg.message || '').replace(/\{username\}/g, msg.username || '');
+      const sendOrder = msg.sendOrder || 'text_only';
 
-      executeDM(msg.username, finalMessage).then((result) => {
+      // 画像あり → 画像対応フローで実行
+      const executor = hasImage
+        ? executeDMWithImage(msg.username, finalMessage, msg.imageBase64, sendOrder)
+        : executeDM(msg.username, finalMessage);
+
+      executor.then((result) => {
         chrome.runtime.sendMessage({
           type: 'DM_SEND_RESULT',
           taskId: msg.taskId,
           success: result.success,
           error: result.error,
+          sentMessages: result.sentMessages || 1,
         });
         sendResponse({ ok: true, result });
       });
@@ -436,5 +863,5 @@
     }
   });
 
-  console.log(LOG, 'DM executor ready (v5.1 - timeout fix, timing logs)');
+  console.log(LOG, 'DM executor ready (v6.1 - MutationObserver + Clipboard fallback)');
 })();

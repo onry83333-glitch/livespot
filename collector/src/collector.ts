@@ -22,6 +22,7 @@ import { parseCentrifugoChat } from './parsers/chat.js';
 import { RetryTracker, sleep } from './utils/reconnect.js';
 import { createLogger } from './utils/logger.js';
 import { getAuth, invalidateAuth } from './auth/index.js';
+import type { TriggerEngine } from './triggers/index.js';
 
 const log = createLogger('collector');
 
@@ -45,6 +46,7 @@ const retryTracker = new RetryTracker();
 let mainLoopRunning = false;
 let currentAuthToken = '';
 let currentCfClearance = '';
+let triggerEngineRef: TriggerEngine | null = null;
 
 /** cast_name + 配信開始時刻 → 決定的session_id */
 function generateSessionId(castName: string, startTime: string): string {
@@ -273,6 +275,15 @@ async function pollStatus(state: CastState): Promise<void> {
       );
       state.wsClient.connect();
     }
+
+    // Trigger: session start
+    if (triggerEngineRef) {
+      triggerEngineRef.onSessionTransition(target.accountId, target.castName, 'start', {
+        sessionId: state.sessionId,
+        viewerCount: result.viewerCount,
+        startTime,
+      }).catch((err) => log.error(`Trigger session start error: ${err}`));
+    }
   }
 
   // ------ OFFLINE transition ------
@@ -291,6 +302,15 @@ async function pollStatus(state: CastState): Promise<void> {
       session_id: state.sessionId,
       metadata: { source: 'collector', lastViewerCount: state.viewerCount },
     });
+
+    // Trigger: session end
+    if (triggerEngineRef) {
+      triggerEngineRef.onSessionTransition(target.accountId, target.castName, 'end', {
+        sessionId: state.sessionId,
+        messageCount: state.wsMessageCount,
+        tipTotal: state.wsTipTotal,
+      }).catch((err) => log.error(`Trigger session end error: ${err}`));
+    }
 
     // Disconnect WebSocket
     state.wsClient?.disconnect();
@@ -355,12 +375,19 @@ async function pollViewerList(state: CastState): Promise<void> {
   }
 
   log.debug(`${target.castName}: ${result.viewers.length} viewers, ${upserted} upserted`);
+
+  // Trigger: viewer list update
+  if (triggerEngineRef) {
+    triggerEngineRef.onViewerListUpdate(target.accountId, target.castName, result.viewers)
+      .catch((err) => log.error(`Trigger viewer list error: ${err}`));
+  }
 }
 
 // ----- Main loop -----
 
-export async function startCollector(): Promise<void> {
+export async function startCollector(triggerEngine?: TriggerEngine): Promise<void> {
   mainLoopRunning = true;
+  triggerEngineRef = triggerEngine || null;
   log.info('Collector main loop started');
 
   // Pre-fetch auth token before starting polling
@@ -386,6 +413,11 @@ export async function startCollector(): Promise<void> {
 
       // Stagger between casts
       await sleep(200);
+    }
+
+    // Advance trigger warmup counter
+    if (triggerEngineRef) {
+      triggerEngineRef.incrementWarmup();
     }
 
     // Wait before next cycle

@@ -1,0 +1,39 @@
+-- ============================================================
+-- 063: spy_user_profiles 定期更新 — pg_cron設定（参考）
+-- ============================================================
+-- Supabase Freeプランではpg_cronが使えないため、
+-- Collector プロセス内で定期実行する方式Bを採用。
+-- Proプランに移行した場合は以下のSQL で pg_cron を有効化できる。
+--
+-- pg_cron方式（Supabase Pro/Enterprise のみ）:
+--
+-- CREATE EXTENSION IF NOT EXISTS pg_cron;
+--
+-- -- 全アクティブアカウントのspy_user_profilesを6時間ごとに更新
+-- SELECT cron.schedule(
+--   'refresh-spy-profiles-all',
+--   '0 */6 * * *',
+--   $$
+--   DO $do$
+--   DECLARE
+--     v_account RECORD;
+--     v_count INTEGER;
+--   BEGIN
+--     FOR v_account IN
+--       SELECT DISTINCT account_id FROM public.registered_casts WHERE is_active = true
+--       UNION
+--       SELECT DISTINCT account_id FROM public.spy_casts WHERE is_active = true
+--     LOOP
+--       SELECT public.refresh_spy_user_profiles(v_account.account_id, 30) INTO v_count;
+--       RAISE NOTICE 'Refreshed spy_user_profiles for %: % rows', v_account.account_id, v_count;
+--     END LOOP;
+--   END $do$;
+--   $$
+-- );
+--
+-- 確認: SELECT * FROM cron.job;
+-- 削除: SELECT cron.unschedule('refresh-spy-profiles-all');
+
+-- 方式B（採用）: Collector プロセス内で6時間ごとに
+-- supabase.rpc('refresh_spy_user_profiles', {p_account_id, p_days: 30}) を実行。
+-- collector/src/index.ts に実装済み。

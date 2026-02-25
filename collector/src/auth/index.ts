@@ -5,16 +5,18 @@
  *   1. メモリキャッシュ（有効期限内）
  *   2. 方式C: ページHTML → __PRELOADED_STATE__
  *   3. 方式B: REST API /config
- *   4. .envフォールバック（手動設定）
+ *   4. 方式A: Playwright headless（Cloudflare突破、JWT WS傍受）
+ *   5. .envフォールバック（手動設定）
  */
 
 import { createLogger } from '../utils/logger.js';
-import { AUTH_CONFIG } from '../config.js';
+import { AUTH_CONFIG, PLAYWRIGHT_CONFIG } from '../config.js';
 import {
   StripchatAuth,
   fetchAuthFromPage,
   fetchAuthFromConfig,
 } from './stripchat-auth.js';
+import { fetchAuthViaPlaywright } from './playwright-auth.js';
 
 const log = createLogger('auth');
 
@@ -54,6 +56,20 @@ export async function getAuth(modelName?: string): Promise<StripchatAuth> {
       cachedAuth = configAuth;
       log.info(`Auth acquired via ${configAuth.method}`);
       return configAuth;
+    }
+
+    // 方式A: Playwright headless（Cloudflare突破 + WS JWT傍受）
+    const playwrightAuth = await fetchAuthViaPlaywright({
+      modelName: modelName || 'Risa_06',
+      timeoutMs: PLAYWRIGHT_CONFIG.timeoutMs,
+      username: PLAYWRIGHT_CONFIG.username || undefined,
+      password: PLAYWRIGHT_CONFIG.password || undefined,
+      headless: PLAYWRIGHT_CONFIG.headless,
+    });
+    if (playwrightAuth) {
+      cachedAuth = playwrightAuth;
+      log.info(`Auth acquired via ${playwrightAuth.method} (expires ${new Date(playwrightAuth.expiresAt * 1000).toLocaleTimeString('ja-JP')})`);
+      return playwrightAuth;
     }
   }
 

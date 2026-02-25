@@ -441,3 +441,35 @@ export interface SyncStatus {
   total_transactions: number;
   last_sync: string | null;
 }
+
+// ============================================================
+// DM Triggers
+// ============================================================
+export interface DmTrigger {
+  id: string;
+  account_id: string;
+  trigger_name: string;
+  trigger_type: 'first_visit' | 'vip_no_tip' | 'churn_risk' | 'segment_upgrade' | 'competitor_outflow' | 'post_session' | 'cross_promotion';
+  is_active: boolean;
+  conditions: Record<string, unknown>;
+  dm_template_id: string | null;
+  dm_content_template: string | null;
+  cooldown_hours: number;
+  daily_limit: number;
+  target_segment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DmTriggerLog {
+  id: number;
+  trigger_id: string;
+  account_id: string;
+  user_id: number;
+  username: string;
+  cast_name: string;
+  triggered_at: string;
+  dm_sent_at: string | null;
+  status: string;
+  reason: string | null;
+}

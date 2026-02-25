@@ -13,6 +13,7 @@ import type { TicketShowCVR, ViewerSnapshot } from '@/lib/cvr-calculator';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { SpyMessage, SpyCast, RegisteredCast, CastType } from '@/types';
+import { SpyAnalysisTabs } from './spy-analysis-tabs';
 
 /* ============================================================
    Types
@@ -35,7 +36,7 @@ const MSG_TYPE_FILTERS = [
 
 type FilterKey = typeof MSG_TYPE_FILTERS[number]['key'];
 type MainView = 'own' | 'competitor';
-type OwnSubTab = 'realtime' | 'cast-list' | 'reports';
+type OwnSubTab = 'realtime' | 'cast-list' | 'reports' | 'analysis';
 type CompetitorSubTab = 'realtime' | 'cast-list' | 'type-catalog' | 'market';
 
 /* ============================================================
@@ -138,6 +139,7 @@ export default function SpyPage() {
               {([
                 { key: 'realtime' as OwnSubTab,  label: 'リアルタイム', icon: '📡' },
                 { key: 'cast-list' as OwnSubTab,  label: 'キャスト一覧', icon: '📋' },
+                { key: 'analysis' as OwnSubTab,   label: '分析',       icon: '📊' },
                 { key: 'reports' as OwnSubTab,    label: 'FBレポート',  icon: '🤖' },
               ]).map(t => (
                 <button
@@ -183,6 +185,7 @@ export default function SpyPage() {
       {/* Tab Content */}
       {mainView === 'own' && ownSubTab === 'realtime' && <RealtimeTab castFilter="own" />}
       {mainView === 'own' && ownSubTab === 'cast-list' && <OwnCastListTab />}
+      {mainView === 'own' && ownSubTab === 'analysis' && <SpyAnalysisTabs />}
       {mainView === 'own' && ownSubTab === 'reports' && <FBReportsTab />}
       {mainView === 'competitor' && competitorSubTab === 'realtime' && <RealtimeTab castFilter="competitor" />}
       {mainView === 'competitor' && competitorSubTab === 'cast-list' && <SpyListTab />}

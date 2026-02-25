@@ -484,7 +484,7 @@ async function callOpenAI(systemPrompt: string, userPrompt: string, maxTokens = 
       'Authorization': `Bearer ${OPENAI_API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
       max_tokens: maxTokens,
       temperature: 0.8,
       response_format: { type: 'json_object' },
@@ -516,8 +516,8 @@ async function callOpenAI(systemPrompt: string, userPrompt: string, maxTokens = 
   return {
     text,
     tokensUsed: inputTokens + outputTokens,
-    // gpt-4o pricing: $2.50/1M input, $10/1M output
-    costUsd: (inputTokens * 2.5 + outputTokens * 10) / 1_000_000,
+    // gpt-4o-mini pricing: $0.15/1M input, $0.60/1M output
+    costUsd: (inputTokens * 0.15 + outputTokens * 0.60) / 1_000_000,
   };
 }
 
@@ -629,12 +629,23 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
         persona_used: activePersona.display_name || activePersona.cast_name,
         persona_found: !!persona,
         is_mock: false,
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         cost_tokens: result.tokensUsed,
         cost_usd: result.costUsd,
       });
     } catch (e: unknown) {
       const err = e as { message?: string; statusCode?: number };
+      // 401（APIキー無効）→ モックにフォールバック
+      if (err.statusCode === 502 && err.message?.includes('APIキーが無効')) {
+        const displayName = CAST_DISPLAY_NAMES[castName] || castName;
+        const mockRes = generateMockDmResponse({
+          username,
+          segment,
+          scenario,
+          castDisplayName: displayName,
+        });
+        return NextResponse.json({ ...mockRes, _fallback_reason: 'OpenAI APIキー無効のためモックにフォールバック' });
+      }
       return NextResponse.json(
         { error: err.message || 'OpenAI DM生成エラー' },
         { status: err.statusCode || 500 },

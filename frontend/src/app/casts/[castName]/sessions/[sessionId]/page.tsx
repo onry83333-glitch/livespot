@@ -421,6 +421,22 @@ export default function SessionDetailPage() {
   const [userDmHistory, setUserDmHistory] = useState<{ message: string; status: string; campaign: string | null; sent_at: string | null; queued_at: string }[]>([]);
   const [userDmLoading, setUserDmLoading] = useState(false);
 
+  // P/L state
+  interface SessionPL {
+    gross_revenue_jpy: number;
+    platform_fee_jpy: number;
+    net_revenue_jpy: number;
+    cast_cost_jpy: number;
+    gross_profit_jpy: number;
+    profit_margin: number;
+    hourly_rate: number;
+    token_to_jpy: number;
+    duration_minutes: number;
+    total_tokens: number;
+  }
+  const [sessionPL, setSessionPL] = useState<SessionPL | null>(null);
+  const [plLoading, setPlLoading] = useState(false);
+
   // AI Analysis state
   const [analyzing, setAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<{
@@ -497,6 +513,21 @@ export default function SessionDetailPage() {
       if (data) setAccountId(data.id);
     });
   }, [user, sb]);
+
+  // Load session P/L
+  useEffect(() => {
+    if (!accountId || !sessionId) return;
+    setPlLoading(true);
+    sb.rpc('get_session_pl', {
+      p_account_id: accountId,
+      p_session_id: sessionId,
+    }).then(({ data, error }) => {
+      if (!error && data && (data as SessionPL[]).length > 0) {
+        setSessionPL((data as SessionPL[])[0]);
+      }
+      setPlLoading(false);
+    });
+  }, [accountId, sessionId, sb]);
 
   // Helper: v1 RPC結果をv2形式に変換
   const mapV1toV2 = (row: any): SessionSummary => {
@@ -2064,6 +2095,61 @@ export default function SessionDetailPage() {
                     </div>
                   )}
                 </div>
+
+                {/* Session P/L */}
+                {sessionPL && (
+                  <div className="glass-card p-5">
+                    <h3 className="text-xs font-bold mb-3" style={{ color: 'var(--text-secondary)' }}>{'📊 セッションP/L'}</h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                      <div className="glass-panel px-4 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>粗売上</p>
+                        <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{'\u00A5'}{Math.round(sessionPL.gross_revenue_jpy).toLocaleString()}</p>
+                      </div>
+                      <div className="glass-panel px-4 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>手数料</p>
+                        <p className="text-sm font-bold" style={{ color: 'var(--text-secondary)' }}>-{'\u00A5'}{Math.round(sessionPL.platform_fee_jpy).toLocaleString()}</p>
+                      </div>
+                      <div className="glass-panel px-4 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>ネット売上</p>
+                        <p className="text-sm font-bold text-emerald-400">{'\u00A5'}{Math.round(sessionPL.net_revenue_jpy).toLocaleString()}</p>
+                      </div>
+                      <div className="glass-panel px-4 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>キャスト費用</p>
+                        <p className="text-sm font-bold" style={{ color: 'var(--text-secondary)' }}>-{'\u00A5'}{Math.round(sessionPL.cast_cost_jpy).toLocaleString()}</p>
+                      </div>
+                    </div>
+                    {/* Gross profit highlight */}
+                    <div className="flex items-center justify-between rounded-xl px-5 py-4" style={{
+                      background: sessionPL.gross_profit_jpy >= 0 ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)',
+                      border: `1px solid ${sessionPL.gross_profit_jpy >= 0 ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)'}`,
+                    }}>
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-0.5" style={{ color: 'var(--text-muted)' }}>粗利</p>
+                        <p className={`text-2xl font-bold ${sessionPL.gross_profit_jpy >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {sessionPL.gross_profit_jpy >= 0 ? '' : '-'}{'\u00A5'}{Math.abs(Math.round(sessionPL.gross_profit_jpy)).toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>粗利率</p>
+                        <p className={`text-xl font-bold ${
+                          sessionPL.profit_margin >= 20 ? 'text-emerald-400' :
+                          sessionPL.profit_margin >= 0 ? 'text-amber-400' : 'text-rose-400'
+                        }`}>
+                          {sessionPL.profit_margin}%
+                        </p>
+                      </div>
+                    </div>
+                    {/* Breakdown details */}
+                    <div className="grid grid-cols-3 gap-3 mt-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      <span>時給: {'\u00A5'}{sessionPL.hourly_rate.toLocaleString()}</span>
+                      <span>1tk = {'\u00A5'}{sessionPL.token_to_jpy}</span>
+                      <span>{sessionPL.duration_minutes}分 / {sessionPL.total_tokens.toLocaleString()}tk</span>
+                    </div>
+                  </div>
+                )}
+                {plLoading && (
+                  <div className="glass-card p-5 h-32 animate-pulse" />
+                )}
 
                 {/* Coin Revenue Breakdown */}
                 {summary.coin_tokens > 0 && Object.keys(summary.coin_by_type).length > 0 && (

@@ -16,6 +16,8 @@ import { startBatchFlush, stopBatchFlush } from './storage/supabase.js';
 import { flushProfiles, getProfileCount } from './storage/spy-profiles.js';
 import { createLogger, setLogLevel } from './utils/logger.js';
 import { getAuth } from './auth/index.js';
+import { TriggerEngine } from './triggers/index.js';
+import { evaluateAlerts } from './alerts/index.js';
 
 const log = createLogger('main');
 
@@ -160,9 +162,65 @@ async function main(): Promise<void> {
     }
   }, 60 * 1000);
 
-  // 7. Start main polling loop
+  // 7. Alert evaluation (every 1 hour + 起動2分後に初回)
+  const accountIds = [...new Set(targets.map((t) => t.accountId))];
+
+  const runAlerts = async () => {
+    try {
+      await evaluateAlerts(accountIds);
+    } catch (err) {
+      log.error('Alert evaluation failed', err);
+    }
+  };
+
+  // 初回: 起動2分後（DB接続安定後）
+  setTimeout(() => runAlerts(), 2 * 60 * 1000);
+  // 定期: 1時間ごと
+  setInterval(() => runAlerts(), 60 * 60 * 1000);
+
+  // 8. Initialize Trigger Engine
+  const triggerEngine = new TriggerEngine();
+  try {
+    await triggerEngine.refreshTriggers();
+    // Initialize segment snapshots for scheduled evaluations
+    for (const accountId of accountIds) {
+      await triggerEngine.initSnapshots(accountId);
+    }
+    log.info('TriggerEngine initialized');
+  } catch (err) {
+    log.warn('TriggerEngine init failed (triggers disabled)', err);
+  }
+
+  // 8.1. Scheduled trigger evaluation (every 1 hour)
+  setInterval(async () => {
+    try {
+      await triggerEngine.evaluateScheduled();
+    } catch (err) {
+      log.error('Scheduled trigger evaluation failed', err);
+    }
+  }, 60 * 60 * 1000);
+
+  // 8.2. Post-session queue processing (every 1 minute)
+  setInterval(async () => {
+    try {
+      await triggerEngine.processPostSessionQueue();
+    } catch (err) {
+      log.error('Post-session queue processing failed', err);
+    }
+  }, 60 * 1000);
+
+  // 8.3. Trigger definition refresh (every 5 minutes)
+  setInterval(async () => {
+    try {
+      await triggerEngine.refreshTriggers();
+    } catch (err) {
+      log.error('Trigger refresh failed', err);
+    }
+  }, 5 * 60 * 1000);
+
+  // 9. Start main polling loop
   log.info('Starting collector loop...');
-  startCollector();
+  startCollector(triggerEngine);
 }
 
 // ----- Graceful shutdown -----
