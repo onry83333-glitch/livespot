@@ -63,6 +63,29 @@ THUMBNAIL_INTERVAL = 300    # サムネイル: 5分
 # API呼び出し間の最低待機時間（レート制限対策）
 API_CALL_DELAY = 2.0        # 秒
 
+# FC・お気に入りリスト取得
+FC_INTERVAL = 21600         # ファンクラブリスト: 6時間
+FAVORITE_INTERVAL = 21600   # お気に入りリスト: 6時間
+
+# ---------------------------------------------------------------------------
+# WebSocket (Centrifugo)
+# ---------------------------------------------------------------------------
+WS_URL = "wss://websocket-sp-v6.stripchat.com/connection/websocket"
+WS_KEEPALIVE_INTERVAL = 25  # 秒（サーバー側30秒タイムアウト前に送信）
+WS_CHANNELS = [
+    "newChatMessage",
+    "newModelEvent",
+    "clearChatMessages",
+    "userUpdated",
+]
+
+# WebSocket自動再接続（指数バックオフ）
+WS_RECONNECT_DELAYS = [5, 10, 30, 60]  # 秒
+WS_MAX_CONSECUTIVE_FAILURES = 3         # → Telegramアラート
+
+# レート制限
+RATE_LIMIT_429_WAIT = 60    # 429受信時の待機秒数
+
 # ---------------------------------------------------------------------------
 # Telegram通知（未設定ならログのみ）
 # ---------------------------------------------------------------------------
