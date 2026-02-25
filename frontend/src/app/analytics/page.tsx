@@ -225,7 +225,7 @@ export default function AnalyticsPage() {
     setFunnelLoading(true);
 
     try {
-      // 課金ユーザー
+      // 応援ユーザー
       const { data: payingData } = await sb.from('paying_users')
         .select('user_name, total_tokens, last_paid, first_paid, tx_count')
         .eq('account_id', selectedAccount);
@@ -499,7 +499,7 @@ export default function AnalyticsPage() {
                 <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>成功済み</p>
               </div>
               <div className="glass-card p-5">
-                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>再課金率</p>
+                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>再応援率</p>
                 <p className={`text-3xl font-bold mt-2 ${
                   summary.conversion_rate >= 10 ? 'text-emerald-400' :
                   summary.conversion_rate >= 5 ? 'text-amber-400' : 'text-slate-300'
@@ -507,7 +507,7 @@ export default function AnalyticsPage() {
                   {summary.conversion_rate.toFixed(1)}%
                 </p>
                 <p className="text-[10px] mt-1" style={{ color: 'var(--text-secondary)' }}>
-                  {summary.total_converted}人が再課金
+                  {summary.total_converted}人が再応援
                 </p>
               </div>
               {summary.total_revenue_after_dm > 0 && (
@@ -636,7 +636,7 @@ export default function AnalyticsPage() {
                         送信数: d.sent,
                         成功: d.success,
                         エラー: d.error,
-                        再課金: d.converted,
+                        再応援: d.converted,
                       })), 'dm_timeline')}
                       className="btn-ghost text-[10px] px-3 py-1.5"
                     >
@@ -796,7 +796,7 @@ export default function AnalyticsPage() {
 
                   return [
                     {
-                      label: '課金転換率',
+                      label: '応援転換率',
                       value: totalAll > 0 ? `${(totalPayers / totalAll * 100).toFixed(1)}%` : '0%',
                       sub: `${totalPayers} / ${totalAll} ユーザー`,
                       color: 'text-emerald-400',
@@ -804,7 +804,7 @@ export default function AnalyticsPage() {
                     {
                       label: 'Whale比率',
                       value: totalPayers > 0 ? `${(whaleCount / totalPayers * 100).toFixed(1)}%` : '0%',
-                      sub: `${whaleCount} Whale / ${totalPayers} 課金者`,
+                      sub: `${whaleCount} Whale / ${totalPayers} サポーター`,
                       color: 'text-rose-400',
                     },
                     {
@@ -814,7 +814,7 @@ export default function AnalyticsPage() {
                       color: 'text-amber-400',
                     },
                     {
-                      label: 'Lead→課金ポテンシャル',
+                      label: 'Lead→応援ポテンシャル',
                       value: `${funnelSegments.find(s => s.key === 'lead')?.count || 0}`,
                       sub: 'DM未送信のチャットユーザー',
                       color: 'text-sky-400',
@@ -843,7 +843,7 @@ export default function AnalyticsPage() {
                             セグメント: u.segmentLabel,
                             累計トークン: u.total_tokens,
                             取引回数: u.tx_count ?? '',
-                            最終課金: u.last_paid ? new Date(u.last_paid).toLocaleDateString('ja-JP') : '',
+                            最終応援: u.last_paid ? new Date(u.last_paid).toLocaleDateString('ja-JP') : '',
                           })),
                         'funnel_users'
                       )}
@@ -877,7 +877,7 @@ export default function AnalyticsPage() {
                         <th className="pb-3 font-medium text-xs">セグメント</th>
                         <th className="pb-3 font-medium text-xs text-right">累計トークン</th>
                         <th className="pb-3 font-medium text-xs text-right">取引回数</th>
-                        <th className="pb-3 font-medium text-xs text-right">最終課金</th>
+                        <th className="pb-3 font-medium text-xs text-right">最終応援</th>
                       </tr>
                     </thead>
                     <tbody>

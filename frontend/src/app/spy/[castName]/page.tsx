@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
@@ -526,9 +526,9 @@ function UsersTab({ castName, accountId }: { castName: string; accountId: string
 
   return (
     <div className="glass-card p-4">
-      <h3 className="text-xs font-bold mb-3">👥 課金ユーザーランキング ({users.length}名)</h3>
+      <h3 className="text-xs font-bold mb-3">👥 応援ユーザーランキング ({users.length}名)</h3>
       {users.length === 0 ? (
-        <p className="text-center text-[11px] py-8" style={{ color: 'var(--text-muted)' }}>課金ユーザーデータなし</p>
+        <p className="text-center text-[11px] py-8" style={{ color: 'var(--text-muted)' }}>応援ユーザーデータなし</p>
       ) : (
         <div className="overflow-auto">
           <table className="w-full text-[11px]">

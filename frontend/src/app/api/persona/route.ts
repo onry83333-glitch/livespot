@@ -690,8 +690,8 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
   if (!LAYER_C_RULES[task_type]) {
     return NextResponse.json({ error: `未対応のtask_type: ${task_type}` }, { status: 400 });
   }
-  // APIキー未設定 → モックレスポンスで返却（認証済みユーザー向け）
-  if (USE_MOCK_CLAUDE) {
+  // APIキー未設定 → OpenAIフォールバック or モック
+  if (USE_MOCK_CLAUDE && USE_MOCK_OPENAI) {
     if (task_type === 'dm_generate') {
       const username = (context?.username || context?.user_name || 'user') as string;
       const segment = (context?.segment) as string | undefined;
@@ -734,7 +734,13 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
     const userPrompt = await buildUserPrompt(task_type, { ...context, cast_name }, auth.token);
 
     const maxTokens = task_type === 'dm_generate' || task_type === 'realtime_coach' ? 500 : 1000;
-    const result = await callClaude(systemPrompt, userPrompt, maxTokens);
+
+    // Claude優先、なければOpenAIフォールバック
+    const useOpenAiFallback = USE_MOCK_CLAUDE && !USE_MOCK_OPENAI;
+    const result = useOpenAiFallback
+      ? await callOpenAI(systemPrompt, userPrompt, maxTokens)
+      : await callClaude(systemPrompt, userPrompt, maxTokens);
+    const modelUsed = useOpenAiFallback ? 'gpt-4o' : 'claude-sonnet-4-20250514';
 
     let parsed: unknown = null;
     try {
@@ -749,6 +755,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
         ? (parsed as Record<string, unknown>).reasoning : null,
       cost_tokens: result.tokensUsed,
       cost_usd: result.costUsd,
+      model: modelUsed,
       persona_used: activePersona.display_name || activePersona.cast_name,
       persona_found: !!persona,
     });

@@ -2,8 +2,6 @@
  * Supabase Realtime subscribe ヘルパー
  * TIMED_OUT対策: タイムアウト延長(30秒) + 1回リトライ
  */
-import type { REALTIME_SUBSCRIBE_STATES } from '@supabase/supabase-js';
-
 const SUBSCRIBE_TIMEOUT = 30000; // 30秒（デフォルト10秒）
 const MAX_RETRIES = 1;
 

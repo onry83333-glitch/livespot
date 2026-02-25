@@ -29,7 +29,18 @@ export async function saveScreenshot(page: Page, name: string): Promise<void> {
 /** ログイン処理（全テストで共通利用） */
 export async function login(page: Page): Promise<void> {
   await page.goto('/login');
-  await page.getByPlaceholder('you@example.com').fill(TEST_EMAIL);
+
+  // 既にログイン済みでダッシュボードにリダイレクトされた場合はスキップ
+  const currentUrl = page.url();
+  if (!currentUrl.includes('/login')) {
+    return;
+  }
+
+  // ログインフォームが表示されるまで待つ（レート制限や遅延に対応）
+  const emailInput = page.getByPlaceholder('you@example.com');
+  await emailInput.waitFor({ state: 'visible', timeout: 15_000 });
+
+  await emailInput.fill(TEST_EMAIL);
   await page.getByPlaceholder('••••••••').fill(TEST_PASSWORD);
   await page.getByRole('button', { name: 'ログイン' }).click();
 

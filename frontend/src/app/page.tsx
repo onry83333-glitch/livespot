@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
-import { tokensToJPY, formatCoinDual } from '@/lib/utils';
+import { tokensToJPY } from '@/lib/utils';
 
 interface Account {
   id: string;
@@ -18,11 +18,6 @@ interface WhaleUser {
   total_coins: number;
 }
 
-interface DMSummaryItem {
-  campaign: string;
-  status: string;
-  count: number;
-}
 
 interface Stats {
   totalRevenue30d: number;
@@ -183,9 +178,9 @@ export default function DashboardPage() {
     churnFetchedRef.current = accountId;
     try {
       const { data } = await sb.rpc('calc_churn_risk_score', { p_account_id: accountId });
-      if (data) {
+      if (Array.isArray(data)) {
         const top = (data as { user_name: string; segment: string; total_coins: number; churn_risk_score: number }[])
-          .filter(u => u.churn_risk_score >= 30)
+          .filter(u => (u.churn_risk_score ?? 0) >= 30)
           .slice(0, 10);
         setChurnRiskUsers(top);
       } else {
@@ -533,8 +528,8 @@ export default function DashboardPage() {
                     </Link>
                   </div>
                   <div className="text-right">
-                    <span className="text-sm font-semibold text-emerald-400">{tokensToJPY(w.total_coins)}</span>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{w.total_coins.toLocaleString()} tk</p>
+                    <span className="text-sm font-semibold text-emerald-400">{tokensToJPY(w.total_coins ?? 0)}</span>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{(w.total_coins ?? 0).toLocaleString()} tk</p>
                   </div>
                 </div>
               ))
@@ -577,10 +572,10 @@ export default function DashboardPage() {
                   background: u.churn_risk_score >= 61 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
                   color: u.churn_risk_score >= 61 ? '#ef4444' : '#f59e0b',
                 }}>
-                  {u.churn_risk_score}
+                  {u.churn_risk_score ?? 0}
                 </span>
                 <span className="text-emerald-400 font-semibold">
-                  {tokensToJPY(u.total_coins)}
+                  {tokensToJPY(u.total_coins ?? 0)}
                 </span>
               </div>
             ))}
@@ -658,8 +653,8 @@ export default function DashboardPage() {
                           }`}>{dm.status}</span>
                         </td>
                         <td className="py-2.5 text-xs" style={{ color: 'var(--text-muted)' }}
-                          title={new Date(dm.queued_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}>
-                          {new Date(dm.queued_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          title={dm.queued_at ? new Date(dm.queued_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' }) : ''}>
+                          {dm.queued_at ? new Date(dm.queued_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '\u2014'}
                         </td>
                       </tr>
                     ))}

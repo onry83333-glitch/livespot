@@ -421,11 +421,11 @@ export default function AlertsPage() {
               </div>
 
               <div className="glass-panel p-3 rounded-lg">
-                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>最終課金日</p>
+                <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>最終応援日</p>
                 <p className="text-sm font-bold" style={{ color: selectedUser.last_payment_date ? 'var(--accent-green)' : 'var(--text-muted)' }}>
                   {selectedUser.last_payment_date
                     ? new Date(selectedUser.last_payment_date).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })
-                    : '課金履歴なし'}
+                    : '応援履歴なし'}
                 </p>
               </div>
 

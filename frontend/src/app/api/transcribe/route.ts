@@ -11,12 +11,20 @@
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createServerSupabase } from '@/lib/supabase/server';
 
 export const maxDuration = 300; // 5min timeout (Vercel Pro)
 
 const ALLOWED_EXTENSIONS = ['.mp3', '.m4a', '.wav', '.webm', '.mp4'];
 
 export async function POST(request: NextRequest) {
+  // 認証チェック: cookie-based session (learned_rule #11: API Routeに認証なしで公開するな)
+  const authSupabase = createServerSupabase();
+  const { data: { user }, error: authError } = await authSupabase.auth.getUser();
+  if (authError || !user) {
+    return NextResponse.json({ error: '認証が必要です' }, { status: 401 });
+  }
+
   const formData = await request.formData();
   const audioFile = formData.get('audio') as File | null;
   const sessionId = formData.get('session_id') as string | null;
@@ -26,6 +34,17 @@ export async function POST(request: NextRequest) {
 
   if (!audioFile || !sessionId || !castName || !accountId) {
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+  }
+
+  // アカウント所有権チェック
+  const { data: accountCheck } = await authSupabase
+    .from('accounts')
+    .select('id')
+    .eq('id', accountId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (!accountCheck) {
+    return NextResponse.json({ error: 'アカウントへのアクセス権がありません' }, { status: 403 });
   }
 
   // File format check

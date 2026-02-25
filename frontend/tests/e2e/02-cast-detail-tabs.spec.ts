@@ -2,6 +2,9 @@ import { test, expect } from '@playwright/test';
 import { login, saveScreenshot, assertNoErrors, waitForVisible } from './helpers';
 
 test.describe('テスト2: キャスト詳細 → 全タブ表示確認', () => {
+  // hanshakun のデータが多いためタイムアウトを拡張
+  test.setTimeout(60_000);
+
   test.beforeEach(async ({ page }) => {
     await login(page);
   });

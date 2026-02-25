@@ -140,8 +140,8 @@ const LABELS = {
   changeRate: '変化率',
   analyzingActions: 'アクション分析中...',
   actionHeader: '今すぐやること',
-  firstTimePayers: '初課金ユーザーへお礼DM',
-  highSpenders: '高額課金ユーザーへ特別DM',
+  firstTimePayers: '初応援ユーザーへお礼DM',
+  highSpenders: '高額応援ユーザーへ特別DM',
   visitedNoAction: '来訪したがアクションなし',
   dmNoVisit: 'DM送信→未来訪',
   sendTemplate: 'テンプレートで一括送信',
@@ -157,7 +157,7 @@ const LABELS = {
   segment: 'セグメント',
   dmSentCol: 'DM送信',
   visited: '来訪',
-  paid: '課金',
+  paid: '応援',
   total: '合計',
   // Pre-broadcast labels
   preBroadcastPrep: '配信準備',
@@ -175,8 +175,8 @@ const LABELS = {
   defaultTemplateText: '今日21時から配信するよ！\n楽しみに待っててね💕',
   prevResult: '前回の結果',
   attendance: '来場',
-  newPayers: '新規課金',
-  unhandledAlert: '初課金{n}人にお礼DM未送信',
+  newPayers: '新規応援',
+  unhandledAlert: '初回応援{n}人にお礼DM未送信',
   goToPostMode: '配信後モードへ',
   dataNotAvailable: 'データなし',
   loadingPreData: '配信準備データを読み込み中...',
@@ -194,9 +194,9 @@ const LABELS = {
   statsPanel: 'リアルタイム集計',
   revenueTrend: '売上推移',
   revenueBreakdownLive: '売上内訳',
-  payingUsersLabel: '課金ユーザー',
-  firstTimeLive: '初課金',
-  avgPaymentLabel: '平均課金額',
+  payingUsersLabel: '応援ユーザー',
+  firstTimeLive: '初回応援',
+  avgPaymentLabel: '平均応援額',
   perPerson: '/人',
   entered: '入室しました',
   left: '退室しました',
@@ -228,13 +228,13 @@ const LABELS = {
   transcribeFailed: '文字起こし失敗',
   // Timeline labels
   timelineTitle: '時刻突合タイムライン',
-  timelineDesc: '文字起こし・チャット・課金を時刻順に統合',
+  timelineDesc: '文字起こし・チャット・応援を時刻順に統合',
   timelineLoading: 'タイムラインを読み込み中...',
   timelineEmpty: '文字起こしデータがないためタイムラインを表示できません',
-  timelineHighlight: '課金30秒以内の発言',
+  timelineHighlight: '応援30秒以内の発言',
   filterAll: 'すべて',
   filterTranscript: '発言',
-  filterPayment: '課金',
+  filterPayment: '応援',
   filterChat: 'チャット',
 } as const;
 
@@ -966,7 +966,7 @@ export default function SessionDetailPage() {
 
     setDmConfirmExcluded(new Set());
     setDmConfirm({
-      title: '初課金ユーザーへお礼DM',
+      title: '初応援ユーザーへお礼DM',
       users: unsent.map(u => ({ user_name: u.user_name, detail: `${formatTokens(u.session_tokens)}` })),
       message: (dmText || LABELS.defaultTemplateText).slice(0, 100) + '...',
       onConfirm: async (selectedUsers: string[]) => {
@@ -988,7 +988,7 @@ export default function SessionDetailPage() {
             ),
           } : prev);
 
-          // シナリオ自動エンロール（初課金お礼）
+          // シナリオ自動エンロール（初回応援お礼）
           for (const u of selectedUsers) {
             await checkAndEnroll(sb, accountId, castName, u, 'first_payment');
           }
@@ -1598,7 +1598,7 @@ export default function SessionDetailPage() {
                     {/* Revenue Types */}
                     {revenueTypes.length > 0 && (
                       <div>
-                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>他社キャスト課金タイプ分布</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>他社キャスト応援タイプ分布</p>
                         <div className="overflow-x-auto">
                           <table className="text-[10px] w-full">
                             <thead>
@@ -2512,7 +2512,7 @@ export default function SessionDetailPage() {
                           <div className="glass-card p-5">
                             <h3 className="text-xs font-bold mb-2" style={{ color: 'var(--text-secondary)' }}>{`📊 ${LABELS.segmentBreakdown}`}</h3>
                             <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>
-                              S1-S3: Whale/VIP（高額課金）　S4-S6: Regular（常連）　S7-S9: Light（少額）　S10: Churned/New
+                              S1-S3: Whale/VIP（高額応援）　S4-S6: Regular（常連）　S7-S9: Light（少額）　S10: Churned/New
                             </p>
                             <div className="overflow-x-auto">
                               <table className="w-full text-xs">
@@ -3117,7 +3117,7 @@ export default function SessionDetailPage() {
                           {/* Payment Triggers */}
                           {analysisResult.triggers.length > 0 && (
                             <div>
-                              <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{'🎯 課金トリガー発言ランキング'}</p>
+                              <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{'🎯 応援トリガー発言ランキング'}</p>
                               <div className="space-y-1.5 max-h-72 overflow-y-auto">
                                 {analysisResult.triggers.map((trigger, i) => (
                                   <div key={i} className="flex items-start gap-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
@@ -3136,7 +3136,7 @@ export default function SessionDetailPage() {
                                           {`${formatTokens(trigger.tokens_after)}`}
                                         </span>
                                         <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                          {`${trigger.users_who_paid.length}人が課金`}
+                                          {`${trigger.users_who_paid.length}人が応援`}
                                         </span>
                                       </div>
                                     </div>
@@ -3163,7 +3163,7 @@ export default function SessionDetailPage() {
                         </div>
                       ) : !analyzing && !analysisError ? (
                         <p className="text-[10px] text-center py-4" style={{ color: 'var(--text-muted)' }}>
-                          「配信を分析」ボタンを押すと、タイムラインデータを元に配信構成・課金トリガーを分析します
+                          「配信を分析」ボタンを押すと、タイムラインデータを元に配信構成・応援トリガーを分析します
                         </p>
                       ) : null}
                     </div>

@@ -96,9 +96,9 @@ test.describe('テスト12: レベニューシェア計算ページ (/admin/reve
 
     if (hasTable) {
       // テーブルヘッダー確認
-      await expect(page.getByText('総トークン')).toBeVisible();
-      await expect(page.getByText('キャスト支払い')).toBeVisible();
-      await expect(page.getByText('根拠')).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: '総トークン' })).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: 'キャスト支払い' })).toBeVisible();
+      await expect(page.getByRole('columnheader', { name: '根拠' })).toBeVisible();
 
       // 合計行の存在確認
       const footer = page.locator('tfoot');

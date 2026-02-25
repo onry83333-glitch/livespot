@@ -36,14 +36,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 1. アカウント取得
-  let accountQuery = supabase.from('accounts').select('id').limit(1);
+  // 1. アカウント取得（所有権チェック: user_id一致確認）
+  let accountQuery = supabase.from('accounts').select('id').eq('user_id', user.id).limit(1);
   if (account_id) {
     accountQuery = accountQuery.eq('id', account_id);
   }
   const { data: account } = await accountQuery.maybeSingle();
   if (!account) {
-    return NextResponse.json({ error: 'Account not found' }, { status: 404 });
+    return NextResponse.json({ error: 'Account not found or access denied' }, { status: 404 });
   }
 
   // 2. 有効なセッション取得

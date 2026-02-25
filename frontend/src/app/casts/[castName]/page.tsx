@@ -811,7 +811,7 @@ function CastDetailInner() {
       setLastWeekCoins((lastTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
     });
 
-    // 新規課金ユーザー検出（直近24時間）
+    // 新規応援ユーザー検出（直近24時間）
     sb.rpc('detect_new_paying_users', {
       p_account_id: accountId,
       p_cast_name: castName,
@@ -2054,7 +2054,7 @@ function CastDetailInner() {
                   return (
                     <div className="glass-card p-4">
                       <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-sm font-bold">新規課金ユーザー（24h）</h3>
+                        <h3 className="text-sm font-bold">新規応援ユーザー（24h）</h3>
                         <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                           {newPayingUsers.length}名 / {formatTokens(newPayingUsers.reduce((s, u) => s + u.total_coins, 0))}
                           {' '}
@@ -2387,10 +2387,10 @@ function CastDetailInner() {
                         </div>
                       </div>
 
-                      {/* トップ5課金ユーザー */}
+                      {/* トップ5応援ユーザー */}
                       {broadcastBreakdown.top_users && broadcastBreakdown.top_users.length > 0 && (
                         <div className="glass-card p-4">
-                          <h3 className="text-sm font-bold mb-3">トップ5 課金ユーザー</h3>
+                          <h3 className="text-sm font-bold mb-3">トップ5 応援ユーザー</h3>
                           <div className="space-y-2">
                             {broadcastBreakdown.top_users.map((u, i) => (
                               <div key={u.user_name} className="flex items-center justify-between glass-panel p-3 rounded-lg">
@@ -2436,7 +2436,7 @@ function CastDetailInner() {
                       {broadcastNewUsers.filter(u => !u.has_prior_history).length > 0 && (
                         <div className="glass-card p-4">
                           <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                            🆕 新規ユーザー（初課金）
+                            🆕 新規ユーザー（初回応援）
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
                               {broadcastNewUsers.filter(u => !u.has_prior_history).length}名
                             </span>
@@ -3191,7 +3191,7 @@ function CastDetailInner() {
                     <div className="glass-panel rounded-lg p-3 mb-3 space-y-2">
                       <input
                         className="input-glass text-xs w-full"
-                        placeholder="シナリオ名（例: 初課金お礼）"
+                        placeholder="シナリオ名（例: 初回応援お礼）"
                         value={newScenario.name}
                         onChange={e => setNewScenario(prev => ({ ...prev, name: e.target.value }))}
                       />
@@ -3200,9 +3200,9 @@ function CastDetailInner() {
                         value={newScenario.triggerType}
                         onChange={e => setNewScenario(prev => ({ ...prev, triggerType: e.target.value }))}
                       >
-                        <option value="first_payment">初課金</option>
-                        <option value="high_payment">高額課金</option>
-                        <option value="visit_no_action">来訪（課金なし）</option>
+                        <option value="first_payment">初回応援</option>
+                        <option value="high_payment">高額応援</option>
+                        <option value="visit_no_action">来訪（応援なし）</option>
                         <option value="dormant">離脱（N日不在）</option>
                         <option value="segment_change">セグメント変化</option>
                         <option value="manual">手動エンロール</option>
@@ -3267,8 +3267,8 @@ function CastDetailInner() {
                     <div className="space-y-2">
                       {scenarios.map(sc => {
                         const triggerLabels: Record<string, string> = {
-                          first_payment: '初課金', high_payment: '高額課金',
-                          visit_no_action: '来訪（課金なし）', dormant: '離脱',
+                          first_payment: '初回応援', high_payment: '高額応援',
+                          visit_no_action: '来訪（応援なし）', dormant: '離脱',
                           segment_change: 'セグメント変化', manual: '手動',
                           thankyou_vip: 'VIPお礼', thankyou_regular: '常連お礼',
                           thankyou_first: '初回お礼', churn_recovery: '離脱防止',
@@ -3420,7 +3420,7 @@ function CastDetailInner() {
                               <p className="text-lg font-bold">{totalSent.toLocaleString()}</p>
                             </div>
                             <div className="glass-panel rounded-lg p-2 text-center">
-                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>課金CVR</p>
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>応援CVR</p>
                               <p className="text-lg font-bold" style={{ color: 'var(--accent-green)' }}>
                                 {totalSent > 0 ? ((totalPaid / totalSent) * 100).toFixed(1) : '0'}%
                               </p>
@@ -3454,7 +3454,7 @@ function CastDetailInner() {
                               <th className="text-left py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>セグメント</th>
                               <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>送信</th>
                               <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>来訪CVR</th>
-                              <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>課金CVR</th>
+                              <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>応援CVR</th>
                               <th className="text-right py-1.5 px-2 font-medium" style={{ color: 'var(--text-muted)' }}>売上</th>
                             </tr>
                           </thead>
@@ -3545,7 +3545,7 @@ function CastDetailInner() {
                           )}
                         </h3>
                         <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                          コイン累計額 × 最終課金日の2軸で分類（coin_transactions基準）
+                          コイン累計額 × 最終応援日の2軸で分類（coin_transactions基準）
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -3676,7 +3676,7 @@ function CastDetailInner() {
                             <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1 text-[10px]">
                               <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(239,68,68,0.06)' }}>
                                 <span className="font-bold w-6">S1</span>
-                                <span>Whale現役 — 高額課金＋最近も応援</span>
+                                <span>Whale現役 — 高額応援＋最近も応援</span>
                               </div>
                               <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(239,68,68,0.04)' }}>
                                 <span className="font-bold w-6">S2</span>
@@ -3962,7 +3962,7 @@ function CastDetailInner() {
                               <th className="text-left px-3 py-2 font-semibold">キャンペーン</th>
                               <th className="text-right px-3 py-2 font-semibold">送信数</th>
                               <th className="text-right px-3 py-2 font-semibold">来訪率</th>
-                              <th className="text-right px-3 py-2 font-semibold">課金率</th>
+                              <th className="text-right px-3 py-2 font-semibold">応援率</th>
                               <th className="text-right px-3 py-2 font-semibold">売上貢献</th>
                             </tr>
                           </thead>
@@ -3999,7 +3999,7 @@ function CastDetailInner() {
                   <div className="glass-card p-4">
                     <h3 className="text-sm font-bold mb-1">📊 ユーザー獲得ダッシュボード</h3>
                     <p className="text-[10px] mb-4" style={{ color: 'var(--text-muted)' }}>
-                      新規課金ユーザーの特定・DM施策の効果測定・チケットチャット初回ユーザー抽出
+                      新規応援ユーザーの特定・DM施策の効果測定・チケットチャット初回ユーザー抽出
                     </p>
 
                     {/* Target search */}
@@ -4062,7 +4062,7 @@ function CastDetailInner() {
                                   <span style={{ color: 'var(--text-muted)' }}> ({r.tx_count}回)</span>
                                 </div>
                                 <div>
-                                  <span style={{ color: 'var(--text-muted)' }}>最終課金: </span>
+                                  <span style={{ color: 'var(--text-muted)' }}>最終応援: </span>
                                   <span style={{ color: 'var(--text-secondary)' }}>
                                     {(r.last_actual_payment || r.last_payment_date)
                                       ? new Date(r.last_actual_payment || r.last_payment_date!).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -4132,7 +4132,7 @@ function CastDetailInner() {
                                   {misses.map(m => (
                                     <div key={m.user_name} className="text-[11px] px-2 py-1 rounded" style={{ color: 'var(--accent-pink)' }}>
                                       {m.user_name}
-                                      <span className="ml-2" style={{ color: 'var(--text-muted)' }}>— このキャストの課金履歴なし</span>
+                                      <span className="ml-2" style={{ color: 'var(--text-muted)' }}>— このキャストの応援履歴なし</span>
                                     </div>
                                   ))}
                                 </div>
@@ -4200,7 +4200,7 @@ function CastDetailInner() {
                           { key: 'all', label: '全員' },
                           { key: 'new', label: '新規のみ' },
                           { key: 'dm_sent', label: 'DM送信済のみ' },
-                          { key: 'dm_converted', label: 'DM→課金のみ' },
+                          { key: 'dm_converted', label: 'DM→応援のみ' },
                         ] as const).map(f => (
                           <button key={f.key} onClick={() => setAcqFilter(f.key)}
                             className="text-[10px] px-2.5 py-1 rounded-lg transition-all"
@@ -4243,7 +4243,7 @@ function CastDetailInner() {
                           <div className="glass-panel p-4 rounded-xl text-center" style={{ borderImage: 'linear-gradient(135deg, rgba(245,158,11,0.3), rgba(245,158,11,0.05)) 1' }}>
                             <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{acqSummary.dmConverted}</p>
                             <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                              DM→課金 {acqSummary.dmSent > 0 && <span className="font-bold">CVR {acqSummary.cvr}%</span>}
+                              DM→応援 {acqSummary.dmSent > 0 && <span className="font-bold">CVR {acqSummary.cvr}%</span>}
                             </p>
                           </div>
                         </div>
@@ -4299,7 +4299,7 @@ function CastDetailInner() {
                                 </th>
                                 <th className="text-right px-3 py-2 font-semibold cursor-pointer hover:text-white transition-colors"
                                   onClick={() => toggleAcqSort('last_payment_date')}>
-                                  最終課金 {acqSortKey === 'last_payment_date' && (acqSortAsc ? '↑' : '↓')}
+                                  最終応援 {acqSortKey === 'last_payment_date' && (acqSortAsc ? '↑' : '↓')}
                                 </th>
                                 <th className="text-center px-3 py-2 font-semibold">セグメント</th>
                                 <th className="text-left px-3 py-2 font-semibold">DM施策</th>
@@ -4355,9 +4355,9 @@ function CastDetailInner() {
                                     </td>
                                     <td className="text-center px-3 py-2 text-[10px]">
                                       {u.converted_after_dm ? (
-                                        <span style={{ color: 'var(--accent-amber)' }}>✅ DM→課金</span>
+                                        <span style={{ color: 'var(--accent-amber)' }}>✅ DM→応援</span>
                                       ) : u.dm_sent ? (
-                                        <span style={{ color: 'var(--text-muted)' }}>💌 DM済・未課金</span>
+                                        <span style={{ color: 'var(--text-muted)' }}>💌 DM済・未応援</span>
                                       ) : (
                                         <span style={{ color: 'var(--accent-green)' }}>🆕 自然流入</span>
                                       )}
@@ -4556,14 +4556,14 @@ function CastDetailInner() {
                         {tokensToJPY(salesThisWeek, coinRate)}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
-                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全課金（コインAPI）</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
                         {tokensToJPY(salesLastWeek, coinRate)}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週売上</p>
-                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全課金（コインAPI）</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{
@@ -4574,7 +4574,7 @@ function CastDetailInner() {
                           : '--'}
                       </p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比</p>
-                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全課金（コインAPI）</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
                     </div>
                   </div>
 
@@ -4611,7 +4611,7 @@ function CastDetailInner() {
                           <span className="text-[11px] font-semibold">Coin API (coin_transactions)</span>
                         </div>
                         <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                          Stripchat Earnings APIからの課金履歴。cast_name絞り込み済み。
+                          Stripchat Earnings APIからの応援履歴。cast_name絞り込み済み。
                         </p>
                         <p className="text-xs mt-1 font-bold" style={{ color: 'var(--accent-amber)' }}>
                           {coinTxs.length > 0 ? `${coinTxs.length}件取得済み` : '未同期'}
@@ -4743,7 +4743,7 @@ function CastDetailInner() {
                                         <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(row.total_tokens, coinRate)}</span>
                                       </div>
                                       <div className="flex justify-between">
-                                        <span style={{ color: 'var(--text-muted)' }}>課金者平均</span>
+                                        <span style={{ color: 'var(--text-muted)' }}>サポーター平均</span>
                                         <span style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)}</span>
                                       </div>
                                     </div>
@@ -5524,7 +5524,7 @@ function CastDetailInner() {
                   {/* Section 4: ユーザーランキング */}
                   <div className="glass-card p-4">
                     <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                      🏆 他社高額課金ユーザーランキング
+                      🏆 他社高額応援ユーザーランキング
                     </h3>
                     {spyTopUsers.length === 0 ? (
                       <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>
@@ -5559,11 +5559,11 @@ function CastDetailInner() {
                                   <td className="py-2 px-2" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
                                   <td className="py-2 px-2">
                                     <a href={`/users/${encodeURIComponent(u.user_name)}`}
-                                      className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                                      className="hover:underline truncate block max-w-[180px]" style={{ color: 'var(--accent-primary)' }}>
                                       {u.user_name}
                                     </a>
                                     <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                                      {u.spy_casts.slice(0, 3).join(', ')}{u.spy_casts.length > 3 ? ` +${u.spy_casts.length - 3}` : ''}
+                                      {(u.spy_casts || []).slice(0, 3).join(', ')}{(u.spy_casts || []).length > 3 ? ` +${u.spy_casts.length - 3}` : ''}
                                     </p>
                                   </td>
                                   <td className="py-2 px-2 text-right font-medium" style={{ color: 'var(--accent-amber)' }}>
@@ -5582,7 +5582,7 @@ function CastDetailInner() {
                                         {seg.icon} {u.own_segment}
                                       </span>
                                     ) : (
-                                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>未課金</span>
+                                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>未応援</span>
                                     )}
                                   </td>
                                 </tr>

@@ -2,7 +2,7 @@
 // POST /api/analyze-session — 配信AI分析（Phase 1: ルールベース）（認証必須）
 //
 // タイムラインデータ（spy_messages + cast_transcripts + coin_transactions）を
-// 統合し、配信構成の分類・課金トリガー特定・フィードバック生成を行う。
+// 統合し、配信構成の分類・応援トリガー特定・フィードバック生成を行う。
 // Phase 2でAnthropic API連携に拡張予定。
 // ============================================================
 import { NextRequest, NextResponse } from 'next/server';
@@ -175,7 +175,7 @@ function analyzeTimeline(events: TimelineEvent[]) {
   // 1. 配信構成の自動分類（10分バケット）
   const phases = classifyPhases(events);
 
-  // 2. 課金トリガー発言の特定
+  // 2. 応援トリガー発言の特定
   const triggers: Trigger[] = [];
 
   for (const tip of allPaid) {
@@ -326,7 +326,7 @@ function generateFeedback(
   }
 
   if (tips.length > 0 && transcripts.length > 0) {
-    points.push(`課金トリガー候補を検出しました。発言と課金の相関を確認してください。`);
+    points.push(`応援トリガー候補を検出しました。発言と応援の相関を確認してください。`);
   }
 
   if (enters.length > 0) {
