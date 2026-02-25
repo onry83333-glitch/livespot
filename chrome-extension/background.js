@@ -4026,16 +4026,16 @@ async function tryDMviaAPI(task, tab) {
 
 /**
  * DOM経由でDM送信（従来方式: dm_executor.js）
+ * v6.0: 画像DM対応 — imageBase64 + sendOrder を dm_executor に渡す
  */
 async function sendDMviaDOM(task, tab) {
-  // 画像付きDMはDOM方式で非対応（API送信のみ）
-  if (task.image_url && task.send_order !== 'text_only') {
-    console.warn('[LS-BG] [DOM] 画像付きDMはDOM方式非対応 (send_order=' + (task.send_order || 'text_only') + ')。テキストのみ送信:', task.user_name);
-  }
+  const sendOrder = task.send_order || 'text_only';
+  const imageUrl = task.image_url || null;
+
   // プロフィールURLに遷移
   const profileUrl = task.profile_url
     || `https://stripchat.com/user/${task.user_name}`;
-  console.log('[LS-BG] [DOM] タブ遷移:', profileUrl);
+  console.log('[LS-BG] [DOM] タブ遷移:', profileUrl, 'sendOrder:', sendOrder);
 
   await chrome.tabs.update(tab.id, { url: profileUrl });
 
@@ -4048,13 +4048,39 @@ async function sendDMviaDOM(task, tab) {
   // 描画安定待ち
   await sleep_bg(1500);
 
-  // content script に DM送信を指示
+  // 画像が必要な場合: Service Worker側でfetch → base64化
+  let imageBase64 = null;
+  if (imageUrl && sendOrder !== 'text_only') {
+    try {
+      console.log('[LS-BG] [DOM] 画像取得中 (sendOrder=' + sendOrder + '):', imageUrl.substring(0, 80) + '...');
+      const imgRes = await fetch(imageUrl);
+      if (!imgRes.ok) throw new Error('HTTP ' + imgRes.status);
+      const imgBlob = await imgRes.blob();
+      const arrayBuf = await imgBlob.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      imageBase64 = btoa(binary);
+      console.log('[LS-BG] [DOM] 画像取得成功:', (imageBase64.length / 1024).toFixed(1), 'KB (base64)');
+    } catch (e) {
+      console.error('[LS-BG] [DOM] 画像取得失敗:', e.message, '→ テキストのみ送信にフォールバック');
+      imageBase64 = null;
+    }
+  }
+
+  const effectiveSendOrder = (sendOrder !== 'text_only' && !imageBase64) ? 'text_only' : sendOrder;
+
+  // content script に DM送信を指示（画像データ含む）
   try {
     await chrome.tabs.sendMessage(tab.id, {
       type: 'SEND_DM',
       taskId: task.id,
       username: task.user_name,
       message: task.message,
+      imageBase64: imageBase64,
+      sendOrder: effectiveSendOrder,
     });
   } catch (err) {
     throw new Error('DM executor通信失敗: ' + err.message);
@@ -4239,17 +4265,45 @@ async function pipelineTabWorker(tabId, queue, workerIdx) {
     if (!navOk) continue;
 
     try {
+      // 画像が必要な場合: Service Workerで取得 → base64化
+      const pSendOrder = task.send_order || 'text_only';
+      const pImageUrl = task.image_url || null;
+      let pImageBase64 = null;
+
+      if (pImageUrl && pSendOrder !== 'text_only') {
+        try {
+          const imgRes = await fetch(pImageUrl);
+          if (imgRes.ok) {
+            const imgBlob = await imgRes.blob();
+            const arrayBuf = await imgBlob.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuf);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            pImageBase64 = btoa(binary);
+            console.log('[LS-BG] DOM Pipeline W', workerIdx, '画像取得成功:', (pImageBase64.length / 1024).toFixed(1), 'KB');
+          }
+        } catch (e) {
+          console.warn('[LS-BG] DOM Pipeline W', workerIdx, '画像取得失敗:', e.message);
+        }
+      }
+
+      const pEffectiveSendOrder = (pSendOrder !== 'text_only' && !pImageBase64) ? 'text_only' : pSendOrder;
+
       await chrome.tabs.sendMessage(tabId, {
         type: 'SEND_DM',
         taskId: task.id,
         username: task.user_name,
         message: task.message,
+        imageBase64: pImageBase64,
+        sendOrder: pEffectiveSendOrder,
       });
       const result = await waitForDMResult(task.id, CONFIG.DM_SEND_TIMEOUT);
 
       if (result.success) {
         await updateDMTaskStatus(task.id, 'success', null, 'extension');
-        console.log('[LS-BG] DOM Pipeline W', workerIdx, 'DM成功:', task.user_name);
+        console.log('[LS-BG] DOM Pipeline W', workerIdx, 'DM成功:', task.user_name, 'sendOrder:', pEffectiveSendOrder);
       } else {
         await updateDMTaskStatus(task.id, 'error', result.error, 'extension');
         console.warn('[LS-BG] DOM Pipeline W', workerIdx, 'DM失敗:', task.user_name, result.error);
