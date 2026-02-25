@@ -3834,7 +3834,7 @@ async function tryDMviaAPI(task, tab) {
           function sendTextMessage(uniqId) {
             return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
               credentials: 'include',
               body: JSON.stringify({
                 body: msgBody,
@@ -3867,6 +3867,7 @@ async function tryDMviaAPI(task, tab) {
 
             return fetch('/api/front/users/' + myUid + '/albums/0/photos', {
               method: 'POST',
+              headers: { 'X-Requested-With': 'XMLHttpRequest' },
               credentials: 'include',
               body: fd,
             })
@@ -3883,7 +3884,7 @@ async function tryDMviaAPI(task, tab) {
           function sendMessageWithMedia(mediaId, body, uniqId) {
             return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
               credentials: 'include',
               body: JSON.stringify({
                 body: body || '',

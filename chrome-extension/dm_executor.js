@@ -1,6 +1,10 @@
 /**
- * Strip Live Spot - DM Executor v6.0
+ * Strip Live Spot - DM Executor v6.1
  * Background から SEND_DM メッセージを受け取りStripchat上でDM送信を実行
+ *
+ * v6.1: 画像DM送信改善
+ *   - findFileInput を MutationObserver ベースに改善（ポーリング廃止）
+ *   - Clipboard API フォールバック追加（input[type=file] 未検出時）
  *
  * v6.0: 画像DM送信対応（DOM方式）
  *   - input[type=file] DataTransfer操作で画像添付
@@ -417,43 +421,59 @@
   // ============================================================
 
   /**
-   * PMダイアログ内のinput[type=file]を探す
+   * PMダイアログ内のinput[type=file]を即座に検索（同期版）
+   */
+  function findFileInputImmediate() {
+    const inputs = document.querySelectorAll('input[type="file"]');
+    // Strategy 1: ダイアログ/メッセンジャー内のものを優先
+    for (const inp of inputs) {
+      if (inp.closest('[role="dialog"], [class*="messenger" i], [class*="message" i], [class*="chat" i], [class*="modal" i]')) {
+        console.log(LOG, '画像添付: input[type=file] 発見 (ダイアログ内)', inp.accept || '');
+        return inp;
+      }
+    }
+    // Strategy 2: accept="image/*" のinput
+    for (const inp of inputs) {
+      if ((inp.accept || '').includes('image')) {
+        console.log(LOG, '画像添付: input[type=file] 発見 (accept=image)');
+        return inp;
+      }
+    }
+    // Strategy 3: ページ上の任意のinput[type=file]
+    if (inputs.length > 0) {
+      console.log(LOG, '画像添付: input[type=file] 発見 (フォールバック)');
+      return inputs[0];
+    }
+    return null;
+  }
+
+  /**
+   * PMダイアログ内のinput[type=file]を探す（MutationObserver版）
    * Stripchat PMダイアログにはファイル添付用の隠しinputがある
    */
   async function findFileInput(maxWait = 5000) {
-    console.log(LOG, '画像添付: input[type=file] 検索...');
-    const start = Date.now();
+    console.log(LOG, '画像添付: input[type=file] 検索 (MutationObserver)...');
 
-    while (Date.now() - start < maxWait) {
-      // Strategy 1: ダイアログ内の input[type=file]
-      const inputs = document.querySelectorAll('input[type="file"]');
-      for (const inp of inputs) {
-        // メッセンジャー/ダイアログ内のものを優先
-        if (inp.closest('[role="dialog"], [class*="messenger" i], [class*="message" i], [class*="chat" i], [class*="modal" i]')) {
-          console.log(LOG, '画像添付: input[type=file] 発見 (ダイアログ内)', inp.accept || '');
-          return inp;
+    // まず既存の要素をチェック
+    const existing = findFileInputImmediate();
+    if (existing) return existing;
+
+    // MutationObserverで動的生成を監視
+    return new Promise((resolve) => {
+      const observer = new MutationObserver(() => {
+        const el = findFileInputImmediate();
+        if (el) {
+          observer.disconnect();
+          resolve(el);
         }
-      }
-
-      // Strategy 2: accept="image/*" のinput
-      for (const inp of inputs) {
-        if ((inp.accept || '').includes('image')) {
-          console.log(LOG, '画像添付: input[type=file] 発見 (accept=image)', inp.accept);
-          return inp;
-        }
-      }
-
-      // Strategy 3: ページ上の任意のinput[type=file]
-      if (inputs.length > 0) {
-        console.log(LOG, '画像添付: input[type=file] 発見 (フォールバック)', inputs.length, '個');
-        return inputs[0];
-      }
-
-      await sleep(300);
-    }
-
-    console.warn(LOG, '画像添付: input[type=file] が見つかりません');
-    return null;
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => {
+        observer.disconnect();
+        console.warn(LOG, '画像添付: input[type=file] 未検出 (タイムアウト)');
+        resolve(null);
+      }, maxWait);
+    });
   }
 
   /**
@@ -717,6 +737,43 @@
   }
 
   /**
+   * Clipboard API 経由で画像をペーストする（input[type=file]未検出時のフォールバック）
+   */
+  async function sendImageViaClipboard(chatInput, imageBase64, elapsed) {
+    console.log(LOG, '画像添付: Clipboard APIフォールバック...');
+    try {
+      const binaryStr = atob(imageBase64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: 'image/png' });
+
+      // contentEditable or textarea にフォーカス
+      const target = chatInput.closest('[role="dialog"]')?.querySelector('[contenteditable="true"]') || chatInput;
+      target.focus();
+      await sleep(200);
+
+      // paste イベントをディスパッチ
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob], 'image.png', { type: 'image/png' }));
+      const pasteEvent = new ClipboardEvent('paste', {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dt,
+      });
+      target.dispatchEvent(pasteEvent);
+
+      console.log(LOG, `[TIMING] Clipboard paste: ${elapsed()}`);
+      await sleep(1000);
+      return true;
+    } catch (e) {
+      console.warn(LOG, 'Clipboard APIフォールバック失敗:', e.message);
+      return false;
+    }
+  }
+
+  /**
    * 画像のみDOM送信（ヘルパー）
    */
   async function sendImageViaDOM(chatInput, username, imageBase64, elapsed) {
@@ -727,8 +784,20 @@
     // input[type=file] を探す
     const fileInput = await findFileInput(3000);
     if (!fileInput) {
-      console.error(LOG, '画像添付: input[type=file]が見つかりません → 画像送信スキップ');
-      return { success: false, error: 'input[type=file]が見つかりません' };
+      // Clipboard APIフォールバック
+      console.log(LOG, '画像添付: input[type=file]未検出 → Clipboard APIフォールバック');
+      const clipOk = await sendImageViaClipboard(chatInput, imageBase64, elapsed);
+      if (clipOk) {
+        await waitForImagePreview(5000);
+        await sleep(300);
+        const sendOk = await clickSendButton(chatInput);
+        if (sendOk) {
+          await sleep(800);
+          return { success: true, error: null };
+        }
+        return { success: false, error: 'Clipboard添付後の送信ボタン失敗' };
+      }
+      return { success: false, error: 'input[type=file]もClipboard APIも失敗' };
     }
 
     // DataTransferで画像セット
@@ -794,5 +863,5 @@
     }
   });
 
-  console.log(LOG, 'DM executor ready (v6.0 - image DM support)');
+  console.log(LOG, 'DM executor ready (v6.1 - MutationObserver + Clipboard fallback)');
 })();
