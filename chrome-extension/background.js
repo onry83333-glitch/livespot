@@ -31,9 +31,9 @@ const successfulTaskIds = new Set(); // タイムアウト後の成功上書き�
 // DM API送信: 安全機構
 let dmApiConsecutiveErrors = 0;       // API連続エラー数
 let dmApiCooldownUntil = 0;           // クールダウン解除時刻(ms)
-const DM_API_MAX_CONSECUTIVE_ERRORS = 3; // この回数連続失敗でDOM自動フォールバック
-const DM_API_COOLDOWN_403 = 5 * 60 * 1000;  // 403時: 5分クールダウン
-const DM_API_COOLDOWN_429 = 10 * 60 * 1000; // 429時: 10分クールダウン
+const DM_API_MAX_CONSECUTIVE_ERRORS = 10; // この回数連続失敗でDOM自動フォールバック
+const DM_API_COOLDOWN_403 = 30 * 1000;        // 403時: 30秒クールダウン（CSRF更新待ち）
+const DM_API_COOLDOWN_429 = 2 * 60 * 1000;    // 429時: 2分クールダウン
 
 // A.2: Heartbeat tracking
 let lastHeartbeat = 0;
@@ -176,7 +176,7 @@ function getFallbackMessage(triggerType, stepNumber, userName, segment) {
 // A.1: Service Worker Keepalive via chrome.alarms
 // ============================================================
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
-chrome.alarms.create('coinSyncPeriodic', { periodInMinutes: 360 }); // 6時間ごと
+chrome.alarms.create('coinSyncPeriodic', { periodInMinutes: 60 });  // 60分ごと（Collector主系統のフォールバック）
 chrome.alarms.create('spyAutoPatrol', { periodInMinutes: 3 });      // 3分ごとに配信開始検出
 chrome.alarms.create('check-extinct-casts', { periodInMinutes: 1440 }); // 24時間ごと（消滅キャスト検出）
 chrome.alarms.create('spyRotation', { periodInMinutes: 3 });          // 3分ごと（他社SPYローテーション）
@@ -512,6 +512,181 @@ async function refreshAccessToken() {
     return true;
   } catch (e) {
     console.error('[LS-BG] トークンリフレッシュエラー:', e.message);
+    return false;
+  }
+}
+
+/**
+ * Cookie自動復元: token=falseの場合にVercelアプリドメインのSupabase認証cookieから
+ * セッションを復元する。@supabase/ssr が設定する sb-{ref}-auth-token cookie を読み取り、
+ * refresh_tokenでアクセストークンを取得してstorageに保存する。
+ */
+async function tryRecoverSessionFromCookie() {
+  const PROJECT_REF = 'ujgbhkllfeacbgpdbjto';
+  const COOKIE_PREFIX = `sb-${PROJECT_REF}-auth-token`;
+  const APP_DOMAIN = 'livespot-rouge.vercel.app';
+
+  try {
+    // 1. まずrefresh_tokenがstorageにあればそちらを試行
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      console.log('[LS-BG] Cookie復元: refresh_tokenで復旧成功');
+      return true;
+    }
+
+    // 2. Vercelアプリドメインからcookieを取得
+    console.log('[LS-BG] Cookie復元: Vercelドメインからcookie取得試行...');
+    const allCookies = await chrome.cookies.getAll({ domain: APP_DOMAIN });
+    console.log('[LS-BG] Cookie復元: 取得cookie数=', allCookies.length);
+
+    // sb-{ref}-auth-token (単体) or sb-{ref}-auth-token.0, .1, ... (チャンク)
+    let authCookieValue = null;
+
+    // 単体cookie
+    const single = allCookies.find(c => c.name === COOKIE_PREFIX);
+    if (single) {
+      authCookieValue = single.value;
+    } else {
+      // チャンクcookie: .0, .1, .2, ... を結合
+      const chunks = allCookies
+        .filter(c => c.name.startsWith(COOKIE_PREFIX + '.'))
+        .sort((a, b) => {
+          const numA = parseInt(a.name.split('.').pop(), 10);
+          const numB = parseInt(b.name.split('.').pop(), 10);
+          return numA - numB;
+        });
+      if (chunks.length > 0) {
+        authCookieValue = chunks.map(c => c.value).join('');
+      }
+    }
+
+    if (!authCookieValue) {
+      // localhostも試行（開発環境）
+      const localCookies = await chrome.cookies.getAll({ domain: 'localhost' });
+      const localSingle = localCookies.find(c => c.name === COOKIE_PREFIX);
+      if (localSingle) {
+        authCookieValue = localSingle.value;
+      } else {
+        const localChunks = localCookies
+          .filter(c => c.name.startsWith(COOKIE_PREFIX + '.'))
+          .sort((a, b) => {
+            const numA = parseInt(a.name.split('.').pop(), 10);
+            const numB = parseInt(b.name.split('.').pop(), 10);
+            return numA - numB;
+          });
+        if (localChunks.length > 0) {
+          authCookieValue = localChunks.map(c => c.value).join('');
+        }
+      }
+    }
+
+    if (!authCookieValue) {
+      console.log('[LS-BG] Cookie復元: 認証cookieが見つからない');
+      return false;
+    }
+
+    // 3. cookieをパース（base64 or JSON）
+    let sessionData;
+    try {
+      // URLデコード → JSON
+      sessionData = JSON.parse(decodeURIComponent(authCookieValue));
+    } catch {
+      try {
+        // base64デコード → JSON
+        sessionData = JSON.parse(atob(authCookieValue));
+      } catch {
+        try {
+          // 直接JSONパース
+          sessionData = JSON.parse(authCookieValue);
+        } catch {
+          console.warn('[LS-BG] Cookie復元: パース失敗');
+          return false;
+        }
+      }
+    }
+
+    console.log('[LS-BG] Cookie復元: セッションデータ取得成功 keys=', Object.keys(sessionData));
+
+    // 4. access_token と refresh_token を抽出
+    const recoveredAccessToken = sessionData.access_token;
+    const recoveredRefreshToken = sessionData.refresh_token;
+
+    if (!recoveredAccessToken) {
+      console.warn('[LS-BG] Cookie復元: access_tokenが含まれていない');
+      return false;
+    }
+
+    // 5. refresh_tokenでフレッシュなトークンを取得（期限切れの可能性があるため）
+    if (recoveredRefreshToken) {
+      try {
+        const res = await fetch(`${CONFIG.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'apikey': CONFIG.SUPABASE_ANON_KEY },
+          body: JSON.stringify({ refresh_token: recoveredRefreshToken }),
+        });
+        if (res.ok) {
+          const result = await res.json();
+          await chrome.storage.local.set({
+            access_token: result.access_token,
+            refresh_token: result.refresh_token,
+          });
+          accessToken = result.access_token;
+          console.log('[LS-BG] Cookie復元: refresh_tokenで新トークン取得成功');
+
+          // account_idも自動取得
+          const accRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/accounts?select=id,account_name`, {
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${result.access_token}`,
+            },
+          });
+          if (accRes.ok) {
+            const accData = await accRes.json();
+            if (Array.isArray(accData) && accData.length > 0) {
+              accountId = accData[0].id;
+              await chrome.storage.local.set({ account_id: accountId });
+              console.log('[LS-BG] Cookie復元: アカウント取得成功:', accountId, accData[0].account_name);
+            }
+          }
+          return true;
+        }
+        console.warn('[LS-BG] Cookie復元: refresh_tokenでのリフレッシュ失敗:', res.status);
+      } catch (e) {
+        console.warn('[LS-BG] Cookie復元: リフレッシュ例外:', e.message);
+      }
+    }
+
+    // 6. refresh失敗の場合、access_tokenを直接使用（有効期限内なら動作する）
+    await chrome.storage.local.set({ access_token: recoveredAccessToken });
+    if (recoveredRefreshToken) {
+      await chrome.storage.local.set({ refresh_token: recoveredRefreshToken });
+    }
+    accessToken = recoveredAccessToken;
+    console.log('[LS-BG] Cookie復元: access_tokenを直接復元');
+
+    // account_id取得
+    try {
+      const accRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/accounts?select=id,account_name`, {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${recoveredAccessToken}`,
+        },
+      });
+      if (accRes.ok) {
+        const accData = await accRes.json();
+        if (Array.isArray(accData) && accData.length > 0) {
+          accountId = accData[0].id;
+          await chrome.storage.local.set({ account_id: accountId });
+          console.log('[LS-BG] Cookie復元: アカウント取得成功:', accountId, accData[0].account_name);
+        }
+      }
+    } catch (e) {
+      console.warn('[LS-BG] Cookie復元: アカウント取得失敗:', e.message);
+    }
+
+    return !!accessToken;
+  } catch (e) {
+    console.error('[LS-BG] Cookie復元: 予期しないエラー:', e.message);
     return false;
   }
 }
@@ -3663,9 +3838,17 @@ async function tryDMviaAPI(task, tab) {
     return null;
   }
 
+  // クールダウン期間が終了していたらカウンターをリセット（デッドロック防止）
+  if (dmApiConsecutiveErrors > 0 && dmApiCooldownUntil > 0 && Date.now() >= dmApiCooldownUntil) {
+    console.log('[LS-BG] DM API クールダウン終了 → 連続エラーカウンターリセット (旧:', dmApiConsecutiveErrors, ')');
+    dmApiConsecutiveErrors = 0;
+    dmApiCooldownUntil = 0;
+  }
+
   // 連続エラー上限超過時はスキップ
   if (dmApiConsecutiveErrors >= DM_API_MAX_CONSECUTIVE_ERRORS) {
-    console.log('[LS-BG] DM API 連続エラー', dmApiConsecutiveErrors, '回 → DOMフォールバック');
+    console.log('[LS-BG] DM API 連続エラー', dmApiConsecutiveErrors, '回 → DOMフォールバック（30秒後にリトライ）');
+    dmApiCooldownUntil = Date.now() + 30000; // 30秒後に自動リカバリ
     return null;
   }
 
@@ -3815,17 +3998,18 @@ async function tryDMviaAPI(task, tab) {
 
           // レスポンス解析の共通処理
           function parseResponse(r) {
+            var retryAfter = r.headers.get('Retry-After');
             return r.text().then(function (text) {
               var data = null;
               try { data = JSON.parse(text); } catch (e) { /* skip */ }
-              return { status: r.status, data: data, text: text.substring(0, 300) };
+              return { status: r.status, data: data, text: text.substring(0, 300), retryAfter: retryAfter ? parseInt(retryAfter, 10) : null };
             });
           }
           function handleMessageResponse(resp) {
             if (resp.status >= 200 && resp.status < 300 && resp.data && resp.data.message) {
               return { success: true, messageId: resp.data.message.id, httpStatus: resp.status };
             }
-            return { success: false, error: 'HTTP ' + resp.status + ': ' + resp.text, httpStatus: resp.status };
+            return { success: false, error: 'HTTP ' + resp.status + ': ' + resp.text, httpStatus: resp.status, retryAfter: resp.retryAfter };
           }
 
           // ---- ヘルパー関数 ----
@@ -4005,14 +4189,27 @@ async function tryDMviaAPI(task, tab) {
     const httpStatus = result.httpStatus;
 
     if (httpStatus === 403) {
-      console.warn('[LS-BG] DM API 403 → 5分クールダウン');
+      console.warn('[LS-BG] DM API 403 → CSRF更新のためタブリロード + 30秒クールダウン');
+      // タブをリロードしてCSRFトークンを更新
+      try {
+        const tabId = typeof tab === 'object' ? tab.id : tab;
+        await chrome.tabs.reload(tabId);
+        await waitForTabComplete(tabId, 10000);
+        await waitForPageLoad(tabId, 5000);
+      } catch (e) { console.warn('[LS-BG] タブリロード失敗:', e.message); }
       dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_403;
       return null;
     }
     if (httpStatus === 429) {
-      console.warn('[LS-BG] DM API 429 → 10分クールダウン');
-      dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_429;
-      return null;
+      // Retry-Afterヘッダーがあればその秒数、なければ15秒待ってリトライ
+      const retryAfterSec = result.retryAfter || 15;
+      // 上限60秒（Stripchatが276秒等を返してもAPI送信を維持するため）
+      const waitSec = Math.min(retryAfterSec, 60);
+      console.warn('[LS-BG] DM API 429 → ' + waitSec + '秒待機してリトライ (Retry-After=' + retryAfterSec + '秒)');
+      // 429はレート制限であり送信エラーではないのでカウンターを戻す
+      dmApiConsecutiveErrors = Math.max(0, dmApiConsecutiveErrors - 1);
+      dmApiCooldownUntil = Date.now() + (waitSec * 1000);
+      return { success: false, error: '429 rate limited (wait ' + waitSec + 's)', httpStatus: 429, retryAfter: waitSec, rateLimited: true };
     }
 
     console.warn('[LS-BG] DM API失敗:', result.error, '→ DOMフォールバック');
@@ -4138,18 +4335,39 @@ async function processDMQueueSerial(tasks) {
 
     await updateDMTaskStatus(task.id, 'sending', null);
 
-    // API送信試行
+    // API送信試行（429レート制限時はリトライ）
     let apiResult = null;
-    try {
-      apiResult = await tryDMviaAPI(task, { id: tabId });
-    } catch (e) {
-      console.warn('[LS-BG] DM API例外:', e.message);
+    let retryCount = 0;
+    const MAX_429_RETRIES = 3;
+
+    while (retryCount <= MAX_429_RETRIES) {
+      try {
+        apiResult = await tryDMviaAPI(task, { id: tabId });
+      } catch (e) {
+        console.warn('[LS-BG] DM API例外:', e.message);
+        apiResult = null;
+        break;
+      }
+
+      // 429レート制限 → 待ってからリトライ
+      if (apiResult && apiResult.rateLimited && retryCount < MAX_429_RETRIES) {
+        const waitMs = (apiResult.retryAfter || 15) * 1000;
+        console.log(`[LS-BG] 429リトライ ${retryCount + 1}/${MAX_429_RETRIES}: ${task.user_name} → ${(waitMs/1000).toFixed(0)}秒待機`);
+        await sleep_bg(waitMs);
+        retryCount++;
+        continue;
+      }
+      break;
     }
 
     if (apiResult) {
       if (apiResult.success) {
         await updateDMTaskStatus(task.id, 'success', null, 'api');
         console.log(`[LS-BG] DM API送信成功! ${task.user_name} (${i + 1}/${tasks.length})`);
+      } else if (apiResult.rateLimited) {
+        // MAX_429_RETRIES回リトライしても429 → queuedに戻して次バッチで再試行
+        console.warn(`[LS-BG] DM API 429持続: ${task.user_name} → queuedに戻す`);
+        await updateDMTaskStatus(task.id, 'queued', null);
       } else {
         await updateDMTaskStatus(task.id, 'error', apiResult.error, 'api');
         console.warn(`[LS-BG] DM API送信失敗: ${task.user_name} → ${apiResult.error}`);
@@ -5830,7 +6048,21 @@ restoreBuffers().then(() => {
         console.warn('[LS-BG] アカウント自動取得失敗:', err.message);
       }
     } else {
-      console.log('[LS-BG] 初期化完了 認証待ち');
+      console.log('[LS-BG] 初期化完了 認証待ち → cookie自動復元を試行');
+      const recovered = await tryRecoverSessionFromCookie();
+      if (recovered) {
+        await loadAuth();
+        if (accessToken && accountId) {
+          startDMPolling();
+          startWhisperPolling();
+          loadRegisteredCasts();
+          initAutoPatrol();
+          initSpyRotation();
+          chrome.alarms.create('sessionSync', { periodInMinutes: 30 });
+          exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync初回:', e.message));
+          console.log('[LS-BG] Cookie復元成功 → 全機能起動');
+        }
+      }
     }
   });
 });

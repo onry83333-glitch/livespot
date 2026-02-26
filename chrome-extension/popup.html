@@ -7,7 +7,7 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       width: 380px;
-      min-height: 480px;
+      min-height: 280px;
       font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif;
       background: #030712;
       color: #f1f5f9;
@@ -115,23 +115,12 @@
     .btn-primary {
       background: linear-gradient(135deg, #38bdf8, #0ea5e9);
     }
-    .btn-spy {
-      background: linear-gradient(135deg, #22c55e, #16a34a);
+    .btn-sync {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
       padding: 8px 16px;
       width: auto;
       font-size: 12px;
       border-radius: 8px;
-    }
-    .btn-spy.active {
-      background: linear-gradient(135deg, #f43f5e, #e11d48);
-    }
-    .btn-save {
-      background: linear-gradient(135deg, #a78bfa, #7c3aed);
-    }
-    .btn-logout {
-      background: rgba(71, 85, 105, 0.4);
-      border: 1px solid rgba(71, 85, 105, 0.3);
-      margin-top: 8px;
     }
     .error {
       color: #f43f5e;
@@ -140,29 +129,6 @@
       display: none;
     }
     .error.show { display: block; }
-    .stats-row {
-      display: flex;
-      gap: 12px;
-    }
-    .stat-card {
-      flex: 1;
-      text-align: center;
-      padding: 12px 8px;
-      background: rgba(15, 23, 42, 0.3);
-      border-radius: 8px;
-    }
-    .stat-value {
-      font-size: 28px;
-      font-weight: 700;
-      color: #38bdf8;
-      line-height: 1;
-    }
-    .stat-value.green { color: #22c55e; }
-    .stat-label {
-      font-size: 10px;
-      color: #475569;
-      margin-top: 4px;
-    }
     .spy-row {
       display: flex;
       align-items: center;
@@ -178,32 +144,6 @@
       margin-top: 2px;
     }
     .hidden { display: none; }
-    .rec-indicator {
-      display: none;
-      align-items: center;
-      gap: 6px;
-      font-size: 11px;
-      font-weight: 700;
-      color: #22c55e;
-      padding: 6px 12px;
-      border-radius: 8px;
-      background: rgba(34, 197, 94, 0.08);
-      border: 1px solid rgba(34, 197, 94, 0.2);
-    }
-    .rec-indicator.active {
-      display: flex;
-    }
-    .rec-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #22c55e;
-      animation: rec-pulse 1.5s ease-in-out infinite;
-    }
-    @keyframes rec-pulse {
-      0%, 100% { opacity: 1; box-shadow: 0 0 4px #22c55e; }
-      50% { opacity: 0.4; box-shadow: 0 0 8px #22c55e; }
-    }
     .success-msg {
       color: #22c55e;
       font-size: 12px;
@@ -241,70 +181,16 @@
       <button class="btn btn-primary" id="loginBtn">ログイン</button>
       <div class="error" id="loginError"></div>
     </div>
-
-    <!-- API Settings (also shown in login state) -->
-    <div class="card">
-      <div class="section-title">API設定</div>
-      <div class="input-group">
-        <div class="label">API URL</div>
-        <input type="url" id="apiUrlInputLogin" placeholder="API URL (自動検出)">
-      </div>
-      <button class="btn btn-save" id="saveSettingsBtnLogin">保存</button>
-      <div class="success-msg" id="saveSuccessLogin">保存しました</div>
-    </div>
   </div>
 
   <!-- ============ Dashboard Section ============ -->
   <div id="dashboardSection" class="hidden">
-    <!-- Account Selector -->
+    <!-- Account -->
     <div class="card">
       <div class="section-title">アカウント</div>
       <select id="accountSelect">
         <option value="">読み込み中...</option>
       </select>
-    </div>
-
-    <!-- Stats -->
-    <div class="card">
-      <div class="stats-row">
-        <div class="stat-card">
-          <div class="stat-value" id="dmQueueCount">-</div>
-          <div class="stat-label">DM待機</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value green" id="spyMsgCount">-</div>
-          <div class="stat-label">SPY受信</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- SPY Toggle -->
-    <div class="card">
-      <div class="spy-row">
-        <div class="spy-info">
-          <h3>SPY監視</h3>
-          <p>チャットログをリアルタイム転送</p>
-        </div>
-        <button class="btn btn-spy" id="spyToggleBtn">監視開始</button>
-      </div>
-      <div id="spyStatusInfo" class="hidden" style="margin-top:8px; font-size:12px; line-height:1.6;"></div>
-      <div class="rec-indicator" id="recIndicator">
-        <span class="rec-dot"></span>
-        <span>REC</span>
-        <span id="recCastName" style="color: #94a3b8; font-weight: 400;"></span>
-      </div>
-    </div>
-
-    <!-- Open All Tabs -->
-    <div class="card">
-      <div class="spy-row">
-        <div class="spy-info">
-          <h3>🖥️ 全タブオープン</h3>
-          <p>全キャストのタブを一斉オープン</p>
-        </div>
-        <button class="btn btn-spy" id="openAllTabsBtn" style="background: linear-gradient(135deg, #22c55e, #16a34a);">開く</button>
-      </div>
-      <div id="openAllTabsResult" class="hidden" style="margin-top:8px; font-size:12px; line-height:1.6; color:#94a3b8;"></div>
     </div>
 
     <!-- Coin Sync -->
@@ -314,7 +200,7 @@
           <h3>名簿同期</h3>
           <p>Stripchatのコイン履歴を取得</p>
         </div>
-        <button class="btn btn-spy" id="coinSyncBtn" style="background: linear-gradient(135deg, #f59e0b, #d97706);">同期</button>
+        <button class="btn btn-sync" id="coinSyncBtn">同期</button>
       </div>
       <div style="margin-top: 8px;">
         <div class="label">同期先キャスト</div>
@@ -324,44 +210,6 @@
       </div>
       <div id="coinSyncStatus" class="hidden" style="margin-top:8px; font-size:12px; line-height:1.6; color:#94a3b8;"></div>
     </div>
-
-    <!-- SPY Rotation Toggle -->
-    <div class="card">
-      <div class="spy-row">
-        <div class="spy-info">
-          <h3>🔄 他社ローテーション</h3>
-          <p>オンラインの他社キャストを自動巡回</p>
-        </div>
-        <button class="btn btn-spy" id="spyRotationBtn" style="background: linear-gradient(135deg, #f59e0b, #d97706);">OFF</button>
-      </div>
-      <div id="spyRotationInfo" class="hidden" style="margin-top:8px; font-size:12px; line-height:1.6; color:#94a3b8;"></div>
-    </div>
-
-    <!-- STT Toggle -->
-    <div class="card">
-      <div class="spy-row">
-        <div class="spy-info">
-          <h3>音声認識 (STT)</h3>
-          <p>配信音声をリアルタイム文字起こし</p>
-        </div>
-        <button class="btn btn-spy" id="sttToggleBtn" style="background: linear-gradient(135deg, #a78bfa, #7c3aed);">開始</button>
-      </div>
-      <div id="sttStatusInfo" class="hidden" style="margin-top:8px; font-size:12px; line-height:1.6;"></div>
-    </div>
-
-    <!-- Settings -->
-    <div class="card">
-      <div class="section-title">API設定</div>
-      <div class="input-group">
-        <div class="label">API URL</div>
-        <input type="url" id="apiUrlInput" placeholder="API URL (自動検出)">
-      </div>
-      <button class="btn btn-save" id="saveSettingsBtn">保存</button>
-      <div class="success-msg" id="saveSuccess">保存しました</div>
-    </div>
-
-    <!-- Logout -->
-    <button class="btn btn-logout" id="logoutBtn">ログアウト</button>
   </div>
 
   <script src="popup.js"></script>
