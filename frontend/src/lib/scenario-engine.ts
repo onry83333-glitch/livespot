@@ -322,7 +322,8 @@ export async function checkGoalReached(
     .eq('account_id', accountId)
     .eq('cast_name', castName)
     .eq('username', userName)
-    .eq('status', 'active');
+    .eq('status', 'active')
+    .limit(100);
 
   if (error) {
     console.warn('[scenario-engine] Failed to check goals:', error.message);

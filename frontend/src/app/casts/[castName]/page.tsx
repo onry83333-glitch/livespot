@@ -876,7 +876,8 @@ function CastDetailInner() {
         .eq('cast_name', castName)
         .gte('started_at', since)
         .filter('broadcast_title', 'not.is', null)
-        .order('started_at', { ascending: false }),
+        .order('started_at', { ascending: false })
+        .limit(500),
     ]).then(([rpcResult, titleResult]) => {
       const rpcSessions = (rpcResult.data || []) as SessionItem[];
       const titleRecords = (titleResult.data || []) as { started_at: string; broadcast_title: string }[];
@@ -965,7 +966,8 @@ function CastDetailInner() {
             .select('scenario_id, status')
             .eq('account_id', accountId)
             .eq('cast_name', castName)
-            .eq('status', 'active');
+            .eq('status', 'active')
+            .limit(50000);
           const countMap = new Map<string, number>();
           for (const e of enrollData || []) {
             countMap.set(e.scenario_id, (countMap.get(e.scenario_id) || 0) + 1);
