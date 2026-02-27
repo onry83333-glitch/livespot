@@ -22,6 +22,8 @@ export default function UsersPage() {
   const sb = supabaseRef.current;
 
   const [accountId, setAccountId] = useState<string | null>(null);
+  const [castNames, setCastNames] = useState<string[]>([]);
+  const [selectedCast, setSelectedCast] = useState('');
   const [users, setUsers] = useState<UserSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,13 +32,21 @@ export default function UsersPage() {
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 50;
 
-  // アカウントID取得
+  // アカウントID + キャスト一覧取得
   useEffect(() => {
     if (!user) return;
     (async () => {
       try {
         const { data } = await sb.from('accounts').select('id').limit(1).single();
-        if (data) setAccountId(data.id);
+        if (data) {
+          setAccountId(data.id);
+          const { data: casts } = await sb
+            .from('registered_casts')
+            .select('cast_name')
+            .eq('account_id', data.id)
+            .order('cast_name');
+          if (casts) setCastNames(casts.map(c => c.cast_name));
+        }
       } catch { /* ignored */ }
     })();
   }, [user, sb]);
@@ -48,24 +58,34 @@ export default function UsersPage() {
     setError(null);
     (async () => {
       try {
-        // RPC関数を試行（003マイグレーション適用後に有効）
-        const { data: rpcData, error: rpcError } = await sb.rpc('user_summary', { p_account_id: accountId });
+        // RPC関数を試行（キャストフィルタ未指定時のみ）
+        let usedRpc = false;
+        if (!selectedCast) {
+          const { data: rpcData, error: rpcError } = await sb.rpc('user_summary', { p_account_id: accountId });
+          if (!rpcError && rpcData) {
+            usedRpc = true;
+            setUsers(rpcData.map((r: { user_name: string; message_count: number; total_tokens: number; last_activity: string }) => ({
+              user_name: r.user_name,
+              messageCount: Number(r.message_count),
+              totalTokens: Number(r.total_tokens),
+              lastActivity: r.last_activity,
+            })));
+          }
+        }
 
-        if (!rpcError && rpcData) {
-          setUsers(rpcData.map((r: { user_name: string; message_count: number; total_tokens: number; last_activity: string }) => ({
-            user_name: r.user_name,
-            messageCount: Number(r.message_count),
-            totalTokens: Number(r.total_tokens),
-            lastActivity: r.last_activity,
-          })));
-        } else {
-          // フォールバック: クライアント側集計
-          const { data, error: fetchErr } = await sb
+        if (!usedRpc) {
+          // フォールバック: クライアント側集計（cast_nameフィルタ対応）
+          let query = sb
             .from('spy_messages')
             .select('user_name, tokens, message_time, msg_type')
             .eq('account_id', accountId)
-            .filter('user_name', 'not.is', null)
-            .limit(50000);
+            .filter('user_name', 'not.is', null);
+
+          if (selectedCast) {
+            query = query.eq('cast_name', selectedCast);
+          }
+
+          const { data, error: fetchErr } = await query.limit(50000);
 
           if (fetchErr) throw new Error(fetchErr.message);
           if (!data) { setUsers([]); return; }
@@ -98,7 +118,7 @@ export default function UsersPage() {
         setLoading(false);
       }
     })();
-  }, [accountId, sb]);
+  }, [accountId, selectedCast, sb]);
 
   // 離脱リスクスコア取得
   useEffect(() => {
@@ -121,7 +141,7 @@ export default function UsersPage() {
   }, [accountId, users.length, sb]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ページリセット（フィルター変更時）
-  useEffect(() => { setPage(1); }, [search, sortBy]);
+  useEffect(() => { setPage(1); }, [search, sortBy, selectedCast]);
 
   // 検索・ソート
   const filteredUsers = useMemo(() => {
@@ -159,6 +179,16 @@ export default function UsersPage() {
       {/* フィルタバー */}
       <div className="glass-card p-4 anim-fade-up delay-1">
         <div className="flex items-center gap-3 flex-wrap">
+          <select
+            value={selectedCast}
+            onChange={e => setSelectedCast(e.target.value)}
+            className="input-glass text-sm w-[180px]"
+          >
+            <option value="">全キャスト</option>
+            {castNames.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
           <input
             type="text"
             value={search}
