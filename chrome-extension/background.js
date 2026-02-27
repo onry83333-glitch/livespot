@@ -3098,6 +3098,35 @@ async function processOneSTTChunk(chunk) {
 // ============================================================
 
 /**
+ * registered_casts.stripchat_user_id からcast_nameを逆引き
+ * モデルIDベースで正確にキャストを特定する（最優先）
+ */
+async function lookupCastByModelId(modelUserId) {
+  if (!accessToken || !accountId || !modelUserId) return null;
+  try {
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&stripchat_user_id=eq.${modelUserId}&is_active=eq.true&select=cast_name&limit=1`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (data.length > 0 && data[0].cast_name) {
+        console.log('[LS-BG] lookupCastByModelId:', modelUserId, '→', data[0].cast_name);
+        return data[0].cast_name;
+      }
+    }
+  } catch (err) {
+    console.warn('[LS-BG] lookupCastByModelId失敗:', err.message);
+  }
+  return null;
+}
+
+/**
  * coin_transactionsテーブルから直近のcast_nameを取得
  * popup未操作 + SPY未使用時のフォールバック用
  */
@@ -3319,6 +3348,22 @@ async function handleCoinSync() {
   }
 
   console.log('[LS-BG] COIN_SYNC_DATA:', transactions.length, '件受信, 有料ユーザー:', payingUsers.length, '名');
+
+  // Step 0（最優先）: APIデータのモデルIDからcast_nameを逆引き
+  // content_coin_sync.jsが返すmodelUserIdは実際にログイン中のモデルのID
+  // registered_casts.stripchat_user_id と照合して正確なcast_nameを特定する
+  const modelUserId = fetchResult.modelUserId;
+  if (modelUserId) {
+    const castFromModel = await lookupCastByModelId(modelUserId);
+    if (castFromModel) {
+      if (castFromModel !== syncCastName) {
+        console.warn(`[LS-BG] CoinSync: cast_name不一致を検出! フォールバック="${syncCastName}" → モデルID逆引き="${castFromModel}" に上書き`);
+      }
+      syncCastName = castFromModel;
+    } else {
+      console.warn(`[LS-BG] CoinSync: モデルID ${modelUserId} はregistered_castsに未登録 — フォールバック "${syncCastName}" を使用`);
+    }
+  }
 
   // Supabaseに保存
   const result = await processCoinSyncData(transactions, syncCastName);

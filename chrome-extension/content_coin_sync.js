@@ -360,7 +360,7 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
 
   const totalStr = numberOfTransactions !== null ? ` / 全 ${numberOfTransactions.toLocaleString()}件` : '';
   console.log(LOG, `合計 ${allTransactions.length}件${totalStr} のトランザクションを取得`);
-  return { ok: true, transactions: allTransactions, pages: page, numberOfTransactions };
+  return { ok: true, transactions: allTransactions, pages: page, numberOfTransactions, modelUserId: userId };
 }
 
 /**
