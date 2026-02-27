@@ -95,6 +95,8 @@ export default function AnalyticsPage() {
   const [funnelUsers, setFunnelUsers] = useState<FunnelUser[]>([]);
   const [funnelLoading, setFunnelLoading] = useState(false);
   const [funnelFilter, setFunnelFilter] = useState<string>('all');
+  const [funnelCastFilter, setFunnelCastFilter] = useState<string>('');
+  const [funnelCasts, setFunnelCasts] = useState<string[]>([]);
 
   // 月次P/L state
   interface MonthlyPL {
@@ -127,6 +129,18 @@ export default function AnalyticsPage() {
       if (list.length > 0) setSelectedAccount(list[0].id);
     });
   }, [user, sb]);
+
+  // ファネル用キャスト一覧取得
+  useEffect(() => {
+    if (!selectedAccount) return;
+    sb.from('registered_casts')
+      .select('cast_name')
+      .eq('account_id', selectedAccount)
+      .eq('is_active', true)
+      .then(({ data }) => {
+        setFunnelCasts((data || []).map((r: { cast_name: string }) => r.cast_name).sort());
+      });
+  }, [selectedAccount, sb]);
 
   // DM効果測定データ取得
   const loadEffectiveness = useCallback(async () => {
@@ -226,10 +240,13 @@ export default function AnalyticsPage() {
 
     try {
       // 応援ユーザー
-      const { data: payingData } = await sb.from('paying_users')
+      let payingQuery = sb.from('paying_users')
         .select('user_name, total_tokens, last_paid, first_paid, tx_count')
-        .eq('account_id', selectedAccount)
-        .limit(50000);
+        .eq('account_id', selectedAccount);
+      if (funnelCastFilter) {
+        payingQuery = payingQuery.eq('cast_name', funnelCastFilter);
+      }
+      const { data: payingData } = await payingQuery.limit(50000);
 
       const segs: Record<string, any[]> = { whale: [], regular: [], light: [], free: [] };
       const payingNames = new Set<string>();
@@ -244,12 +261,15 @@ export default function AnalyticsPage() {
 
       // チャットユーザー（Lead検出）
       const since = new Date(Date.now() - 30 * 86400000).toISOString();
-      const { data: chatData } = await sb.from('spy_messages')
+      let chatQuery = sb.from('spy_messages')
         .select('user_name')
         .eq('account_id', selectedAccount)
         .eq('msg_type', 'chat')
-        .gte('message_time', since)
-        .limit(2000);
+        .gte('message_time', since);
+      if (funnelCastFilter) {
+        chatQuery = chatQuery.eq('cast_name', funnelCastFilter);
+      }
+      const { data: chatData } = await chatQuery.limit(2000);
 
       const chatOnly = new Set<string>();
       for (const m of (chatData || [])) {
@@ -267,10 +287,14 @@ export default function AnalyticsPage() {
       const leadNames = Array.from(chatOnly).filter(n => !castNames.has(n));
 
       // user_level取得（spy_messagesから最新）
-      const { data: levelData } = await sb.from('spy_messages')
+      let levelQuery = sb.from('spy_messages')
         .select('user_name, user_level')
         .eq('account_id', selectedAccount)
-        .filter('user_level', 'not.is', null)
+        .filter('user_level', 'not.is', null);
+      if (funnelCastFilter) {
+        levelQuery = levelQuery.eq('cast_name', funnelCastFilter);
+      }
+      const { data: levelData } = await levelQuery
         .order('message_time', { ascending: false })
         .limit(2000);
 
@@ -325,7 +349,7 @@ export default function AnalyticsPage() {
     } finally {
       setFunnelLoading(false);
     }
-  }, [selectedAccount, sb]);
+  }, [selectedAccount, funnelCastFilter, sb]);
 
   useEffect(() => {
     if (tab === 'funnel') loadFunnel();
@@ -734,6 +758,25 @@ export default function AnalyticsPage() {
       {/* ============ ファネル分析 Tab ============ */}
       {tab === 'funnel' && (
         <div className="space-y-6 anim-fade-up">
+          {/* Cast Filter */}
+          {funnelCasts.length > 0 && (
+            <div className="flex items-center gap-3">
+              <div>
+                <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>キャスト</label>
+                <select
+                  className="input-glass text-xs px-3 py-2 w-48"
+                  value={funnelCastFilter}
+                  onChange={(e) => setFunnelCastFilter(e.target.value)}
+                >
+                  <option value="">全キャスト</option>
+                  {funnelCasts.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
           {/* Loading */}
           {funnelLoading && (
             <div className="grid grid-cols-5 gap-3">
