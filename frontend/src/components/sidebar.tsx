@@ -35,7 +35,6 @@ const navSections: NavSection[] = [
   {
     title: '管理',
     items: [
-      { href: '/admin/command-center', icon: '🎛️', label: 'コマンドセンター' },
       { href: '/admin/revenue', icon: '💰', label: 'レベニューシェア' },
       { href: '/admin/health', icon: '🏥', label: '品質チェック' },
       { href: '/settings',   icon: '⚙️', label: '設定' },

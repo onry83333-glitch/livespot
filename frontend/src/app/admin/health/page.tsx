@@ -316,11 +316,7 @@ export default function HealthPage() {
       <div className="flex items-center justify-between">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <Link href="/admin/command-center" className="text-xs hover:underline" style={{ color: 'var(--text-muted)' }}>
-              コマンドセンター
-            </Link>
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>/</span>
-            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>品質チェック</span>
+            <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>管理 / 品質チェック</span>
           </div>
           <h1 className="text-xl font-bold flex items-center gap-2">
             🏥 品質チェック
