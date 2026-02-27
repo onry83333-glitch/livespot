@@ -38,6 +38,7 @@ const navSections: NavSection[] = [
       { href: '/admin/casts',    icon: '🎭', label: 'キャスト管理' },
       { href: '/admin/revenue', icon: '💰', label: 'レベニューシェア' },
       { href: '/admin/health', icon: '🏥', label: '品質チェック' },
+      { href: '/admin/test-data', icon: '🧹', label: 'テストデータ' },
       { href: '/settings',   icon: '⚙️', label: '設定' },
     ],
   },
