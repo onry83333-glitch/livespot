@@ -28,15 +28,11 @@ const navSections: NavSection[] = [
 ];
 
 const castTabs = [
-  { tab: 'overview',  icon: '📊', label: '概要' },
-  { tab: 'sessions',  icon: '📺', label: '配信' },
-  { tab: 'broadcast', icon: '📡', label: '配信分析' },
-  { tab: 'dm',        icon: '💬', label: 'DM' },
-  { tab: 'analytics', icon: '📈', label: '分析' },
-  { tab: 'sales',     icon: '💰', label: '売上' },
-  { tab: 'realtime',  icon: '👁', label: 'リアルタイム' },
-  { tab: 'persona',   icon: '🎭', label: 'ペルソナ' },
-  { tab: 'overlap',   icon: '🔄', label: '競合分析' },
+  { tab: 'overview',   icon: '📊', label: '概要' },
+  { tab: 'sessions',   icon: '📺', label: 'セッション' },
+  { tab: 'dm',         icon: '💬', label: 'DM' },
+  { tab: 'analytics',  icon: '📈', label: 'アナリティクス' },
+  { tab: 'settings',   icon: '⚙', label: '設定' },
 ];
 
 const spyTabs = [
