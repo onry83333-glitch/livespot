@@ -246,7 +246,8 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'analytics', icon: '📈', label: '分析' },
   { key: 'sales',     icon: '💰', label: '売上' },
   { key: 'realtime',  icon: '👁', label: 'リアルタイム' },
-  { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
+  // M-6: データ0件のため非表示。SPY基盤安定後に再表示
+  // { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
   { key: 'persona',     icon: '🎭', label: 'ペルソナ' },
   { key: 'overlap',     icon: '🔄', label: '競合分析' },
   { key: 'health',      icon: '🩺', label: '健全性' },
