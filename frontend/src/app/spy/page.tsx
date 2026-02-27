@@ -1596,6 +1596,7 @@ function SimpleAnalysisTab() {
     if (until) summaryQuery = summaryQuery.lte('message_time', until);
     summaryQuery
       .order('message_time', { ascending: true })
+      .limit(50000)
       .then(({ data }) => {
         if (data && data.length > 0) {
           const firstMsg = new Date(data[0].message_time);

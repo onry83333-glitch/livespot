@@ -385,7 +385,8 @@ ${spyLog}
         .from('spy_messages')
         .select('user_name, message, msg_type, tokens, message_time')
         .eq('session_id', sessionId)
-        .order('message_time', { ascending: true });
+        .order('message_time', { ascending: true })
+        .limit(50000);
 
       const msgs = messages || [];
       const uniqueUsers = new Set(msgs.map(m => m.user_name).filter(Boolean)).size;
