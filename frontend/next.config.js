@@ -24,6 +24,7 @@ const nextConfig = {
       { source: '/settings', destination: '/casts', permanent: true },
       { source: '/settings/casts', destination: '/admin/casts', permanent: true },
       { source: '/sessions', destination: '/casts', permanent: true },
+      { source: '/dashboard', destination: '/casts', permanent: true },
     ];
   },
 
