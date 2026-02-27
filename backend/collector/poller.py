@@ -140,9 +140,11 @@ async def on_stream_start(
         try:
             sb = get_supabase()
             if cast.get("is_spy"):
-                # spy_castsテーブルにはmodel_idカラムがないので、metadataに保存
-                # spy_castsのcast_nameでセッション検索時に使うためキャッシュのみ
-                pass
+                sb.table("spy_casts").update({
+                    "model_id": info["model_id"],
+                }).eq("cast_name", cast_name).eq(
+                    "account_id", cast["account_id"]
+                ).execute()
             else:
                 sb.table("registered_casts").update({
                     "model_id": info["model_id"],

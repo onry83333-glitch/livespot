@@ -137,21 +137,30 @@ def get_spy_casts() -> list[dict]:
     Supabase spy_casts から is_active=true の他者キャストを取得。
 
     Returns:
-        [{"cast_name": "xxx", "account_id": "uuid", "display_name": "xxx", "is_spy": True}, ...]
+        [{"cast_name": "xxx", "model_id": int|None, "account_id": "uuid",
+          "display_name": "xxx", "is_spy": True}, ...]
     """
     sb = get_supabase()
     res = (
         sb.table("spy_casts")
-        .select("cast_name, account_id, display_name")
+        .select("cast_name, account_id, display_name, model_id, stripchat_model_id")
         .eq("is_active", True)
         .execute()
     )
 
     casts = []
     for row in res.data or []:
+        # model_id (BIGINT) を優先、なければ stripchat_model_id (TEXT) をフォールバック
+        mid = row.get("model_id")
+        if not mid and row.get("stripchat_model_id"):
+            try:
+                mid = int(row["stripchat_model_id"])
+            except (ValueError, TypeError):
+                mid = None
+
         casts.append({
             "cast_name": row["cast_name"],
-            "model_id": None,  # spy_castsにはmodel_idカラムなし（API取得時に解決）
+            "model_id": mid,
             "account_id": row["account_id"],
             "display_name": row.get("display_name") or row["cast_name"],
             "is_spy": True,
