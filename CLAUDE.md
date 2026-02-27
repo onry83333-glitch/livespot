@@ -59,6 +59,7 @@
 - 削除系コマンドは原則実行しない（settings.local.jsonで物理ブロック済み）
 - パッケージ追加前に何を・なぜ・どこにを説明
 - 不明なコマンドは実行前に日本語で説明
+- vercel.jsonを作成・変更・削除しないこと。VercelはRoot Directory=frontendでダッシュボード管理
 
 ### 9. DB絶対ルール（SLS固有）
 - paid_usersのクエリにはcast_name条件必須
