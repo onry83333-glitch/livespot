@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { checkDailyDmLimit, checkCampaignLimit, getRemainingDailyQuota } from './dm-safety';
 
 export interface QueueTarget {
   username: string;
@@ -10,7 +11,9 @@ interface QueueResult {
   queued: number;
   skipped: number;
   skippedUsers: string[];
+  blockedByLimit: number;
   batchId: string;
+  limitReason?: string;
 }
 
 interface DuplicateCheckResult {
@@ -65,16 +68,97 @@ export async function queueDmBatch(
   castName: string,
   targets: QueueTarget[],
   campaign: string,
-  options: { skipDuplicates?: boolean } = {},
+  options: { skipDuplicates?: boolean; campaignMaxCount?: number } = {},
 ): Promise<QueueResult> {
   if (targets.length === 0) throw new Error('送信対象が0件です');
 
-  const { skipDuplicates = true } = options;
+  const { skipDuplicates = true, campaignMaxCount } = options;
   const now = new Date();
   let usernames = targets.map(t => t.username);
   let filteredTargets = [...targets];
   let skipped = 0;
   let skippedUsers: string[] = [];
+  let blockedByLimit = 0;
+
+  // P0-5: 1日あたりの送信上限チェック
+  const dailyCheck = await checkDailyDmLimit(supabase, accountId);
+  if (!dailyCheck.allowed) {
+    // 全件をblocked_by_limitとして記録
+    const rows = targets.map(t => ({
+      account_id: accountId,
+      cast_name: castName,
+      user_name: t.username,
+      message: t.message,
+      image_sent: !!t.imageUrl,
+      status: 'blocked_by_limit',
+      campaign,
+      queued_at: now.toISOString(),
+      error: dailyCheck.reason,
+    }));
+    await supabase.from('dm_send_log').insert(rows);
+    return {
+      queued: 0,
+      skipped: 0,
+      blockedByLimit: targets.length,
+      skippedUsers: [],
+      batchId: campaign,
+      limitReason: dailyCheck.reason,
+    };
+  }
+
+  // P0-5: campaign単位の送信数制限チェック
+  if (campaignMaxCount) {
+    const campCheck = await checkCampaignLimit(supabase, accountId, campaign, campaignMaxCount);
+    if (!campCheck.allowed) {
+      const rows = targets.map(t => ({
+        account_id: accountId,
+        cast_name: castName,
+        user_name: t.username,
+        message: t.message,
+        image_sent: !!t.imageUrl,
+        status: 'blocked_by_limit',
+        campaign,
+        queued_at: now.toISOString(),
+        error: campCheck.reason,
+      }));
+      await supabase.from('dm_send_log').insert(rows);
+      return {
+        queued: 0,
+        skipped: 0,
+        blockedByLimit: targets.length,
+        skippedUsers: [],
+        batchId: campaign,
+        limitReason: campCheck.reason,
+      };
+    }
+  }
+
+  // P0-5: 日次残数を超える分をトリミング
+  const remaining = getRemainingDailyQuota(dailyCheck);
+  if (filteredTargets.length > remaining) {
+    const overflowTargets = filteredTargets.slice(remaining);
+    blockedByLimit = overflowTargets.length;
+    filteredTargets = filteredTargets.slice(0, remaining);
+    usernames = filteredTargets.map(t => t.username);
+
+    // 超過分をblocked_by_limitとして記録
+    const overflowRows = overflowTargets.map(t => ({
+      account_id: accountId,
+      cast_name: castName,
+      user_name: t.username,
+      message: t.message,
+      image_sent: !!t.imageUrl,
+      status: 'blocked_by_limit',
+      campaign,
+      queued_at: now.toISOString(),
+      error: `1日あたりの送信上限(${dailyCheck.limit.toLocaleString()}件)超過`,
+    }));
+    await supabase.from('dm_send_log').insert(overflowRows);
+
+    console.info(
+      `[dm-sender] 日次上限トリミング: ${blockedByLimit}件をblocked_by_limitに設定`,
+    );
+  }
 
   // P0-5: 送信前に重複チェック
   if (skipDuplicates && castName) {
@@ -92,7 +176,7 @@ export async function queueDmBatch(
 
       // 全員スキップされた場合
       if (filteredTargets.length === 0) {
-        return { queued: 0, skipped, skippedUsers, batchId: campaign };
+        return { queued: 0, skipped, skippedUsers, blockedByLimit: 0, batchId: campaign };
       }
     }
   }
@@ -163,5 +247,5 @@ export async function queueDmBatch(
     batchId = campaign;
   }
 
-  return { queued: count, skipped, skippedUsers, batchId };
+  return { queued: count, skipped, skippedUsers, blockedByLimit, batchId };
 }

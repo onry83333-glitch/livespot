@@ -288,11 +288,15 @@ export class StripchatWsClient {
 
 // ----- REST polling (status + viewers) -----
 
-export async function pollCastStatus(castName: string): Promise<StatusResult> {
+export async function pollCastStatus(castName: string, cfClearance?: string): Promise<StatusResult> {
   const url = STRIPCHAT.statusUrl(castName);
 
   try {
-    const res = await fetch(url, { headers: FETCH_HEADERS });
+    const headers: Record<string, string> = { ...FETCH_HEADERS };
+    if (cfClearance) {
+      headers['Cookie'] = `cf_clearance=${cfClearance}`;
+    }
+    const res = await fetch(url, { headers });
 
     if (res.status === 403) {
       log.warn(`${castName}: Cloudflare 403`);
@@ -309,7 +313,9 @@ export async function pollCastStatus(castName: string): Promise<StatusResult> {
     }
 
     const data = (await res.json()) as Record<string, unknown>;
-    const user = data.user as Record<string, unknown> | undefined;
+    const outerUser = data.user as Record<string, unknown> | undefined;
+    // Handle both old (data.user.status) and new (data.user.user.status) API structure
+    const user = (outerUser?.user as Record<string, unknown> | undefined) ?? outerUser;
 
     const status = (user?.status as CastStatus) || 'off';
     const viewerCount = Number(user?.viewersCount || user?.viewers || 0);
@@ -325,12 +331,16 @@ export async function pollCastStatus(castName: string): Promise<StatusResult> {
 export async function pollViewers(
   castName: string,
   authToken?: string,
+  cfClearance?: string,
 ): Promise<ViewerResult> {
   const url = STRIPCHAT.viewerUrl(castName);
   const headers: Record<string, string> = { ...FETCH_HEADERS };
 
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
+  }
+  if (cfClearance) {
+    headers['Cookie'] = `cf_clearance=${cfClearance}`;
   }
 
   try {

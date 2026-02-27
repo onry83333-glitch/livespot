@@ -48,7 +48,7 @@ export interface DMLog {
   user_name: string;
   message: string | null;
   image_sent: boolean;
-  status: 'queued' | 'sending' | 'success' | 'error' | 'pending';
+  status: 'queued' | 'sending' | 'success' | 'error' | 'pending' | 'blocked_by_limit';
   error: string | null;
   sent_at: string | null;
   queued_at: string;

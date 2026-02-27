@@ -26,6 +26,7 @@ def _verify_account(sb, account_id: str, user_id: str):
 async def daily_sales(
     account_id: str,
     days: int = Query(default=90, le=365),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """日別売上（棒グラフ用）"""
@@ -33,10 +34,10 @@ async def daily_sales(
     _verify_account(sb, account_id, user["user_id"])
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
-    result = sb.rpc("daily_sales", {
-        "p_account_id": account_id,
-        "p_since": since,
-    }).execute()
+    params = {"p_account_id": account_id, "p_since": since}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("daily_sales", params).execute()
     return result.data
 
 
@@ -44,6 +45,7 @@ async def daily_sales(
 async def cumulative_sales(
     account_id: str,
     days: int = Query(default=90, le=365),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """累計推移（折れ線グラフ用）"""
@@ -52,10 +54,10 @@ async def cumulative_sales(
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
     # Get daily data and compute cumulative client-side
-    result = sb.rpc("daily_sales", {
-        "p_account_id": account_id,
-        "p_since": since,
-    }).execute()
+    params = {"p_account_id": account_id, "p_since": since}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("daily_sales", params).execute()
 
     cumulative = []
     total = 0
@@ -88,6 +90,7 @@ async def top_users(
 async def revenue_breakdown(
     account_id: str,
     days: int = Query(default=90, le=365),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """収入源内訳（ドーナツチャート用）"""
@@ -95,10 +98,10 @@ async def revenue_breakdown(
     _verify_account(sb, account_id, user["user_id"])
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
-    result = sb.rpc("revenue_breakdown", {
-        "p_account_id": account_id,
-        "p_since": since,
-    }).execute()
+    params = {"p_account_id": account_id, "p_since": since}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("revenue_breakdown", params).execute()
     return result.data
 
 
@@ -106,6 +109,7 @@ async def revenue_breakdown(
 async def hourly_revenue(
     account_id: str,
     days: int = Query(default=30, le=90),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """時間帯分析（ヒートマップ用）— UTC→JST変換"""
@@ -113,10 +117,10 @@ async def hourly_revenue(
     _verify_account(sb, account_id, user["user_id"])
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
-    result = sb.rpc("hourly_revenue", {
-        "p_account_id": account_id,
-        "p_since": since,
-    }).execute()
+    params = {"p_account_id": account_id, "p_since": since}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("hourly_revenue", params).execute()
     return result.data
 
 
@@ -125,11 +129,18 @@ async def hourly_revenue(
 # ============================================================
 
 @router.get("/funnel/arpu")
-async def arpu_trend(account_id: str, user=Depends(get_current_user)):
+async def arpu_trend(
+    account_id: str,
+    cast_name: Optional[str] = Query(default=None),
+    user=Depends(get_current_user)
+):
     """ARPU推移（月別: 総売上 ÷ ユニーク課金者数）"""
     sb = get_supabase_admin()
     _verify_account(sb, account_id, user["user_id"])
-    result = sb.rpc("arpu_trend", {"p_account_id": account_id}).execute()
+    params = {"p_account_id": account_id}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("arpu_trend", params).execute()
     return result.data
 
 
@@ -160,20 +171,34 @@ async def ltv_distribution(account_id: str, user=Depends(get_current_user)):
 
 
 @router.get("/funnel/retention")
-async def retention_cohort(account_id: str, user=Depends(get_current_user)):
+async def retention_cohort(
+    account_id: str,
+    cast_name: Optional[str] = Query(default=None),
+    user=Depends(get_current_user)
+):
     """リテンション（最終支払月別ユーザー分布）"""
     sb = get_supabase_admin()
     _verify_account(sb, account_id, user["user_id"])
-    result = sb.rpc("retention_cohort", {"p_account_id": account_id}).execute()
+    params = {"p_account_id": account_id}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("retention_cohort", params).execute()
     return result.data
 
 
 @router.get("/funnel/revenue-trend")
-async def revenue_trend(account_id: str, user=Depends(get_current_user)):
+async def revenue_trend(
+    account_id: str,
+    cast_name: Optional[str] = Query(default=None),
+    user=Depends(get_current_user)
+):
     """収入源推移（月別×タイプ別 積み上げエリア）"""
     sb = get_supabase_admin()
     _verify_account(sb, account_id, user["user_id"])
-    result = sb.rpc("revenue_trend", {"p_account_id": account_id}).execute()
+    params = {"p_account_id": account_id}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("revenue_trend", params).execute()
     return result.data
 
 
@@ -181,15 +206,16 @@ async def revenue_trend(account_id: str, user=Depends(get_current_user)):
 async def top_users_detail(
     account_id: str,
     limit: int = Query(default=15, le=50),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """太客詳細（累計tk、初課金日、最終課金日、継続月数、主要収入源）"""
     sb = get_supabase_admin()
     _verify_account(sb, account_id, user["user_id"])
-    result = sb.rpc("top_users_detail", {
-        "p_account_id": account_id,
-        "p_limit": limit,
-    }).execute()
+    params = {"p_account_id": account_id, "p_limit": limit}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("top_users_detail", params).execute()
     return result.data
 
 
@@ -323,6 +349,7 @@ async def funnel_leads(
 async def dm_effectiveness(
     account_id: str,
     campaign: str = Query(default=None),
+    cast_name: Optional[str] = Query(default=None),
     days_window: int = Query(default=7, le=30),
     user=Depends(get_current_user),
 ):
@@ -331,10 +358,10 @@ async def dm_effectiveness(
     _verify_account(sb, account_id, user["user_id"])
 
     # キャンペーン別データ（RPC）
-    rpc_result = sb.rpc("dm_effectiveness", {
-        "p_account_id": account_id,
-        "p_window_days": days_window,
-    }).execute()
+    params = {"p_account_id": account_id, "p_window_days": days_window}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    rpc_result = sb.rpc("dm_effectiveness", params).execute()
 
     by_campaign = rpc_result.data or []
 

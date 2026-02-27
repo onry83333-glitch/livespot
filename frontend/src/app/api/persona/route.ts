@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { authenticateAndValidateAccount } from '@/lib/api-auth';
+import { reportError } from '@/lib/error-handler';
 import { generateMockDmResponse, generateGenericMockResponse } from './mock-responses';
 import { LAYER_A_ANDO_FOUNDATION } from '@/lib/prompts/layer-a-ando';
 
@@ -665,6 +666,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
         });
         return NextResponse.json({ ...mockRes, _fallback_reason: 'OpenAI APIキー無効のためモックにフォールバック' });
       }
+      await reportError(e, { file: 'api/persona', context: 'OpenAI DM生成' });
       return NextResponse.json(
         { error: err.message || 'OpenAI DM生成エラー' },
         { status: err.statusCode || 500 },
@@ -780,6 +782,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
     });
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
+    await reportError(e, { file: 'api/persona', context: 'Persona Agent AI生成' });
     return NextResponse.json(
       { error: err.message || 'Persona Agent エラー' },
       { status: err.statusCode || 500 },

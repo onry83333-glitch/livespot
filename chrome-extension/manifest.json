@@ -15,7 +15,8 @@
   "host_permissions": [
     "*://stripchat.com/*",
     "*://*.stripchat.com/*",
-    "https://ujgbhkllfeacbgpdbjto.supabase.co/*"
+    "https://ujgbhkllfeacbgpdbjto.supabase.co/*",
+    "https://livespot-rouge.vercel.app/*"
   ],
   "background": {
     "service_worker": "background.js"

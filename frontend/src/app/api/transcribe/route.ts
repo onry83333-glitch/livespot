@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { createServerSupabase } from '@/lib/supabase/server';
+import { reportError } from '@/lib/error-handler';
 
 export const maxDuration = 300; // 5min timeout (Vercel Pro)
 
@@ -163,6 +164,7 @@ export async function POST(request: NextRequest) {
     const message = error instanceof Error ? error.message : String(error);
     const elapsed = Date.now() - startTime;
     console.error(`[Transcribe] 失敗 (${elapsed}ms):`, message);
+    await reportError(error, { file: 'api/transcribe', context: `Whisper文字起こし session=${sessionId}` });
     if (record?.id) {
       await supabase
         .from('cast_transcripts')

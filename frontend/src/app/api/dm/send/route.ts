@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabase } from '@/lib/supabase/server';
 import { StripchatAPI } from '@/lib/stripchat-api';
+import { checkDailyDmLimit } from '@/lib/dm-safety';
 
 // ============================================================
 // POST /api/dm/send — 単発DM送信
@@ -36,6 +37,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // P0-5: 日次送信上限チェック（account_id指定時）
+  if (account_id) {
+    const dailyCheck = await checkDailyDmLimit(supabase, account_id);
+    if (!dailyCheck.allowed) {
+      return NextResponse.json(
+        { error: dailyCheck.reason, blocked_by_limit: true },
+        { status: 429 },
+      );
+    }
+  }
+
   // 1. アカウント取得（所有権チェック: user_id一致確認）
   let accountQuery = supabase.from('accounts').select('id').eq('user_id', user.id).limit(1);
   if (account_id) {
@@ -63,6 +75,27 @@ export async function POST(req: NextRequest) {
       },
       { status: 400 },
     );
+  }
+
+  // P0-5: キャスト身元検証ゲート — cast_name→registered_casts.stripchat_user_id→session一致確認
+  if (body.cast_name && session.stripchat_user_id) {
+    const { data: rc } = await supabase
+      .from('registered_casts')
+      .select('stripchat_user_id')
+      .eq('account_id', account.id)
+      .eq('cast_name', body.cast_name)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (rc?.stripchat_user_id && String(rc.stripchat_user_id) !== String(session.stripchat_user_id)) {
+      return NextResponse.json(
+        {
+          error: 'CAST_IDENTITY_MISMATCH',
+          detail: `セッション不一致: cast=${body.cast_name}(ID:${rc.stripchat_user_id}) だがセッションのuserIdは ${session.stripchat_user_id} です。誤送信を防止しました。`,
+        },
+        { status: 403 },
+      );
+    }
   }
 
   // StripchatAPI インスタンス作成
