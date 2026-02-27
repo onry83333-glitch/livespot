@@ -183,6 +183,7 @@ async def on_stream_end(
             token_res = sb.rpc("daily_sales", {
                 "p_account_id": cast["account_id"],
                 "p_since": state.get("started_at", now),
+                "p_cast_name": cast_name,
             }).execute()
 
             sb.table("sessions").update({
