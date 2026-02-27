@@ -122,16 +122,17 @@ export default function CastsPage() {
         });
         setCastStats((stats || []) as CastStats[]);
 
-        // coin_transactionsから今週・前週のコイン集計（JST暦週: 月曜〜日曜）
-        const thisWeekStart = getWeekStartJST(0); // 今週月曜 00:00 JST
-        const lastWeekStart = getWeekStartJST(1); // 前週月曜 00:00 JST
+        // coin_transactionsから今週・前週のコイン集計（JST暦週: 月曜03:00 JST区切り）
+        const thisWeekStart = getWeekStartJST(0); // 今週月曜 03:00 JST
+        const lastWeekStart = getWeekStartJST(1); // 前週月曜 03:00 JST
 
         const { data: coinRows } = await supabase
           .from('coin_transactions')
           .select('cast_name, tokens, date')
           .eq('account_id', selectedAccount)
           .in('cast_name', castNames)
-          .gte('date', lastWeekStart.toISOString());
+          .gte('date', lastWeekStart.toISOString())
+          .limit(10000);
 
         const weeklyMap = new Map<string, { this_week: number; last_week: number }>();
         (coinRows || []).forEach((row: { cast_name: string; tokens: number; date: string }) => {
