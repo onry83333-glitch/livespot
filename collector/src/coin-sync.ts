@@ -34,6 +34,7 @@ interface RegisteredCast {
   account_id: string;
   cast_name: string;
   stripchat_model_id: string | null;
+  stripchat_user_id: string | null;
 }
 
 interface Transaction {
@@ -67,7 +68,7 @@ export async function runCoinSync(): Promise<void> {
   // 1. 自社キャスト一覧
   const { data: casts, error: castErr } = await sb
     .from('registered_casts')
-    .select('account_id, cast_name, stripchat_model_id')
+    .select('account_id, cast_name, stripchat_model_id, stripchat_user_id')
     .eq('is_active', true);
 
   if (castErr || !casts || casts.length === 0) {
@@ -105,21 +106,82 @@ export async function runCoinSync(): Promise<void> {
       continue;
     }
 
-    const userId = sess.stripchat_user_id;
-    if (!userId) {
-      log.warn(`[${accountId}] stripchat_user_idが未設定 — スキップ`);
-      continue;
-    }
-
-    // Cookie文字列を構築
+    // Cookie文字列を構築（userId解決で使うため先に定義）
     const cookieHeader = Object.entries(sess.cookies_json)
       .map(([k, v]) => `${k}=${v}`)
       .join('; ');
 
+    let userId = sess.stripchat_user_id;
+
+    // stripchat_user_id が未設定の場合、cookies_json から自動取得
+    if (!userId) {
+      const cookieUserId = sess.cookies_json?.['stripchat_com_userId'];
+      if (cookieUserId) {
+        userId = String(cookieUserId);
+        log.info(`[${accountId}] cookies_jsonからuserId取得: ${userId}`);
+        // DBにも保存（次回以降はDBから取得）
+        await sb
+          .from('stripchat_sessions')
+          .update({ stripchat_user_id: userId })
+          .eq('account_id', accountId)
+          .eq('is_valid', true);
+      }
+    }
+
+    // それでも取得できない場合、API /user/me で自動検出
+    if (!userId) {
+      try {
+        const meResp = await fetch('https://stripchat.com/api/front/v2/user/me', {
+          headers: {
+            Cookie: cookieHeader,
+            Accept: 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+        });
+        if (meResp.ok) {
+          const meData = (await meResp.json()) as { user?: { id?: number } };
+          if (meData.user?.id) {
+            userId = String(meData.user.id);
+            log.info(`[${accountId}] API /user/me からuserId取得: ${userId}`);
+            await sb
+              .from('stripchat_sessions')
+              .update({ stripchat_user_id: userId })
+              .eq('account_id', accountId)
+              .eq('is_valid', true);
+          } else {
+            log.warn(`[${accountId}] /user/me レスポンスにuserIdなし`);
+          }
+        } else {
+          log.warn(`[${accountId}] /user/me HTTP ${meResp.status}`);
+        }
+      } catch (err) {
+        log.warn(`[${accountId}] /user/me 取得失敗`, err);
+      }
+    }
+
+    // 最終フォールバック: registered_casts.stripchat_user_id → stripchat_model_id
+    if (!userId) {
+      const registeredUserId = accountCasts[0]?.stripchat_user_id;
+      const modelId = accountCasts[0]?.stripchat_model_id;
+      const fallbackId = registeredUserId || modelId;
+      if (fallbackId) {
+        userId = String(fallbackId);
+        log.info(`[${accountId}] registered_castsからuserId取得: ${userId}`);
+      }
+    }
+
+    if (!userId) {
+      log.warn(`[${accountId}] userId取得不可 (cookie keys: ${Object.keys(sess.cookies_json).join(', ')})`);
+      continue;
+    }
+
+    // userIdがsession由来かフォールバック由来かを記録
+    const userIdFromSession = !!sess.stripchat_user_id;
+
     // 3. 各キャストの最終同期日を取得して差分同期
     for (const cast of accountCasts) {
       try {
-        await syncCastCoins(accountId, cast.cast_name, userId, cookieHeader);
+        await syncCastCoins(accountId, cast.cast_name, userId, cookieHeader, userIdFromSession);
       } catch (err) {
         log.error(`[${cast.cast_name}] コイン同期失敗`, err);
       }
@@ -170,6 +232,7 @@ async function syncCastCoins(
   castName: string,
   userId: string,
   cookieHeader: string,
+  userIdFromSession = true,
 ): Promise<void> {
   const sb = getSupabase();
 
@@ -217,11 +280,14 @@ async function syncCastCoins(
 
     if (resp.status === 401 || resp.status === 403) {
       log.warn(`[${castName}] 認証エラー ${resp.status} — cookieが期限切れの可能性`);
-      // stripchat_sessions を無効化
-      await sb
-        .from('stripchat_sessions')
-        .update({ is_valid: false })
-        .eq('account_id', accountId);
+      // session由来のuserIdの場合のみ session を無効化
+      // フォールバック(model_id等)の場合はcookieの問題ではなくuserId不一致の可能性
+      if (userIdFromSession) {
+        await sb
+          .from('stripchat_sessions')
+          .update({ is_valid: false })
+          .eq('account_id', accountId);
+      }
       break;
     }
 
