@@ -152,7 +152,7 @@ export default function DashboardPage() {
     // 推奨アクション算出
     const recs: {icon: string; text: string; href: string}[] = [];
     if (dmSent7dCount === 0) {
-      recs.push({ icon: '📨', text: '7日間DM未送信 -- リテンションDMの送信を検討', href: '/dm' });
+      recs.push({ icon: '📨', text: '7日間DM未送信 -- リテンションDMの送信を検討', href: '/casts' });
     }
     const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
     const dormantWhales = whales.filter((w: WhaleUser) => {
@@ -168,7 +168,7 @@ export default function DashboardPage() {
         .lt('last_payment_date', fourteenDaysAgo.toISOString())
         .limit(100);
       if (whaleDetails && whaleDetails.length > 0) {
-        recs.push({ icon: '🐋', text: `離脱Whaleあり (${whaleDetails.length}名) -- 復帰DMを送信`, href: '/dm' });
+        recs.push({ icon: '🐋', text: `離脱Whaleあり (${whaleDetails.length}名) -- 復帰DMを送信`, href: '/casts' });
       }
     }
     setRecommendations(recs);
@@ -329,9 +329,7 @@ export default function DashboardPage() {
   }
 
   // Build churn DM URL
-  const churnDmUrl = churnRiskUsers.length > 0
-    ? `/dm?preset=churn&users=${churnRiskUsers.map(u => u.user_name).join(',')}`
-    : '/dm';
+  const churnDmUrl = '/casts';
 
   const displayedChurnUsers = churnRiskUsers.slice(0, 5);
   const remainingChurnCount = churnRiskUsers.length - 5;
@@ -520,11 +518,11 @@ export default function DashboardPage() {
                     }`}>
                       #{i + 1}
                     </span>
-                    <Link href={'/users/' + encodeURIComponent(w.user_name)}
+                    <Link href={'/spy/users/' + encodeURIComponent(w.user_name)}
                       className="text-sm truncate max-w-[120px] hover:text-sky-400 transition-colors">
                       {w.user_name}
                     </Link>
-                    <Link href={'/dm?user=' + encodeURIComponent(w.user_name)}
+                    <Link href={'/casts'}
                       className="text-xs opacity-40 hover:opacity-100 transition-opacity" title={'DM\u9001\u4FE1'}>
                       {'\uD83D\uDCE7'}
                     </Link>
@@ -603,15 +601,15 @@ export default function DashboardPage() {
               <p className="text-xs font-semibold" style={{ color: 'var(--accent-primary)' }}>{'\uD83D\uDD0D \u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u904B\u55B6'}</p>
               <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'SPY\u30ED\u30B0\u3067\u30C1\u30E3\u30C3\u30C8\u3092\u30EA\u30A2\u30EB\u30BF\u30A4\u30E0\u76E3\u8996'}</p>
             </Link>
-            <Link href="/dm" className="glass-panel p-4 rounded-xl border-l-2 block hover:bg-white/[0.03] transition-colors"
+            <Link href="/casts" className="glass-panel p-4 rounded-xl border-l-2 block hover:bg-white/[0.03] transition-colors"
               style={{ borderLeftColor: 'var(--accent-pink)' }}>
               <p className="text-xs font-semibold" style={{ color: 'var(--accent-pink)' }}>{'\uD83D\uDCAC DM\u4E00\u6589\u9001\u4FE1'}</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'\u30BF\u30FC\u30B2\u30C3\u30C8\u306BDM\u3092\u4E00\u62EC\u9001\u4FE1'}</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'\u30AD\u30E3\u30B9\u30C8\u3092\u9078\u3093\u3067DM\u30BF\u30D6\u3078'}</p>
             </Link>
-            <Link href="/analytics" className="glass-panel p-4 rounded-xl border-l-2 block hover:bg-white/[0.03] transition-colors"
+            <Link href="/casts" className="glass-panel p-4 rounded-xl border-l-2 block hover:bg-white/[0.03] transition-colors"
               style={{ borderLeftColor: 'var(--accent-green)' }}>
               <p className="text-xs font-semibold" style={{ color: 'var(--accent-green)' }}>{'\uD83D\uDCCA \u5206\u6790&\u30B9\u30B3\u30A2\u30EA\u30F3\u30B0'}</p>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'\u58F2\u4E0A\u30C8\u30EC\u30F3\u30C9\u30FBARPU\u30FALTV\u3092\u5206\u6790'}</p>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>{'\u30AD\u30E3\u30B9\u30C8\u3092\u9078\u3093\u3067\u5206\u6790\u30BF\u30D6\u3078'}</p>
             </Link>
           </div>
         </div>
@@ -622,8 +620,8 @@ export default function DashboardPage() {
             <h3 className="text-base font-bold flex items-center gap-2">
               {'\uD83D\uDCCB \u76F4\u8FD1DM\u9001\u4FE1\u5C65\u6B74'}
             </h3>
-            <Link href="/dm" className="btn-ghost text-xs">
-              {'DM\u753B\u9762\u3078 \u2192'}
+            <Link href="/casts" className="btn-ghost text-xs">
+              {'\u30AD\u30E3\u30B9\u30C8\u4E00\u89A7\u3078 \u2192'}
             </Link>
           </div>
 
