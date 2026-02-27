@@ -372,16 +372,18 @@ async def upload_csv(
         un = (row.get("user_name") or "").strip()
         if not un:
             continue
-        rows.append(
-            {
-                "account_id": account_id,
-                "user_name": un,
-                "total_coins": int(row.get("total_coins", 0) or 0),
-                "last_payment_date": row.get("last_payment_date") or None,
-                "user_id_stripchat": row.get("user_id", ""),
-                "profile_url": row.get("profile_url", ""),
-            }
-        )
+        entry = {
+            "account_id": account_id,
+            "user_name": un,
+            "total_coins": int(row.get("total_coins", 0) or 0),
+            "last_payment_date": row.get("last_payment_date") or None,
+            "user_id_stripchat": row.get("user_id", ""),
+            "profile_url": row.get("profile_url", ""),
+        }
+        csv_cast = (row.get("cast_name") or "").strip()
+        if csv_cast:
+            entry["cast_name"] = csv_cast
+        rows.append(entry)
 
     if not rows:
         raise HTTPException(status_code=400, detail="CSVに有効な行がありません")
