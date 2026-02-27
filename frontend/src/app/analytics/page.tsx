@@ -89,6 +89,7 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [allCampaigns, setAllCampaigns] = useState<string[]>([]);
+  const [dmCastFilter, setDmCastFilter] = useState<string>('');
 
   // ファネル分析 state
   const [funnelSegments, setFunnelSegments] = useState<FunnelSegment[]>([]);
@@ -167,6 +168,10 @@ export default function AnalyticsPage() {
         query = query.lte('created_at', until);
       }
 
+      if (dmCastFilter) {
+        query = query.eq('cast_name', dmCastFilter);
+      }
+
       if (campaignFilter) {
         query = query.eq('campaign', campaignFilter);
       }
@@ -227,7 +232,7 @@ export default function AnalyticsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedAccount, session, daysWindow, campaignFilter, customStart, customEnd, sb]);
+  }, [selectedAccount, session, daysWindow, campaignFilter, dmCastFilter, customStart, customEnd, sb]);
 
   useEffect(() => {
     if (tab === 'dm') loadEffectiveness();
@@ -489,6 +494,19 @@ export default function AnalyticsPage() {
                 </div>
               </>
             )}
+            <div>
+              <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>キャスト</label>
+              <select
+                className="input-glass text-xs px-3 py-2 w-36"
+                value={dmCastFilter}
+                onChange={(e) => setDmCastFilter(e.target.value)}
+              >
+                <option value="">全キャスト</option>
+                {funnelCasts.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
             <div>
               <label className="text-[10px] block mb-1" style={{ color: 'var(--text-muted)' }}>キャンペーン</label>
               <select
