@@ -408,7 +408,7 @@ export default function CastsPage() {
           </div>
           <div className="flex gap-2 flex-wrap">
             {Array.from(liveCastSet).map(name => (
-              <Link key={name} href={`/casts/${encodeURIComponent(name)}?tab=realtime`}
+              <Link key={name} href={`/casts/${encodeURIComponent(name)}?tab=sessions`}
                 className="px-2.5 py-1 rounded-lg text-[11px] font-medium hover:bg-white/[0.05] transition-all"
                 style={{ background: 'rgba(244,63,94,0.1)', color: 'var(--accent-pink)', border: '1px solid rgba(244,63,94,0.2)' }}>
                 {name}

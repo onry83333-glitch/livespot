@@ -16,7 +16,7 @@ import { getUserColorFromCoins } from '@/lib/stripchat-levels';
    Types
    ============================================================ */
 // M-6: screenshots タブはデータ0件のため非表示。SPY基盤安定後に再表示
-type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'persona' | 'overlap' | 'health' | 'settings';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'settings';
 
 interface CastStatsData {
   total_messages: number;
@@ -241,19 +241,11 @@ const ALERT_RULE_LABELS: Record<string, { icon: string; label: string; defaultTh
 };
 
 const TABS: { key: TabKey; icon: string; label: string }[] = [
-  { key: 'overview',  icon: '📊', label: '概要' },
-  { key: 'sessions',  icon: '📺', label: '配信' },
-  { key: 'broadcast', icon: '📡', label: '配信分析' },
-  { key: 'dm',        icon: '💬', label: 'DM' },
-  { key: 'analytics', icon: '📈', label: '分析' },
-  { key: 'sales',     icon: '💰', label: '売上' },
-  { key: 'realtime',  icon: '👁', label: 'リアルタイム' },
-  // M-6: データ0件のため非表示。SPY基盤安定後に再表示
-  // { key: 'screenshots', icon: '📸', label: 'スクリーンショット' },
-  { key: 'persona',     icon: '🎭', label: 'ペルソナ' },
-  { key: 'overlap',     icon: '🔄', label: '競合分析' },
-  { key: 'health',      icon: '🩺', label: '健全性' },
-  { key: 'settings',    icon: '⚙', label: '設定' },
+  { key: 'overview',   icon: '📊', label: '概要' },
+  { key: 'sessions',   icon: '📺', label: 'セッション' },
+  { key: 'dm',         icon: '💬', label: 'DM' },
+  { key: 'analytics',  icon: '📈', label: 'アナリティクス' },
+  { key: 'settings',   icon: '⚙', label: '設定' },
 ];
 
 /* ============================================================
@@ -578,7 +570,7 @@ function CastDetailInner() {
   // Realtime
   const { messages: realtimeMessages, isConnected } = useRealtimeSpy({
     castName,
-    enabled: !!user && activeTab === 'realtime',
+    enabled: !!user && activeTab === 'sessions',
   });
 
   // Alert matching: check new realtime messages against rules
@@ -681,7 +673,7 @@ function CastDetailInner() {
 
   // Cost settings: load from cast_cost_settings
   useEffect(() => {
-    if (!accountId || activeTab !== 'settings' || costLoaded) return;
+    if (!accountId || (activeTab !== 'settings' && activeTab !== 'analytics') || costLoaded) return;
     sb.from('cast_cost_settings')
       .select('*')
       .eq('account_id', accountId)
@@ -701,9 +693,9 @@ function CastDetailInner() {
       });
   }, [accountId, castName, activeTab, costLoaded, sb]);
 
-  // Session P/L: load when sales tab active
+  // Session P/L: load when analytics tab active
   useEffect(() => {
-    if (!accountId || activeTab !== 'sales') return;
+    if (!accountId || activeTab !== 'analytics') return;
     setSessionPLLoading(true);
     sb.rpc('get_session_pl', { p_account_id: accountId, p_cast_name: castName, p_days: 90 })
       .then(({ data, error }) => {
@@ -712,9 +704,9 @@ function CastDetailInner() {
       });
   }, [accountId, castName, activeTab, sb]);
 
-  // Monthly P/L: load when sales tab active
+  // Monthly P/L: load when analytics tab active
   useEffect(() => {
-    if (!accountId || activeTab !== 'sales') return;
+    if (!accountId || activeTab !== 'analytics') return;
     setMonthlyPLLoading(true);
     sb.rpc('get_monthly_pl', { p_account_id: accountId, p_cast_name: castName, p_months: 6 })
       .then(({ data, error }) => {
@@ -723,9 +715,9 @@ function CastDetailInner() {
       });
   }, [accountId, castName, activeTab, sb]);
 
-  // Revenue Share: load when sales tab active (past 90 days)
+  // Revenue Share: load when analytics tab active (past 90 days)
   useEffect(() => {
-    if (!accountId || activeTab !== 'sales') return;
+    if (!accountId || activeTab !== 'analytics') return;
     setRevenueShareLoading(true);
     const now = new Date();
     const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
@@ -801,7 +793,7 @@ function CastDetailInner() {
   // Realtime: paid_users color cache
   // ============================================================
   useEffect(() => {
-    if (activeTab !== 'realtime' || !accountId) return;
+    if (activeTab !== 'sessions' || !accountId) return;
     sb.from('paid_users')
       .select('user_name, total_coins')
       .eq('account_id', accountId)
@@ -1539,7 +1531,7 @@ function CastDetailInner() {
   // Sales: coin_transactions (cast_name絞り込み) + paid_users
   // ============================================================
   useEffect(() => {
-    if (!accountId || activeTab !== 'sales') return;
+    if (!accountId || activeTab !== 'analytics') return;
     setSalesLoading(true);
     const thisMonday = getWeekStart(0);
     const lastMonday = getWeekStart(1);
@@ -1612,7 +1604,7 @@ function CastDetailInner() {
   // Sales: DM Campaign CVR
   // ============================================================
   useEffect(() => {
-    if (!accountId || activeTab !== 'sales') return;
+    if (!accountId || activeTab !== 'analytics') return;
     sb.rpc('get_dm_campaign_cvr', {
       p_account_id: accountId,
       p_cast_name: castName,
@@ -1626,7 +1618,7 @@ function CastDetailInner() {
   // Broadcast analysis: セッション一覧取得
   // ============================================================
   useEffect(() => {
-    if (!accountId || activeTab !== 'broadcast') return;
+    if (!accountId || activeTab !== 'sessions') return;
     setBroadcastLoading(true);
     sb.rpc('get_session_list', {
       p_account_id: accountId,
@@ -1655,7 +1647,7 @@ function CastDetailInner() {
 
   // Broadcast analysis: 選択セッションの詳細取得
   useEffect(() => {
-    if (!accountId || !broadcastSelectedDate || activeTab !== 'broadcast') return;
+    if (!accountId || !broadcastSelectedDate || activeTab !== 'sessions') return;
     setBroadcastDetailLoading(true);
     setBroadcastBreakdown(null);
     setBroadcastNewUsers([]);
@@ -1716,7 +1708,7 @@ function CastDetailInner() {
   // Persona
   // ============================================================
   useEffect(() => {
-    if (!accountId || activeTab !== 'persona') return;
+    if (!accountId || activeTab !== 'dm') return;
     setPersonaLoading(true);
     (async () => {
       try {
@@ -1756,7 +1748,7 @@ function CastDetailInner() {
 
   // ─── Overlap (競合分析) データロード ───
   useEffect(() => {
-    if (!accountId || activeTab !== 'overlap') return;
+    if (!accountId || activeTab !== 'analytics') return;
     setOverlapLoading(true);
     (async () => {
       try {
@@ -1801,7 +1793,7 @@ function CastDetailInner() {
 
   // ─── Health (健全性) データロード ───
   useEffect(() => {
-    if (!accountId || activeTab !== 'health') return;
+    if (!accountId || activeTab !== 'settings') return;
     setCastHealthLoading(true);
     (async () => {
       try {
@@ -2023,7 +2015,7 @@ function CastDetailInner() {
         </div>
       )}
 
-      {loading && activeTab !== 'realtime' ? (
+      {loading && activeTab !== 'sessions' ? (
         <div className="space-y-3">
           <div className="h-8 rounded-lg animate-pulse" style={{ background: 'var(--bg-card)' }} />
           <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
@@ -2273,7 +2265,7 @@ function CastDetailInner() {
           )}
 
           {/* ============ BROADCAST ANALYSIS ============ */}
-          {activeTab === 'broadcast' && (
+          {activeTab === 'sessions' && (
             <div className="space-y-4">
               {broadcastLoading ? (
                 <div className="space-y-3">
@@ -4575,8 +4567,8 @@ function CastDetailInner() {
             </div>
           )}
 
-          {/* ============ SALES ============ */}
-          {activeTab === 'sales' && (
+          {/* ============ SALES (analytics内に統合) ============ */}
+          {activeTab === 'analytics' && (
             <div className="space-y-4">
               {salesLoading ? (
                 <div className="space-y-3">
@@ -5153,7 +5145,7 @@ function CastDetailInner() {
           )}
 
           {/* ============ REALTIME ============ */}
-          {activeTab === 'realtime' && (
+          {activeTab === 'sessions' && (
             <div className="space-y-4">
               {/* Pop alerts (slide-in) */}
               {popAlerts.length > 0 && (
@@ -5269,7 +5261,7 @@ function CastDetailInner() {
           {/* ============ SCREENSHOTS — M-6: データ0件のため非表示。SPY基盤安定後に復元 ============ */}
 
           {/* ============ PERSONA ============ */}
-          {activeTab === 'persona' && (
+          {activeTab === 'dm' && (
             <div className="space-y-4">
               {personaLoading ? (
                 <div className="space-y-3">
@@ -5532,7 +5524,7 @@ function CastDetailInner() {
           )}
 
           {/* ============ OVERLAP (競合分析) ============ */}
-          {activeTab === 'overlap' && (
+          {activeTab === 'analytics' && (
             <div className="space-y-4">
               {overlapLoading ? (
                 <div className="space-y-3">
@@ -5723,7 +5715,7 @@ function CastDetailInner() {
           )}
 
           {/* ============ HEALTH (健全性) ============ */}
-          {activeTab === 'health' && (
+          {activeTab === 'settings' && (
             <div className="space-y-4">
               {castHealthLoading ? (
                 <div className="flex items-center justify-center py-20">
