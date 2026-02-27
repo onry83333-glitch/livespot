@@ -16,7 +16,7 @@ import {
   StripchatWsClient,
   WsMessage,
 } from './ws-client.js';
-import { upsertViewers, updateCastOnlineStatus, enqueue } from './storage/supabase.js';
+import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession } from './storage/supabase.js';
 import { accumulateViewer } from './storage/spy-profiles.js';
 import { parseCentrifugoChat } from './parsers/chat.js';
 import { RetryTracker, sleep } from './utils/reconnect.js';
@@ -48,10 +48,17 @@ let currentAuthToken = '';
 let currentCfClearance = '';
 let triggerEngineRef: TriggerEngine | null = null;
 
-/** cast_name + 配信開始時刻 → 決定的session_id */
+/** cast_name + 配信開始時刻 → 決定的session_id (UUID形式) */
 function generateSessionId(castName: string, startTime: string): string {
-  const hash = createHash('sha256').update(`${castName}:${startTime}`).digest('hex');
-  return hash.substring(0, 16);
+  const hex = createHash('sha256').update(`${castName}:${startTime}`).digest('hex');
+  // Format as UUID v5-style: xxxxxxxx-xxxx-5xxx-yxxx-xxxxxxxxxxxx
+  return [
+    hex.substring(0, 8),
+    hex.substring(8, 12),
+    '5' + hex.substring(13, 16),
+    ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16) + hex.substring(17, 20),
+    hex.substring(20, 32),
+  ].join('-');
 }
 
 /** Fetch auth token (cached) and store for WS connections */
@@ -219,7 +226,7 @@ async function pollStatus(state: CastState): Promise<void> {
   if (now - state.lastStatusPoll < POLL_INTERVALS.statusSec * 1000) return;
   state.lastStatusPoll = now;
 
-  const result = await pollCastStatus(target.castName);
+  const result = await pollCastStatus(target.castName, currentCfClearance);
 
   if (result.status === 'unknown') {
     retryTracker.recordFailure(`status:${target.castName}`);
@@ -248,7 +255,11 @@ async function pollStatus(state: CastState): Promise<void> {
     state.wsMessageCount = 0;
     state.wsTipTotal = 0;
 
-    log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId})`);
+    log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId}, source=${target.source})`);
+
+    // sessions テーブルにレコード作成（自社・他社共通）
+    openSession(target.accountId, target.castName, state.sessionId, startTime)
+      .catch((err) => log.error(`Session open error [${target.source}]: ${err}`));
 
     enqueue('spy_messages', {
       account_id: target.accountId,
@@ -303,6 +314,12 @@ async function pollStatus(state: CastState): Promise<void> {
       metadata: { source: 'collector', lastViewerCount: state.viewerCount },
     });
 
+    // sessions テーブルにセッション終了を記録
+    if (state.sessionId) {
+      closeSession(state.sessionId, state.wsMessageCount, state.wsTipTotal, state.viewerCount)
+        .catch((err) => log.error(`Session close error: ${err}`));
+    }
+
     // Trigger: session end
     if (triggerEngineRef) {
       triggerEngineRef.onSessionTransition(target.accountId, target.castName, 'end', {
@@ -324,7 +341,12 @@ async function pollStatus(state: CastState): Promise<void> {
     const startTime = new Date().toISOString();
     state.sessionStartTime = startTime;
     state.sessionId = generateSessionId(target.castName, startTime);
-    log.info(`${target.castName}: already online (${result.status}), connecting WS (session=${state.sessionId})`);
+    log.info(`${target.castName}: already online (${result.status}), connecting WS (session=${state.sessionId}, source=${target.source})`);
+
+    // sessions テーブルにレコード作成（起動時に既にオンラインのキャスト、自社・他社共通）
+    openSession(target.accountId, target.castName, state.sessionId, startTime)
+      .catch((err) => log.error(`Session open error (first poll) [${target.source}]: ${err}`));
+
     state.wsClient = new StripchatWsClient(
       target.castName,
       state.modelId,
@@ -351,7 +373,7 @@ async function pollViewerList(state: CastState): Promise<void> {
   if (now - state.lastViewerPoll < POLL_INTERVALS.viewerSec * 1000) return;
   state.lastViewerPoll = now;
 
-  const result = await pollViewers(target.castName);
+  const result = await pollViewers(target.castName, currentAuthToken, currentCfClearance);
 
   if (result.viewers.length === 0) {
     if (retryTracker.getFailureCount(`viewers:${target.castName}`) === 0) {

@@ -91,6 +91,13 @@ export async function loadTargets(): Promise<CastTarget[]> {
       .eq('is_active', true),
   ]);
 
+  if (regResult.error) {
+    log.error('registered_casts取得失敗', regResult.error);
+  }
+  if (spyResult.error) {
+    log.error('spy_casts取得失敗（他社キャスト監視が無効）', spyResult.error);
+  }
+
   const targets: CastTarget[] = [];
 
   for (const r of regResult.data || []) {
@@ -117,6 +124,11 @@ export async function loadTargets(): Promise<CastTarget[]> {
     });
   }
 
-  log.info(`Loaded ${targets.length} targets (${regResult.data?.length || 0} registered + ${spyResult.data?.length || 0} spy)`);
+  const regCount = regResult.data?.length || 0;
+  const spyCount = spyResult.data?.length || 0;
+  log.info(`Loaded ${targets.length} targets (自社=${regCount}, 他社SPY=${spyCount})`);
+  if (spyCount === 0) {
+    log.warn('他社キャスト(SPY)が0件 — spy_castsテーブルにis_active=trueのレコードがあるか確認');
+  }
   return targets;
 }

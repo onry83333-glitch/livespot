@@ -99,8 +99,12 @@ async def preflight_check() -> bool:
         else:
             own = [c["cast_name"] for c in casts if not c.get("is_spy")]
             spy = [c["cast_name"] for c in casts if c.get("is_spy")]
-            logger.info(f"自社キャスト: {own}")
-            logger.info(f"他者キャスト(SPY): {spy}")
+            logger.info(f"自社キャスト({len(own)}): {own}")
+            logger.info(f"他者キャスト({len(spy)}): {spy}")
+            if not spy:
+                logger.warning(
+                    "他者キャスト(SPY)が0件 — spy_castsテーブルにis_active=trueのレコードがあるか確認してください"
+                )
     except Exception as e:
         errors.append(f"キャストリスト取得失敗: {e}")
 

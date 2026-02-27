@@ -182,7 +182,11 @@ def get_all_monitored_casts() -> list[dict]:
     for c in own:
         c.setdefault("is_spy", False)
 
-    spy = get_spy_casts()
+    try:
+        spy = get_spy_casts()
+    except Exception as e:
+        logger.error(f"spy_casts取得失敗（他社キャスト監視が無効）: {e}")
+        spy = []
 
     # 自社キャスト名をセットにして重複排除
     own_names = {c["cast_name"] for c in own}
@@ -190,4 +194,8 @@ def get_all_monitored_casts() -> list[dict]:
         if c["cast_name"] not in own_names:
             own.append(c)
 
+    logger.info(
+        f"全監視対象: {len(own)}名 "
+        f"(自社={len(own_names)}, 他社SPY={len(spy)})"
+    )
     return own
