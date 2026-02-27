@@ -17,6 +17,31 @@ interface HealthCheck {
   details: string[];
 }
 
+interface SyncHealthRow {
+  cast_name: string;
+  sync_type: string;
+  last_sync_at: string | null;
+  status: string;
+  error_count: number;
+  last_error: string | null;
+  minutes_since_sync: number | null;
+  auto_status: string;
+}
+
+const SYNC_TYPE_LABELS: Record<string, string> = {
+  spy_chat: 'SPYチャット',
+  spy_viewer: 'SPY視聴者',
+  coin_sync: 'コイン同期',
+  screenshot: 'スクリーンショット',
+};
+
+const SYNC_TYPE_ICONS: Record<string, string> = {
+  spy_chat: '💬',
+  spy_viewer: '👁',
+  coin_sync: '💰',
+  screenshot: '📸',
+};
+
 /* ============================================================
    Page
    ============================================================ */
@@ -28,6 +53,8 @@ export default function HealthPage() {
   const [checks, setChecks] = useState<HealthCheck[]>([]);
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<Date | null>(null);
+  const [syncHealth, setSyncHealth] = useState<SyncHealthRow[]>([]);
+  const [syncHealthLoading, setSyncHealthLoading] = useState(false);
 
   const runChecks = useCallback(async () => {
     if (!user) return;
@@ -288,8 +315,30 @@ export default function HealthPage() {
     setRunning(false);
   }, [user, sb]);
 
+  // 同期ヘルスを取得
+  const fetchSyncHealth = useCallback(async () => {
+    if (!user) return;
+    setSyncHealthLoading(true);
+    try {
+      // account_id を取得
+      const { data: accounts } = await sb
+        .from('accounts')
+        .select('id')
+        .limit(1);
+      const accountId = accounts?.[0]?.id;
+      if (!accountId) { setSyncHealthLoading(false); return; }
+
+      const { data, error } = await sb.rpc('get_sync_health', { p_account_id: accountId });
+      if (error) throw error;
+      setSyncHealth((data as SyncHealthRow[]) || []);
+    } catch {
+      setSyncHealth([]);
+    }
+    setSyncHealthLoading(false);
+  }, [user, sb]);
+
   // 初回実行
-  useEffect(() => { runChecks(); }, [runChecks]);
+  useEffect(() => { runChecks(); fetchSyncHealth(); }, [runChecks, fetchSyncHealth]);
 
   if (!user) return null;
 
@@ -331,7 +380,7 @@ export default function HealthPage() {
           </Link>
         </div>
         <button
-          onClick={runChecks}
+          onClick={() => { runChecks(); fetchSyncHealth(); }}
           disabled={running}
           className="btn-primary px-4 py-2 text-sm flex items-center gap-2 disabled:opacity-50"
         >
@@ -404,6 +453,126 @@ export default function HealthPage() {
           ))}
         </div>
       )}
+
+      {/* Sync Health Section */}
+      <div>
+        <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
+          🔄 Collector 同期ヘルス
+        </h2>
+        {syncHealthLoading ? (
+          <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+        ) : syncHealth.length === 0 ? (
+          <div className="glass-card p-5">
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              同期ヘルスデータなし（Collectorが sync_health に書き込みを開始すると表示されます）
+            </p>
+          </div>
+        ) : (
+          <SyncHealthTable rows={syncHealth} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   Sync Health Table
+   ============================================================ */
+function SyncHealthTable({ rows }: { rows: SyncHealthRow[] }) {
+  // キャスト名でグルーピング
+  const castMap = new Map<string, SyncHealthRow[]>();
+  for (const row of rows) {
+    const existing = castMap.get(row.cast_name);
+    if (existing) existing.push(row);
+    else castMap.set(row.cast_name, [row]);
+  }
+
+  const formatMinutes = (m: number | null) => {
+    if (m === null) return '不明';
+    if (m < 60) return `${Math.round(m)}分前`;
+    if (m < 1440) return `${Math.round(m / 60)}時間前`;
+    return `${Math.round(m / 1440)}日前`;
+  };
+
+  const statusDot = (autoStatus: string) => {
+    switch (autoStatus) {
+      case 'ok':
+        return <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />;
+      case 'warn':
+        return <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />;
+      case 'error':
+        return <span className="inline-block w-2 h-2 rounded-full bg-rose-400" />;
+      default:
+        return <span className="inline-block w-2 h-2 rounded-full bg-slate-500" />;
+    }
+  };
+
+  const statusLabel = (autoStatus: string) => {
+    switch (autoStatus) {
+      case 'ok': return '正常';
+      case 'warn': return '2h超';
+      case 'error': return '異常';
+      default: return '不明';
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {Array.from(castMap.entries()).map(([castName, typeRows]) => {
+        const worstStatus = typeRows.some(r => r.auto_status === 'error')
+          ? 'error'
+          : typeRows.some(r => r.auto_status === 'warn')
+            ? 'warn'
+            : typeRows.some(r => r.auto_status === 'unknown')
+              ? 'unknown'
+              : 'ok';
+
+        return (
+          <div key={castName} className="glass-card p-4">
+            <div className="flex items-center gap-2 mb-3">
+              {statusDot(worstStatus)}
+              <h3 className="text-sm font-bold">{castName}</h3>
+              <span className="text-[10px] px-2 py-0.5 rounded-full" style={{
+                background: worstStatus === 'ok' ? 'rgba(34,197,94,0.15)' :
+                  worstStatus === 'warn' ? 'rgba(245,158,11,0.15)' :
+                  worstStatus === 'error' ? 'rgba(244,63,94,0.15)' : 'rgba(100,116,139,0.15)',
+                color: worstStatus === 'ok' ? '#22c55e' :
+                  worstStatus === 'warn' ? '#f59e0b' :
+                  worstStatus === 'error' ? '#f43f5e' : '#94a3b8',
+              }}>
+                {statusLabel(worstStatus)}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {typeRows.map(row => (
+                <div key={row.sync_type} className="glass-panel rounded-lg p-3">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    {statusDot(row.auto_status)}
+                    <span className="text-[11px] font-medium">
+                      {SYNC_TYPE_ICONS[row.sync_type] || '📡'} {SYNC_TYPE_LABELS[row.sync_type] || row.sync_type}
+                    </span>
+                  </div>
+                  <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                    {row.last_sync_at
+                      ? formatMinutes(row.minutes_since_sync)
+                      : '未同期'}
+                  </p>
+                  {row.error_count > 0 && (
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--accent-pink)' }}>
+                      エラー {row.error_count}回
+                    </p>
+                  )}
+                  {row.last_error && (
+                    <p className="text-[10px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }} title={row.last_error}>
+                      {row.last_error}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
