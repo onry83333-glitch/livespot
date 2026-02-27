@@ -42,6 +42,7 @@ interface CastWithStats extends RegisteredCast {
   last_week_coins: number;
   last_activity: string | null;
   tip_count: number;
+  today_coins: number;
 }
 
 export default function CastsPage() {
@@ -64,6 +65,10 @@ export default function CastsPage() {
 
   // Live status
   const [liveCastSet, setLiveCastSet] = useState<Set<string>>(new Set());
+
+  // Dashboard KPIs
+  const [dashKpi, setDashKpi] = useState({ revenue30d: 0, alertsToday: 0, dmSent7d: 0 });
+  const [todayCoinsByCast, setTodayCoinsByCast] = useState<Record<string, number>>({});
 
   // 編集モード
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -115,27 +120,41 @@ export default function CastsPage() {
 
         const castNames = casts.map(c => c.cast_name);
 
-        // SPYデータ（メッセージ数、チップ数、最終活動）
-        const { data: stats } = await supabase.rpc('get_cast_stats', {
-          p_account_id: selectedAccount,
-          p_cast_names: castNames,
-        });
-        setCastStats((stats || []) as CastStats[]);
+        const now = new Date();
+        const thisWeekStart = getWeekStartJST(0);
+        const lastWeekStart = getWeekStartJST(1);
+        const since30d = new Date(now.getTime() - 30 * 86400000).toISOString();
+        const since7d = new Date(now.getTime() - 7 * 86400000).toISOString();
+        // JST今日0時をUTCに変換
+        const jstNow = new Date(now.getTime() + 9 * 3600000);
+        const todayStartUTC = new Date(
+          Date.UTC(jstNow.getUTCFullYear(), jstNow.getUTCMonth(), jstNow.getUTCDate()) - 9 * 3600000
+        );
 
-        // coin_transactionsから今週・前週のコイン集計（JST暦週: 月曜03:00 JST区切り）
-        const thisWeekStart = getWeekStartJST(0); // 今週月曜 03:00 JST
-        const lastWeekStart = getWeekStartJST(1); // 前週月曜 03:00 JST
+        // 全クエリを並列実行
+        const [statsRes, coinRes, spyLiveRes, rev30dRes, alertsRes, dmRes] = await Promise.all([
+          supabase.rpc('get_cast_stats', { p_account_id: selectedAccount, p_cast_names: castNames }),
+          supabase.from('coin_transactions').select('cast_name, tokens, date')
+            .eq('account_id', selectedAccount).in('cast_name', castNames)
+            .gte('date', lastWeekStart.toISOString()).limit(10000),
+          supabase.from('spy_messages').select('cast_name, created_at')
+            .eq('account_id', selectedAccount).order('created_at', { ascending: false }).limit(200),
+          // Dashboard KPIs
+          supabase.from('coin_transactions').select('tokens')
+            .eq('account_id', selectedAccount).gte('date', since30d).limit(50000),
+          supabase.from('spy_messages').select('id', { count: 'exact', head: true })
+            .eq('account_id', selectedAccount).eq('is_vip', true)
+            .gte('message_time', todayStartUTC.toISOString()),
+          supabase.from('dm_send_log').select('id', { count: 'exact', head: true })
+            .eq('account_id', selectedAccount).gte('queued_at', since7d),
+        ]);
 
-        const { data: coinRows } = await supabase
-          .from('coin_transactions')
-          .select('cast_name, tokens, date')
-          .eq('account_id', selectedAccount)
-          .in('cast_name', castNames)
-          .gte('date', lastWeekStart.toISOString())
-          .limit(10000);
+        setCastStats((statsRes.data || []) as CastStats[]);
 
+        // 週別コイン集計 + 今日のコイン
         const weeklyMap = new Map<string, { this_week: number; last_week: number }>();
-        (coinRows || []).forEach((row: { cast_name: string; tokens: number; date: string }) => {
+        const todayMap: Record<string, number> = {};
+        (coinRes.data || []).forEach((row: { cast_name: string; tokens: number; date: string }) => {
           const prev = weeklyMap.get(row.cast_name) || { this_week: 0, last_week: 0 };
           const rowDate = new Date(row.date);
           if (rowDate >= thisWeekStart) {
@@ -144,28 +163,26 @@ export default function CastsPage() {
             prev.last_week += row.tokens || 0;
           }
           weeklyMap.set(row.cast_name, prev);
+          if (rowDate >= todayStartUTC) {
+            todayMap[row.cast_name] = (todayMap[row.cast_name] || 0) + (row.tokens || 0);
+          }
         });
-        const weeklyArr: WeeklyCoinStats[] = Array.from(weeklyMap.entries()).map(([cast_name, v]) => ({
-          cast_name, ...v,
-        }));
-        setWeeklyStats(weeklyArr);
+        setWeeklyStats(Array.from(weeklyMap.entries()).map(([cast_name, v]) => ({ cast_name, ...v })));
+        setTodayCoinsByCast(todayMap);
 
-        // Live status: check spy_messages recency per cast
-        const { data: spyRows } = await supabase
-          .from('spy_messages')
-          .select('cast_name, created_at')
-          .eq('account_id', selectedAccount)
-          .order('created_at', { ascending: false })
-          .limit(200);
-
+        // Live status
         const liveSet = new Set<string>();
-        (spyRows || []).forEach((m: { cast_name: string; created_at: string }) => {
+        (spyLiveRes.data || []).forEach((m: { cast_name: string; created_at: string }) => {
           if (m.cast_name) {
             const minutesAgo = (Date.now() - new Date(m.created_at).getTime()) / 60000;
             if (minutesAgo < 10) liveSet.add(m.cast_name);
           }
         });
         setLiveCastSet(liveSet);
+
+        // Dashboard KPIs
+        const rev30d = (rev30dRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
+        setDashKpi({ revenue30d: rev30d, alertsToday: alertsRes.count ?? 0, dmSent7d: dmRes.count ?? 0 });
 
         setLoading(false);
       });
@@ -183,9 +200,10 @@ export default function CastsPage() {
         last_week_coins: weekly?.last_week || 0,
         last_activity: spy?.last_activity || null,
         tip_count: spy?.total_tips || 0,
+        today_coins: todayCoinsByCast[cast.cast_name] || 0,
       };
     });
-  }, [registeredCasts, castStats, weeklyStats]);
+  }, [registeredCasts, castStats, weeklyStats, todayCoinsByCast]);
 
   // 全体統計
   const totals = useMemo(() => ({
@@ -329,24 +347,22 @@ export default function CastsPage() {
         </div>
       )}
 
-      {/* Summary Cards */}
+      {/* Summary Cards — アカウント全体サマリー */}
       {(() => {
         const weekDiff = totals.lastWeekCoins > 0
           ? ((totals.thisWeekCoins - totals.lastWeekCoins) / totals.lastWeekCoins * 100)
           : totals.thisWeekCoins > 0 ? 100 : 0;
         return (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>{totals.casts}<span className="text-sm font-medium ml-0.5">名</span></p>
-              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>登録キャスト数</p>
-            </div>
-            <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(totals.thisWeekCoins)}<span className="text-sm font-medium ml-0.5">tk</span></p>
-              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週のコイン</p>
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(dashKpi.revenue30d, coinRate)}</p>
+              <p className="text-[9px] mt-0.5 tabular-nums" style={{ color: 'var(--text-muted)' }}>{dashKpi.revenue30d.toLocaleString()} tk</p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>30日売上</p>
             </div>
             <div className="glass-card p-4 text-center">
               <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(totals.thisWeekCoins, coinRate)}</p>
-              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週の推定売上</p>
+              <p className="text-[9px] mt-0.5 tabular-nums" style={{ color: 'var(--text-muted)' }}>{totals.thisWeekCoins.toLocaleString()} tk</p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
             </div>
             <div className="glass-card p-4 text-center">
               <p className="text-2xl font-bold" style={{
@@ -356,9 +372,51 @@ export default function CastsPage() {
               </p>
               <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比</p>
             </div>
+            <div className="glass-card p-4 text-center">
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-primary)' }}>{totals.casts}<span className="text-sm font-medium ml-0.5">名</span></p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>登録キャスト</p>
+            </div>
+            <div className="glass-card p-4 text-center">
+              <p className="text-2xl font-bold" style={{ color: liveCastSet.size > 0 ? 'var(--accent-pink)' : 'var(--text-secondary)' }}>
+                {liveCastSet.size}<span className="text-sm font-medium ml-0.5">名</span>
+              </p>
+              {liveCastSet.size > 0 && (
+                <div className="flex items-center justify-center gap-1 mt-0.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 anim-live" />
+                  <span className="text-[9px]" style={{ color: 'var(--accent-pink)' }}>LIVE</span>
+                </div>
+              )}
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>配信中</p>
+            </div>
+            <div className="glass-card p-4 text-center">
+              <p className="text-2xl font-bold" style={{ color: dashKpi.alertsToday > 0 ? 'var(--accent-purple)' : 'var(--text-secondary)' }}>
+                {dashKpi.alertsToday}<span className="text-sm font-medium ml-0.5">件</span>
+              </p>
+              <p className="text-[9px] mt-0.5 tabular-nums" style={{ color: 'var(--text-muted)' }}>DM {dashKpi.dmSent7d}件/7日</p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>VIPアラート(今日)</p>
+            </div>
           </div>
         );
       })()}
+
+      {/* 配信中キャスト — ライブバー */}
+      {liveCastSet.size > 0 && (
+        <div className="glass-card p-3 flex items-center gap-3 anim-fade">
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="w-2 h-2 rounded-full bg-rose-500 anim-live" />
+            <span className="text-xs font-bold">配信中 ({liveCastSet.size})</span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {Array.from(liveCastSet).map(name => (
+              <Link key={name} href={`/casts/${encodeURIComponent(name)}?tab=realtime`}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-medium hover:bg-white/[0.05] transition-all"
+                style={{ background: 'rgba(244,63,94,0.1)', color: 'var(--accent-pink)', border: '1px solid rgba(244,63,94,0.2)' }}>
+                {name}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Cast List */}
       <div className="glass-card overflow-hidden">
@@ -378,6 +436,7 @@ export default function CastsPage() {
                 style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border-glass)' }}>
                 <th className="text-left px-5 py-3 font-semibold">キャスト</th>
                 <th className="text-left px-3 py-3 font-semibold">タグ</th>
+                <th className="text-right px-4 py-3 font-semibold">今日</th>
                 <th className="text-right px-4 py-3 font-semibold">今週コイン</th>
                 <th className="text-right px-4 py-3 font-semibold">今週売上</th>
                 <th className="text-right px-4 py-3 font-semibold">前週コイン</th>
@@ -463,6 +522,9 @@ export default function CastsPage() {
                           {!cast.genre && !cast.benchmark && !cast.category && <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>-</span>}
                         </div>
                       )}
+                    </td>
+                    <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{ color: cast.today_coins > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
+                      {cast.today_coins > 0 ? tokensToJPY(cast.today_coins, coinRate) : '--'}
                     </td>
                     <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
                       {formatTokens(cast.this_week_coins)}
