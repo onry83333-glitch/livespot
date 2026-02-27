@@ -223,6 +223,9 @@ async function evaluateSpyCastDecline(accountId: string): Promise<void> {
 
     const recentCount = recentViewers?.length ?? 0;
 
+    // SPY停止中 or キャストオフライン → 0人は「減少」ではなく「データなし」なのでスキップ
+    if (recentCount === 0) continue;
+
     // 過去7日の平均（日別ユニーク数の平均）
     const { data: weekViewers } = await sb
       .from('spy_viewers')
