@@ -140,6 +140,77 @@ export async function upsertViewers(
   return upserted;
 }
 
+// ----- Session lifecycle -----
+
+export async function openSession(
+  accountId: string,
+  castName: string,
+  sessionId: string,
+  startedAt: string,
+): Promise<void> {
+  const sb = getSupabase();
+  const { error } = await sb.from('sessions').insert({
+    session_id: sessionId,
+    account_id: accountId,
+    title: castName,
+    cast_name: castName,
+    started_at: startedAt,
+  });
+  if (error) {
+    // 重複の場合は無視（deterministic session_id で再起動時に発生しうる）
+    if (error.code === '23505') {
+      log.debug(`Session already exists: ${sessionId}`);
+    } else {
+      log.error(`Failed to open session ${sessionId}`, error);
+    }
+  } else {
+    log.info(`Session opened: ${castName} (${sessionId})`);
+  }
+}
+
+export async function closeSession(
+  sessionId: string,
+  messageCount: number,
+  tipTotal: number,
+  peakViewers: number,
+): Promise<void> {
+  if (!sessionId) return;
+  const sb = getSupabase();
+  const endedAt = new Date().toISOString();
+
+  // 全カラムUPDATEを試行
+  const { error } = await sb
+    .from('sessions')
+    .update({
+      ended_at: endedAt,
+      total_messages: messageCount,
+      total_tokens: tipTotal,
+      peak_viewers: peakViewers,
+    })
+    .eq('session_id', sessionId);
+
+  if (error) {
+    // PostgRESTスキーマキャッシュ問題の場合、ended_atだけでも記録する
+    if (error.message?.includes('schema cache')) {
+      log.warn(`Session ${sessionId}: schema cache error — fallback to ended_at only`);
+      const { error: fallbackErr } = await sb
+        .from('sessions')
+        .update({ ended_at: endedAt })
+        .eq('session_id', sessionId);
+
+      if (fallbackErr) {
+        log.error(`Session ${sessionId}: fallback update also failed`, fallbackErr);
+      } else {
+        log.info(`Session closed (partial): ${sessionId} (ended_at set, stats skipped — apply migration 086)`);
+      }
+    } else {
+      log.error(`Failed to close session ${sessionId}`, error);
+    }
+  } else {
+    log.info(`Session closed: ${sessionId} (${messageCount} msgs, ${tipTotal}tk, peak=${peakViewers})`);
+  }
+}
+
 export async function updateCastOnlineStatus(
   table: 'registered_casts' | 'spy_casts',
   accountId: string,
