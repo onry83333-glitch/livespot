@@ -11,8 +11,8 @@
  */
 
 import { loadTargets, getSupabase, POLL_INTERVALS, BATCH_CONFIG } from './config.js';
-import { registerTarget, startCollector, stopCollector, getRegisteredCount, getStatus } from './collector.js';
-import { startBatchFlush, stopBatchFlush } from './storage/supabase.js';
+import { registerTarget, startCollector, stopCollector, closeAllActiveSessions, getRegisteredCount, getStatus } from './collector.js';
+import { startBatchFlush, stopBatchFlush, closeOrphanSessions } from './storage/supabase.js';
 import { flushProfiles, getProfileCount } from './storage/spy-profiles.js';
 import { createLogger, setLogLevel } from './utils/logger.js';
 import { getAuth } from './auth/index.js';
@@ -72,6 +72,16 @@ async function main(): Promise<void> {
   }
 
   log.info(`Registered ${getRegisteredCount()} targets`);
+
+  // 2.5. Close orphan sessions from previous runs
+  try {
+    const closed = await closeOrphanSessions(6);
+    if (closed > 0) {
+      log.info(`Closed ${closed} orphan session(s) from previous runs`);
+    }
+  } catch (err) {
+    log.warn('Orphan session cleanup failed (RPC may not exist yet)', err);
+  }
 
   // 3. Start batch flush timer
   startBatchFlush();
@@ -240,9 +250,18 @@ async function main(): Promise<void> {
 }
 
 // ----- Graceful shutdown -----
-function shutdown(signal: string): void {
+async function shutdown(signal: string): Promise<void> {
   log.info(`${signal} received — shutting down...`);
   stopCollector();
+
+  // Close all active sessions in DB before exiting
+  try {
+    const closed = await closeAllActiveSessions();
+    log.info(`Shutdown: closed ${closed} active session(s)`);
+  } catch (err) {
+    log.error('Shutdown: failed to close active sessions', err);
+  }
+
   stopBatchFlush();
   log.info('Collector stopped. Goodbye.');
   process.exit(0);

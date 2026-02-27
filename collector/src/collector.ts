@@ -16,7 +16,7 @@ import {
   StripchatWsClient,
   WsMessage,
 } from './ws-client.js';
-import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession } from './storage/supabase.js';
+import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast } from './storage/supabase.js';
 import { accumulateViewer } from './storage/spy-profiles.js';
 import { parseCentrifugoChat } from './parsers/chat.js';
 import { RetryTracker, sleep } from './utils/reconnect.js';
@@ -342,6 +342,16 @@ async function pollStatus(state: CastState): Promise<void> {
 
   // ------ First poll: if already online, connect WS ------
   if (isOnline && prevStatus === 'unknown' && state.modelId && !state.wsClient) {
+    // 起動時: 前回の未閉鎖セッションをクローズしてから新セッション作成
+    try {
+      const closed = await closeStaleSessionsForCast(target.accountId, target.castName);
+      if (closed > 0) {
+        log.info(`${target.castName}: closed ${closed} stale session(s) on startup`);
+      }
+    } catch (err) {
+      log.warn(`${target.castName}: failed to close stale sessions`, err);
+    }
+
     const startTime = new Date().toISOString();
     state.sessionStartTime = startTime;
     state.sessionId = generateSessionId(target.castName, startTime);
@@ -465,4 +475,21 @@ export async function startCollector(triggerEngine?: TriggerEngine): Promise<voi
 export function stopCollector(): void {
   mainLoopRunning = false;
   log.info('Collector stop requested');
+}
+
+/** Graceful shutdown: 全アクティブセッションをDBでクローズ */
+export async function closeAllActiveSessions(): Promise<number> {
+  let closed = 0;
+  for (const state of castStates.values()) {
+    if (state.sessionId) {
+      try {
+        await closeSession(state.sessionId, state.wsMessageCount, state.wsTipTotal, state.viewerCount);
+        closed++;
+        log.info(`Shutdown: closed session ${state.sessionId} (${state.target.castName})`);
+      } catch (err) {
+        log.error(`Shutdown: failed to close session ${state.sessionId}`, err);
+      }
+    }
+  }
+  return closed;
 }

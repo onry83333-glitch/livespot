@@ -225,6 +225,40 @@ export async function closeSession(
   }
 }
 
+/** Collector起動時に呼び出す: 古い未閉鎖セッションをDBサイドで一括クローズ */
+export async function closeOrphanSessions(staleHours = 6): Promise<number> {
+  const sb = getSupabase();
+  const { data, error } = await sb.rpc('close_orphan_sessions', {
+    p_stale_threshold: `${staleHours} hours`,
+  });
+  if (error) {
+    log.error('Failed to close orphan sessions via RPC', error);
+    return 0;
+  }
+  return data as number;
+}
+
+/** 特定キャストの未閉鎖セッションをクローズ（起動時 first-poll で使用） */
+export async function closeStaleSessionsForCast(
+  accountId: string,
+  castName: string,
+): Promise<number> {
+  const sb = getSupabase();
+  const now = new Date().toISOString();
+  const { data, error } = await sb
+    .from('sessions')
+    .update({ ended_at: now })
+    .eq('account_id', accountId)
+    .eq('cast_name', castName)
+    .is('ended_at', null)
+    .select('session_id');
+  if (error) {
+    log.error(`Failed to close stale sessions for ${castName}`, error);
+    return 0;
+  }
+  return data?.length ?? 0;
+}
+
 export async function updateCastOnlineStatus(
   table: 'registered_casts' | 'spy_casts',
   accountId: string,
