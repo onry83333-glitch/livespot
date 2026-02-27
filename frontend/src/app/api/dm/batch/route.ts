@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabase } from '@/lib/supabase/server';
 import { StripchatAPI } from '@/lib/stripchat-api';
+import { checkDailyDmLimit } from '@/lib/dm-safety';
+import { reportError } from '@/lib/error-handler';
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -27,6 +29,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'account_id is required' }, { status: 400 });
   }
 
+  // 所有権チェック: user_idが一致するaccountか確認
+  const { data: account } = await supabase
+    .from('accounts')
+    .select('id')
+    .eq('id', account_id)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (!account) {
+    return NextResponse.json({ error: 'Account not found or access denied' }, { status: 403 });
+  }
+
+  // P0-5: 日次送信上限チェック
+  const dailyCheck = await checkDailyDmLimit(supabase, account_id);
+  if (!dailyCheck.allowed) {
+    return NextResponse.json({
+      processed: 0,
+      success: 0,
+      error_count: 0,
+      remaining: 0,
+      blocked_by_limit: true,
+      message: dailyCheck.reason,
+    }, { status: 429 });
+  }
+
   // 有効なセッション取得
   const { data: session } = await supabase
     .from('stripchat_sessions')
@@ -44,6 +71,24 @@ export async function POST(req: NextRequest) {
       },
       { status: 400 },
     );
+  }
+
+  // P0-5: キャスト身元検証 — セッションのstripchat_user_idとregistered_castsの照合
+  // バッチ処理開始前に、このアカウントの全登録キャストを取得してルックアップ用マップを構築
+  const castIdentityMap = new Map<string, string>();
+  if (session.stripchat_user_id) {
+    const { data: registeredCasts } = await supabase
+      .from('registered_casts')
+      .select('cast_name, stripchat_user_id')
+      .eq('account_id', account_id)
+      .eq('is_active', true)
+      .not('stripchat_user_id', 'is', null);
+
+    if (registeredCasts) {
+      for (const rc of registeredCasts) {
+        castIdentityMap.set(rc.cast_name, String(rc.stripchat_user_id));
+      }
+    }
   }
 
   // キューから取得
@@ -88,6 +133,39 @@ export async function POST(req: NextRequest) {
       .from('dm_send_log')
       .update({ status: 'sending', sent_via: 'api' })
       .eq('id', task.id);
+
+    // P0-5: タスクごとのキャスト身元検証ゲート
+    if (task.cast_name && session.stripchat_user_id) {
+      const registeredId = castIdentityMap.get(task.cast_name);
+      if (registeredId && registeredId !== String(session.stripchat_user_id)) {
+        errorCount++;
+        const mismatchErr = `CAST_IDENTITY_MISMATCH: cast=${task.cast_name}(ID:${registeredId}) != session(${session.stripchat_user_id})`;
+        errors.push({ user_name: task.user_name, error: mismatchErr });
+        await supabase
+          .from('dm_send_log')
+          .update({ status: 'error', sent_via: 'api', error: mismatchErr })
+          .eq('id', task.id);
+
+        // 身元不一致は全件停止（同一セッションで全タスク同じ結果になるため）
+        const currentIdx = tasks.indexOf(task);
+        for (let i = currentIdx + 1; i < tasks.length; i++) {
+          await supabase
+            .from('dm_send_log')
+            .update({ status: 'error', error: mismatchErr })
+            .eq('id', tasks[i].id);
+        }
+        errorCount += tasks.length - currentIdx - 1;
+
+        return NextResponse.json({
+          processed: errorCount,
+          success: 0,
+          error_count: errorCount,
+          remaining: 0,
+          cast_identity_mismatch: true,
+          errors,
+        }, { status: 403 });
+      }
+    }
 
     try {
       // userId 解決
@@ -160,6 +238,7 @@ export async function POST(req: NextRequest) {
         .from('dm_send_log')
         .update({ status: 'error', sent_via: 'api', error: String(err) })
         .eq('id', task.id);
+      await reportError(err, { file: 'api/dm/batch', context: `DM送信 ${task.user_name}` });
     }
 
     // レート制限: 3秒間隔

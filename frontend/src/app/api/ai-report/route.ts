@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { reportError } from '@/lib/error-handler';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -381,6 +382,7 @@ export async function POST(req: NextRequest) {
       return await generateSessionReport(token, session_id);
     } catch (e: unknown) {
       const err = e as { message?: string; statusCode?: number };
+      await reportError(e, { file: 'api/ai-report', context: 'セッションレポート生成' });
       return NextResponse.json(
         { error: err.message || 'レポート生成に失敗しました' },
         { status: err.statusCode || 500 },
@@ -398,6 +400,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result);
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
+    await reportError(e, { file: 'api/ai-report', context: 'Claude API呼び出し' });
     return NextResponse.json(
       { error: err.message || 'Unknown error' },
       { status: err.statusCode || 500 },
