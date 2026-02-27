@@ -20,26 +20,9 @@ const navSections: NavSection[] = [
   {
     title: '',
     items: [
-      { href: '/casts',      icon: '📋', label: 'キャスト一覧' },
-      { href: '/dm',         icon: '📨', label: 'DM管理' },
-    ],
-  },
-  {
-    title: '分析',
-    items: [
-      { href: '/analytics',  icon: '📊', label: '売上分析' },
-      { href: '/users',      icon: '👥', label: 'ユーザー検索' },
-      { href: '/spy',        icon: '🔭', label: '他社SPY' },
-    ],
-  },
-  {
-    title: '管理',
-    items: [
-      { href: '/admin/casts',    icon: '🎭', label: 'キャスト管理' },
-      { href: '/admin/revenue', icon: '💰', label: 'レベニューシェア' },
-      { href: '/admin/health', icon: '🏥', label: '品質チェック' },
-      { href: '/admin/test-data', icon: '🧹', label: 'テストデータ' },
-      { href: '/settings',   icon: '⚙️', label: '設定' },
+      { href: '/casts',   icon: '👤', label: 'キャスト' },
+      { href: '/spy',     icon: '🔍', label: 'SPY' },
+      { href: '/alerts',  icon: '🔔', label: 'アラート' },
     ],
   },
 ];
@@ -173,8 +156,8 @@ function SidebarInner() {
               })}
             </div>
 
-            {/* Spy submenu: 分析セクションの直後に表示 */}
-            {section.title === '分析' && activeSpyCastName && (
+            {/* Spy submenu: SPYキャスト個別ページで表示 */}
+            {section.title === '' && activeSpyCastName && (
               <div className="mt-2 ml-2 pl-3 border-l" style={{ borderColor: 'rgba(56,189,248,0.15)' }}>
                 <Link href="/spy"
                   className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-[11px] text-slate-400 hover:text-slate-200 hover:bg-white/[0.03] transition-all mb-1"
