@@ -21,7 +21,7 @@ import signal
 import sys
 from datetime import datetime, timezone
 
-from collector.config import get_monitored_casts, get_supabase
+from collector.config import get_all_monitored_casts, get_monitored_casts, get_supabase
 from collector.session_manager import SessionManager, send_telegram
 
 logger = logging.getLogger("collector")
@@ -91,14 +91,16 @@ async def preflight_check() -> bool:
     except Exception as e:
         errors.append(f"Cookie読み取り失敗: {e}")
 
-    # 3. 監視対象キャスト
+    # 3. 監視対象キャスト（自社+他者）
     try:
-        casts = get_monitored_casts()
+        casts = get_all_monitored_casts()
         if not casts:
             errors.append("監視対象キャストが0件")
         else:
-            names = [c["cast_name"] for c in casts]
-            logger.info(f"監視対象: {names}")
+            own = [c["cast_name"] for c in casts if not c.get("is_spy")]
+            spy = [c["cast_name"] for c in casts if c.get("is_spy")]
+            logger.info(f"自社キャスト: {own}")
+            logger.info(f"他者キャスト(SPY): {spy}")
     except Exception as e:
         errors.append(f"キャストリスト取得失敗: {e}")
 
@@ -138,14 +140,17 @@ async def main():
             # Windows: signal handlersは使えないのでfallback
             pass
 
-    # 起動通知
-    casts = get_monitored_casts()
-    cast_names = [c["cast_name"] for c in casts]
+    # 起動通知（自社+他者キャスト統合）
+    casts = get_all_monitored_casts()
+    own_names = [c["cast_name"] for c in casts if not c.get("is_spy")]
+    spy_names = [c["cast_name"] for c in casts if c.get("is_spy")]
     await send_telegram(
         f"🖥️ <b>SPY Pipeline 起動</b>\n"
-        f"監視対象: {len(cast_names)}キャスト\n"
-        f"{', '.join(cast_names[:10])}"
-        f"{'...' if len(cast_names) > 10 else ''}"
+        f"自社: {len(own_names)}キャスト / 他者SPY: {len(spy_names)}キャスト\n"
+        f"自社: {', '.join(own_names[:5])}"
+        f"{'...' if len(own_names) > 5 else ''}\n"
+        f"SPY: {', '.join(spy_names[:5])}"
+        f"{'...' if len(spy_names) > 5 else ''}"
     )
 
     # メインループ

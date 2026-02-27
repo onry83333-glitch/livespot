@@ -26,6 +26,7 @@ from collector.config import (
     THUMBNAIL_INTERVAL,
     USER_AGENT,
     VIEWER_INTERVAL,
+    get_all_monitored_casts,
     get_monitored_casts,
     get_supabase,
 )
@@ -192,14 +193,14 @@ class SessionManager:
     # ポーリングループ（1分毎）
     # ---------------------------------------------------------------------------
     async def _poll_loop(self):
-        """1分毎にキャスト状態をポーリングし、状態変化に応じてWS管理"""
+        """1分毎にキャスト状態をポーリングし、状態変化に応じてWS管理（自社+他者キャスト統合）"""
         logger.info("Poller起動")
-        casts = get_monitored_casts()
+        casts = get_all_monitored_casts()
 
         while self._running:
             try:
                 if not casts:
-                    casts = get_monitored_casts()
+                    casts = get_all_monitored_casts()
 
                 if not casts:
                     logger.warning("監視対象キャストなし。60秒後にリトライ。")
@@ -236,8 +237,8 @@ class SessionManager:
                     f"WS={len(self._ws_clients)}"
                 )
 
-                # 10分毎にキャストリスト更新
-                casts = get_monitored_casts()
+                # 10分毎にキャストリスト更新（自社+他者キャスト統合）
+                casts = get_all_monitored_casts()
 
             except Exception as e:
                 logger.error(f"Pollerエラー: {e}", exc_info=True)
@@ -331,8 +332,8 @@ class SessionManager:
                 live_casts = get_live_casts()
                 if live_casts:
                     cookies = load_cookies_from_file()
-                    casts = get_monitored_casts()
-                    cast_map = {c["cast_name"]: c for c in casts}
+                    all_casts = get_all_monitored_casts()
+                    cast_map = {c["cast_name"]: c for c in all_casts}
                     now = asyncio.get_event_loop().time()
 
                     async with httpx.AsyncClient(
@@ -407,8 +408,8 @@ class SessionManager:
             try:
                 live_casts = get_live_casts()
                 if live_casts:
-                    casts = get_monitored_casts()
-                    cast_map = {c["cast_name"]: c for c in casts}
+                    all_casts = get_all_monitored_casts()
+                    cast_map = {c["cast_name"]: c for c in all_casts}
                     now = asyncio.get_event_loop().time()
 
                     for name in live_casts:

@@ -20,6 +20,7 @@ from collector.config import (
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
     USER_AGENT,
+    get_all_monitored_casts,
     get_monitored_casts,
     get_supabase,
 )
@@ -134,15 +135,20 @@ async def on_stream_start(
     except Exception as e:
         logger.error(f"{cast_name}: セッション作成失敗: {e}")
 
-    # model_id を registered_casts に保存（未設定時）
+    # model_id を保存（未設定時）
     if info.get("model_id") and not cast.get("model_id"):
         try:
             sb = get_supabase()
-            sb.table("registered_casts").update({
-                "model_id": info["model_id"],
-            }).eq("cast_name", cast_name).eq(
-                "account_id", cast["account_id"]
-            ).execute()
+            if cast.get("is_spy"):
+                # spy_castsテーブルにはmodel_idカラムがないので、metadataに保存
+                # spy_castsのcast_nameでセッション検索時に使うためキャッシュのみ
+                pass
+            else:
+                sb.table("registered_casts").update({
+                    "model_id": info["model_id"],
+                }).eq("cast_name", cast_name).eq(
+                    "account_id", cast["account_id"]
+                ).execute()
             cast["model_id"] = info["model_id"]
             logger.info(f"{cast_name}: model_id={info['model_id']} 保存")
         except Exception as e:
@@ -295,12 +301,12 @@ async def poll_once(casts: list[dict]) -> dict[str, str]:
 # ポーリングループ
 # ---------------------------------------------------------------------------
 async def run_poller():
-    """1分毎のポーリングを無限ループで実行"""
+    """1分毎のポーリングを無限ループで実行（自社+他者キャスト統合）"""
     logger.info("Poller起動")
 
     while True:
         try:
-            casts = get_monitored_casts()
+            casts = get_all_monitored_casts()
             if not casts:
                 logger.warning("監視対象キャストがありません。60秒後にリトライ。")
                 await asyncio.sleep(POLL_INTERVAL)

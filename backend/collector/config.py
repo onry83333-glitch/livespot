@@ -130,3 +130,55 @@ def get_monitored_casts() -> list[dict]:
 
     logger.info(f"監視対象キャスト: {len(casts)}名 ({[c['cast_name'] for c in casts]})")
     return casts
+
+
+def get_spy_casts() -> list[dict]:
+    """
+    Supabase spy_casts から is_active=true の他者キャストを取得。
+
+    Returns:
+        [{"cast_name": "xxx", "account_id": "uuid", "display_name": "xxx", "is_spy": True}, ...]
+    """
+    sb = get_supabase()
+    res = (
+        sb.table("spy_casts")
+        .select("cast_name, account_id, display_name")
+        .eq("is_active", True)
+        .execute()
+    )
+
+    casts = []
+    for row in res.data or []:
+        casts.append({
+            "cast_name": row["cast_name"],
+            "model_id": None,  # spy_castsにはmodel_idカラムなし（API取得時に解決）
+            "account_id": row["account_id"],
+            "display_name": row.get("display_name") or row["cast_name"],
+            "is_spy": True,
+        })
+
+    logger.info(f"他者キャスト(SPY): {len(casts)}名 ({[c['cast_name'] for c in casts]})")
+    return casts
+
+
+def get_all_monitored_casts() -> list[dict]:
+    """
+    自社キャスト(registered_casts) + 他者キャスト(spy_casts) を統合して返す。
+    重複するcast_nameがあった場合、自社キャストを優先する。
+
+    Returns:
+        [{"cast_name": ..., "model_id": ..., "account_id": ..., "is_spy": bool}, ...]
+    """
+    own = get_monitored_casts()
+    for c in own:
+        c.setdefault("is_spy", False)
+
+    spy = get_spy_casts()
+
+    # 自社キャスト名をセットにして重複排除
+    own_names = {c["cast_name"] for c in own}
+    for c in spy:
+        if c["cast_name"] not in own_names:
+            own.append(c)
+
+    return own
