@@ -175,15 +175,17 @@ async def sync_coins(body: CoinSyncRequest, user=Depends(get_current_user)):
             user_agg[un]["last_payment_date"] = d
 
     user_rows = []
+    cast_name = getattr(body, "cast_name", None)
     for un, agg in user_agg.items():
-        user_rows.append(
-            {
-                "account_id": body.account_id,
-                "user_name": un,
-                "total_coins": agg["total_coins"],
-                "last_payment_date": agg["last_payment_date"],
-            }
-        )
+        row = {
+            "account_id": body.account_id,
+            "user_name": un,
+            "total_coins": agg["total_coins"],
+            "last_payment_date": agg["last_payment_date"],
+        }
+        if cast_name:
+            row["cast_name"] = cast_name
+        user_rows.append(row)
 
     synced_users = 0
     if user_rows:
