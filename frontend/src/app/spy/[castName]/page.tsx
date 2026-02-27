@@ -156,7 +156,7 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
       .in('msg_type', ['tip', 'gift'])
       .gt('tokens', 0)
       .order('tokens', { ascending: false })
-      .limit(200)
+      .limit(50000)
       .then(({ data }) => {
         if (data) {
           const tipMap = new Map<string, number>();
@@ -615,7 +615,7 @@ function TicketTab({ castName, accountId }: { castName: string; accountId: strin
       .gt('tokens', 0)
       .gte('message_time', since)
       .order('message_time', { ascending: true })
-      .limit(2000);
+      .limit(50000);
 
     if (until) query = query.lte('message_time', until);
 

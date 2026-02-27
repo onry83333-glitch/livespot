@@ -162,7 +162,7 @@ export default function AnalyticsPage() {
         .eq('account_id', selectedAccount)
         .gte('created_at', since)
         .order('created_at', { ascending: false })
-        .limit(1000);
+        .limit(50000);
 
       if (until) {
         query = query.lte('created_at', until);
@@ -274,7 +274,7 @@ export default function AnalyticsPage() {
       if (funnelCastFilter) {
         chatQuery = chatQuery.eq('cast_name', funnelCastFilter);
       }
-      const { data: chatData } = await chatQuery.limit(2000);
+      const { data: chatData } = await chatQuery.limit(50000);
 
       const chatOnly = new Set<string>();
       for (const m of (chatData || [])) {
@@ -301,7 +301,7 @@ export default function AnalyticsPage() {
       }
       const { data: levelData } = await levelQuery
         .order('message_time', { ascending: false })
-        .limit(2000);
+        .limit(50000);
 
       const levelMap = new Map<string, number>();
       for (const r of (levelData || [])) {

@@ -148,7 +148,8 @@ export default function SessionsPage() {
           .select('session_id, cast_name, broadcast_title, started_at')
           .eq('account_id', selectedAccount)
           .gte('started_at', since)
-          .order('started_at', { ascending: false });
+          .order('started_at', { ascending: false })
+          .limit(5000);
 
         const allMsgs: MsgRow[] = [];
         let offset = 0;
