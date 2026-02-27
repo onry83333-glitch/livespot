@@ -1,4 +1,4 @@
-"""DM router - Queue management, templates, effectiveness, thank-you candidates, churn risk"""
+"""DM router - Queue management, templates, effectiveness, thank-you candidates, churn risk, ADM trigger"""
 import re
 from datetime import datetime, timedelta
 from typing import Optional
@@ -9,6 +9,7 @@ from models.schemas import (
     DMQueueCreate, DMBatchCreate, DMBatchResponse, DMBatchStatus,
     DMStatusUpdate, DMTemplateCreate, DMLogResponse,
 )
+from services.adm_engine import run_adm_cycle
 
 router = APIRouter()
 
@@ -222,16 +223,17 @@ async def get_dm_log(
 async def get_dm_effectiveness(
     account_id: str,
     window_days: int = Query(default=7, le=30),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """DM送信後N日以内の再課金率（キャンペーン別）"""
     sb = get_supabase_admin()
     _verify_account_ownership(sb, account_id, user["user_id"])
 
-    result = sb.rpc("dm_effectiveness", {
-        "p_account_id": account_id,
-        "p_window_days": window_days,
-    }).execute()
+    params = {"p_account_id": account_id, "p_window_days": window_days}
+    if cast_name:
+        params["p_cast_name"] = cast_name
+    result = sb.rpc("dm_effectiveness", params).execute()
 
     return result.data
 
@@ -321,3 +323,25 @@ async def get_churn_risk(
         return {"data": result.data, "count": len(result.data)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"離脱予兆の検出に失敗: {e}")
+
+
+# ============================================================
+# ADM Trigger — 新規ユーザー自動DM発火
+# ============================================================
+@router.post("/trigger")
+async def trigger_adm(
+    lookback_hours: int = Query(default=24, ge=1, le=168, description="新規ユーザー検出の遡り時間"),
+    user=Depends(get_current_user),
+):
+    """
+    ADM（自動DM）トリガーを実行。
+    paid_usersの新規ユーザーを検出し、dm_triggersルールに基づいてDMを自動発火する。
+    """
+    sb = get_supabase_admin()
+    account_id = _get_first_account_id(sb, user["user_id"])
+
+    try:
+        result = await run_adm_cycle(sb, account_id, lookback_hours=lookback_hours)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"ADMトリガー実行に失敗: {e}")
