@@ -557,6 +557,18 @@ function CastDetailInner() {
   const [monthlyPL, setMonthlyPL] = useState<MonthlyPL[]>([]);
   const [monthlyPLLoading, setMonthlyPLLoading] = useState(false);
 
+  // Revenue Share
+  interface RevenueShareRow {
+    week_start: string; week_end: string; week_label: string;
+    transaction_count: number; total_tokens: number;
+    setting_token_to_usd: number; setting_platform_fee_pct: number; setting_revenue_share_pct: number;
+    gross_usd: number; platform_fee_usd: number; net_usd: number; cast_payment_usd: number;
+    formula_gross: string; formula_fee: string; formula_net: string; formula_payment: string;
+  }
+  const [revenueShare, setRevenueShare] = useState<RevenueShareRow[]>([]);
+  const [revenueShareLoading, setRevenueShareLoading] = useState(false);
+  const [revenueShareExpanded, setRevenueShareExpanded] = useState<string | null>(null);
+
   // Realtime: paid_users color cache
   const [paidUserCoins, setPaidUserCoins] = useState<Map<string, number>>(new Map());
 
@@ -708,6 +720,27 @@ function CastDetailInner() {
       });
   }, [accountId, castName, activeTab, sb]);
 
+  // Revenue Share: load when sales tab active (past 90 days)
+  useEffect(() => {
+    if (!accountId || activeTab !== 'sales') return;
+    setRevenueShareLoading(true);
+    const now = new Date();
+    const start = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    const startStr = start.toISOString().slice(0, 10);
+    const endStr = now.toISOString().slice(0, 10);
+    // Enforce data cutoff
+    const safeStart = startStr < '2025-02-15' ? '2025-02-15' : startStr;
+    sb.rpc('calculate_revenue_share', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_start_date: safeStart,
+      p_end_date: endStr,
+    }).then(({ data, error }) => {
+      if (!error && data) setRevenueShare(data as RevenueShareRow[]);
+      setRevenueShareLoading(false);
+    });
+  }, [accountId, castName, activeTab, sb]);
+
   // Alert rules loading
   useEffect(() => {
     if (!accountId) return;
@@ -779,7 +812,7 @@ function CastDetailInner() {
         });
         setPaidUserCoins(map);
       });
-  }, [activeTab, accountId, sb]);
+  }, [activeTab, accountId, castName, sb]);
 
   // ============================================================
   // Overview: weekly revenue (coin_transactionsベース)
@@ -4960,6 +4993,143 @@ function CastDetailInner() {
                         </div>
                       </>
                     )}
+                  </div>
+
+                  {/* ── Revenue Share ── */}
+                  <div className="glass-card p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-bold flex items-center gap-2">
+                        <span style={{ color: 'var(--accent-primary)' }}>$</span>
+                        レベニューシェア（週次）
+                      </h3>
+                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        直近90日 / coin_transactions.tokens / 月曜03:00 JST境界
+                      </span>
+                    </div>
+
+                    {revenueShareLoading ? (
+                      <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    ) : revenueShare.length === 0 ? (
+                      <div className="text-center py-6 rounded-xl" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
+                        <p className="text-xs" style={{ color: 'var(--accent-amber)' }}>データなし</p>
+                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                          cast_cost_settings に設定がないか、該当期間の取引がありません
+                        </p>
+                      </div>
+                    ) : (() => {
+                      const rsTotals = revenueShare.reduce(
+                        (acc, r) => ({
+                          tokens: acc.tokens + r.total_tokens,
+                          txCount: acc.txCount + r.transaction_count,
+                          gross: acc.gross + r.gross_usd,
+                          fee: acc.fee + r.platform_fee_usd,
+                          net: acc.net + r.net_usd,
+                          payment: acc.payment + r.cast_payment_usd,
+                        }),
+                        { tokens: 0, txCount: 0, gross: 0, fee: 0, net: 0, payment: 0 },
+                      );
+                      const fmtUsd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      return (
+                        <>
+                          {/* Summary cards */}
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                            <div className="glass-panel p-3 rounded-xl text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>グロス売上</p>
+                              <p className="text-lg font-bold font-mono">{fmtUsd(rsTotals.gross)}</p>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                {rsTotals.tokens.toLocaleString()} tk × ${revenueShare[0]?.setting_token_to_usd ?? 0.05}
+                              </p>
+                            </div>
+                            <div className="glass-panel p-3 rounded-xl text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>PF手数料</p>
+                              <p className="text-lg font-bold font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(rsTotals.fee)}</p>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                {revenueShare[0]?.setting_platform_fee_pct ?? 40}%
+                              </p>
+                            </div>
+                            <div className="glass-panel p-3 rounded-xl text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>ネット売上</p>
+                              <p className="text-lg font-bold font-mono">{fmtUsd(rsTotals.net)}</p>
+                            </div>
+                            <div className="glass-panel p-3 rounded-xl text-center" style={{ border: '1px solid rgba(56,189,248,0.15)' }}>
+                              <p className="text-[10px]" style={{ color: 'var(--accent-primary)' }}>キャスト支払い</p>
+                              <p className="text-xl font-bold font-mono" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(rsTotals.payment)}</p>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                ネット × {revenueShare[0]?.setting_revenue_share_pct ?? 50}%
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Weekly table */}
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-[11px]">
+                              <thead>
+                                <tr style={{ color: 'var(--text-muted)' }}>
+                                  <th className="text-left pb-2 font-medium">週</th>
+                                  <th className="text-right pb-2 font-medium">トークン</th>
+                                  <th className="text-right pb-2 font-medium">グロス</th>
+                                  <th className="text-right pb-2 font-medium">手数料</th>
+                                  <th className="text-right pb-2 font-medium">ネット</th>
+                                  <th className="text-right pb-2 font-medium" style={{ color: 'var(--accent-primary)' }}>支払い</th>
+                                  <th className="text-center pb-2 font-medium">根拠</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {revenueShare.map(r => (
+                                  <tr key={r.week_start} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                                    <td className="py-1.5 font-mono">{r.week_label}</td>
+                                    <td className="py-1.5 text-right tabular-nums">{r.total_tokens.toLocaleString()}</td>
+                                    <td className="py-1.5 text-right tabular-nums font-mono">{fmtUsd(r.gross_usd)}</td>
+                                    <td className="py-1.5 text-right tabular-nums font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(r.platform_fee_usd)}</td>
+                                    <td className="py-1.5 text-right tabular-nums font-mono">{fmtUsd(r.net_usd)}</td>
+                                    <td className="py-1.5 text-right tabular-nums font-mono font-bold" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(r.cast_payment_usd)}</td>
+                                    <td className="py-1.5 text-center">
+                                      <button
+                                        className="text-[10px] hover:text-sky-400 transition-colors"
+                                        style={{ color: 'var(--text-muted)' }}
+                                        onClick={() => setRevenueShareExpanded(revenueShareExpanded === r.week_start ? null : r.week_start)}
+                                      >
+                                        {revenueShareExpanded === r.week_start ? '閉じる' : '詳細'}
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                                {revenueShareExpanded && (() => {
+                                  const r = revenueShare.find(r => r.week_start === revenueShareExpanded);
+                                  if (!r) return null;
+                                  return (
+                                    <tr>
+                                      <td colSpan={7} className="p-0">
+                                        <div className="p-3 space-y-1.5 text-[10px] font-mono" style={{ background: 'rgba(56,189,248,0.03)', borderTop: '1px solid rgba(56,189,248,0.1)', borderBottom: '1px solid rgba(56,189,248,0.1)' }}>
+                                          <p style={{ color: 'var(--text-muted)' }}>
+                                            設定: 1tk=${r.setting_token_to_usd} / PF手数料={r.setting_platform_fee_pct}% / 分配率={r.setting_revenue_share_pct}%
+                                          </p>
+                                          <p>1. グロス: <span style={{ color: 'var(--text-primary)' }}>{r.formula_gross}</span></p>
+                                          <p>2. PF手数料: <span style={{ color: 'var(--accent-pink)' }}>{r.formula_fee}</span></p>
+                                          <p>3. ネット: <span style={{ color: 'var(--text-primary)' }}>{r.formula_net}</span></p>
+                                          <p>4. キャスト支払い: <span style={{ color: 'var(--accent-primary)' }}>{r.formula_payment}</span></p>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })()}
+                              </tbody>
+                              <tfoot>
+                                <tr className="font-bold" style={{ borderTop: '2px solid rgba(56,189,248,0.15)' }}>
+                                  <td className="py-2">合計 ({revenueShare.length}週)</td>
+                                  <td className="py-2 text-right tabular-nums">{rsTotals.tokens.toLocaleString()}</td>
+                                  <td className="py-2 text-right tabular-nums font-mono">{fmtUsd(rsTotals.gross)}</td>
+                                  <td className="py-2 text-right tabular-nums font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(rsTotals.fee)}</td>
+                                  <td className="py-2 text-right tabular-nums font-mono">{fmtUsd(rsTotals.net)}</td>
+                                  <td className="py-2 text-right tabular-nums font-mono" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(rsTotals.payment)}</td>
+                                  <td />
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        </>
+                      );
+                    })()}
                   </div>
                 </>
               )}

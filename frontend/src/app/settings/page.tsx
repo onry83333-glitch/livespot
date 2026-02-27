@@ -43,6 +43,8 @@ export default function SettingsPage() {
     monthly_fixed_cost: number;
     platform_fee_rate: number;
     token_to_jpy: number;
+    token_to_usd: number;
+    revenue_share_rate: number;
     bonus_rate: number;
     effective_from: string;
   }
@@ -192,7 +194,7 @@ export default function SettingsPage() {
     try {
       const { data, error } = await sb
         .from('cast_cost_settings')
-        .select('id, cast_name, hourly_rate, monthly_fixed_cost, platform_fee_rate, token_to_jpy, bonus_rate, effective_from')
+        .select('id, cast_name, hourly_rate, monthly_fixed_cost, platform_fee_rate, token_to_jpy, token_to_usd, revenue_share_rate, bonus_rate, effective_from')
         .eq('account_id', selectedAccount)
         .is('effective_to', null)
         .order('cast_name');
@@ -253,6 +255,8 @@ export default function SettingsPage() {
         monthly_fixed_cost: setting.monthly_fixed_cost,
         platform_fee_rate: setting.platform_fee_rate,
         token_to_jpy: setting.token_to_jpy,
+        token_to_usd: setting.token_to_usd,
+        revenue_share_rate: setting.revenue_share_rate,
         bonus_rate: setting.bonus_rate,
         effective_from: setting.effective_from || new Date().toISOString().slice(0, 10),
       };
@@ -281,6 +285,8 @@ export default function SettingsPage() {
         monthly_fixed_cost: 0,
         platform_fee_rate: 40.0,
         token_to_jpy: 5.5,
+        token_to_usd: 0.05,
+        revenue_share_rate: 50.0,
         bonus_rate: 0,
         effective_from: new Date().toISOString().slice(0, 10),
       },
@@ -592,6 +598,28 @@ export default function SettingsPage() {
                     />
                   </div>
                   <div>
+                    <label className="text-[10px] block mb-1" style={{ color: 'var(--accent-primary)' }}>分配率（%）</label>
+                    <input type="number" min="0" max="100" step="0.1" className="input-glass text-sm w-full"
+                      value={cs.revenue_share_rate}
+                      onChange={e => {
+                        const v = parseFloat(e.target.value) || 0;
+                        setCostSettings(prev => prev.map((c, i) => i === idx ? { ...c, revenue_share_rate: v } : c));
+                      }}
+                    />
+                    <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>ネット売上のうちキャストへ支払う割合</p>
+                  </div>
+                  <div>
+                    <label className="text-[10px] block mb-1" style={{ color: 'var(--accent-primary)' }}>1tk = USD</label>
+                    <input type="number" min="0" step="0.001" className="input-glass text-sm w-full"
+                      value={cs.token_to_usd}
+                      onChange={e => {
+                        const v = parseFloat(e.target.value) || 0;
+                        setCostSettings(prev => prev.map((c, i) => i === idx ? { ...c, token_to_usd: v } : c));
+                      }}
+                    />
+                    <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>Stripchat標準: $0.05</p>
+                  </div>
+                  <div>
                     <label className="text-[10px] block mb-1" style={{ color: 'var(--text-secondary)' }}>ボーナス率（%）</label>
                     <input type="number" min="0" max="100" step="0.1" className="input-glass text-sm w-full"
                       value={cs.bonus_rate}
@@ -648,14 +676,19 @@ export default function SettingsPage() {
 
           {/* Summary / Explanation */}
           <div className="glass-card p-5">
-            <h3 className="text-sm font-bold mb-2">P/L計算式</h3>
+            <h3 className="text-sm font-bold mb-2">計算式</h3>
             <div className="space-y-1.5 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+              <p className="text-[10px] font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>セッション/月次 P/L（円ベース）</p>
               <p><strong style={{ color: 'var(--text-primary)' }}>粗売上</strong> = トークン数 × トークン円換算レート</p>
               <p><strong style={{ color: 'var(--text-primary)' }}>手数料</strong> = 粗売上 × 手数料率</p>
               <p><strong style={{ color: 'var(--text-primary)' }}>ネット売上</strong> = 粗売上 − 手数料</p>
               <p><strong style={{ color: 'var(--text-primary)' }}>キャスト費用</strong> = 配信時間(h) × 時給</p>
               <p><strong style={{ color: 'var(--accent-green)' }}>粗利</strong> = ネット売上 − キャスト費用</p>
-              <p><strong style={{ color: 'var(--text-primary)' }}>粗利率</strong> = 粗利 ÷ 粗売上 × 100</p>
+              <p className="text-[10px] font-semibold mt-3 mb-1" style={{ color: 'var(--accent-primary)' }}>レベニューシェア（USDベース）</p>
+              <p><strong style={{ color: 'var(--text-primary)' }}>グロス</strong> = トークン数 × 1tk=USD</p>
+              <p><strong style={{ color: 'var(--text-primary)' }}>PF手数料</strong> = グロス × 手数料率</p>
+              <p><strong style={{ color: 'var(--text-primary)' }}>ネット</strong> = グロス − PF手数料</p>
+              <p><strong style={{ color: 'var(--accent-primary)' }}>キャスト支払い</strong> = ネット × 分配率</p>
             </div>
           </div>
         </div>
