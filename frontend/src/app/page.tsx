@@ -103,7 +103,8 @@ export default function DashboardPage() {
         .select('tokens')
         .eq('account_id', accountId)
         .in('type', ['tip', 'gift'])
-        .gte('date', since30d),
+        .gte('date', since30d)
+        .limit(50000),
       // 1時間メッセージ数: spy_messages
       sb.from('spy_messages')
         .select('id', { count: 'exact', head: true })
@@ -164,7 +165,8 @@ export default function DashboardPage() {
         .select('user_name, last_payment_date')
         .eq('account_id', accountId)
         .in('user_name', dormantWhales.map(w => w.user_name))
-        .lt('last_payment_date', fourteenDaysAgo.toISOString());
+        .lt('last_payment_date', fourteenDaysAgo.toISOString())
+        .limit(100);
       if (whaleDetails && whaleDetails.length > 0) {
         recs.push({ icon: '🐋', text: `離脱Whaleあり (${whaleDetails.length}名) -- 復帰DMを送信`, href: '/dm' });
       }

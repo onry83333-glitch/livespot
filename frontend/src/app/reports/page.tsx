@@ -75,7 +75,8 @@ export default function ReportsPage() {
     if (sessionIds.length > 0) {
       const { data: sessData } = await sb.from('sessions')
         .select('session_id, title, started_at, ended_at, total_coins, unique_users')
-        .in('session_id', sessionIds);
+        .in('session_id', sessionIds)
+        .limit(30);
 
       const map: Record<string, SessionInfo> = {};
       for (const s of (sessData || [])) {

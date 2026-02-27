@@ -1021,7 +1021,7 @@ function CastDetailInner() {
         const bid = dmBatchIdRef.current;
         if (!bid) return;
         const { data: items } = await sb.from('dm_send_log')
-          .select('*').eq('campaign', bid).eq('cast_name', castName).order('created_at', { ascending: false });
+          .select('*').eq('campaign', bid).eq('cast_name', castName).order('created_at', { ascending: false }).limit(5000);
         const logs = items || [];
         const counts = { total: logs.length, queued: 0, sending: 0, success: 0, error: 0 };
         logs.forEach((l: { status: string }) => { if (l.status in counts) (counts as Record<string, number>)[l.status]++; });

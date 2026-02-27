@@ -197,7 +197,8 @@ export default function SettingsPage() {
         .select('id, cast_name, hourly_rate, monthly_fixed_cost, platform_fee_rate, token_to_jpy, token_to_usd, revenue_share_rate, bonus_rate, effective_from')
         .eq('account_id', selectedAccount)
         .is('effective_to', null)
-        .order('cast_name');
+        .order('cast_name')
+        .limit(100);
       if (error) throw error;
       setCostSettings((data || []) as CostSetting[]);
     } catch {
@@ -219,7 +220,8 @@ export default function SettingsPage() {
         .from('dm_triggers')
         .select('id, trigger_name, trigger_type, is_active, conditions, dm_template_id, dm_content_template, cooldown_hours, daily_limit, target_segment, updated_at')
         .eq('account_id', selectedAccount)
-        .order('priority');
+        .order('priority')
+        .limit(100);
       setTriggers((data || []) as TriggerRow[]);
     } catch { /* ignore */ }
     setTriggersLoading(false);

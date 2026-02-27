@@ -642,7 +642,8 @@ export default function SessionDetailPage() {
       .select('session_id, cast_name, session_title, message_time, user_name, tokens, msg_type')
       .eq('account_id', accountId!)
       .eq('session_id', sessionId)
-      .order('message_time', { ascending: true });
+      .order('message_time', { ascending: true })
+      .limit(10000);
 
     if (!msgs || msgs.length === 0) {
       setError(`${LABELS.sessionNotFound} (session_id: ${sessionId.slice(0, 8)}...)`);
@@ -738,7 +739,8 @@ export default function SessionDetailPage() {
       .eq('account_id', accountId)
       .eq('cast_name', castName)
       .eq('session_id', sessionId)
-      .order('captured_at', { ascending: true });
+      .order('captured_at', { ascending: true })
+      .limit(1000);
     if (data) setScreenshots(data);
   }, [accountId, castName, sessionId, sb]);
 
@@ -789,7 +791,8 @@ export default function SessionDetailPage() {
         .from('paid_users')
         .select('segment')
         .eq('account_id', accountId)
-        .eq('cast_name', castName);
+        .eq('cast_name', castName)
+        .limit(50000);
       if (segData) {
         const counts = new Map<string, number>();
         segData.forEach(r => {
@@ -803,7 +806,8 @@ export default function SessionDetailPage() {
         .from('dm_templates')
         .select('id, name, message')
         .eq('account_id', accountId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(100);
       if (tplData && tplData.length > 0) {
         setTemplates(tplData);
         if (!selectedTemplateId) setSelectedTemplateId(tplData[0].id);
@@ -841,7 +845,8 @@ export default function SessionDetailPage() {
       .select('id, session_id, cast_name, segment_start_seconds, segment_end_seconds, text, language, confidence, source_file, processing_status, error_message, created_at')
       .eq('account_id', accountId)
       .eq('session_id', sessionId)
-      .order('segment_start_seconds', { ascending: true, nullsFirst: false });
+      .order('segment_start_seconds', { ascending: true, nullsFirst: false })
+      .limit(5000);
     if (!err && data) setTranscripts(data as CastTranscript[]);
     setTranscriptsLoading(false);
   }, [accountId, sessionId, sb]);
@@ -929,7 +934,8 @@ export default function SessionDetailPage() {
       .select('user_name, segment')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .in('segment', selectedSegments);
+      .in('segment', selectedSegments)
+      .limit(50000);
     if (!users || users.length === 0) {
       setToast('対象ユーザーが見つかりませんでした');
       return;
@@ -1190,7 +1196,8 @@ export default function SessionDetailPage() {
         .eq('account_id', accountId)
         .eq('cast_name', castName)
         .in('user_name', userNames.slice(0, 200))
-        .gt('tokens', 0);
+        .gt('tokens', 0)
+        .limit(50000);
       if (ltData) {
         for (const row of ltData) {
           if (row.user_name) lifetimeMap.set(row.user_name, (lifetimeMap.get(row.user_name) || 0) + row.tokens);
@@ -1205,7 +1212,8 @@ export default function SessionDetailPage() {
         .from('paid_users')
         .select('username, segment')
         .eq('account_id', accountId)
-        .eq('cast_name', castName);
+        .eq('cast_name', castName)
+        .limit(50000);
       if (puData) {
         for (const row of puData as { username?: string; user_name?: string; segment: string }[]) {
           const uname = row.username || row.user_name;
@@ -1238,7 +1246,8 @@ export default function SessionDetailPage() {
       .eq('cast_name', castName)
       .eq('status', 'success')
       .gte('sent_at', dayBefore)
-      .lt('sent_at', summary.started_at);
+      .lt('sent_at', summary.started_at)
+      .limit(10000);
     if (dmData) {
       const map = new Map<string, { sent_at: string; segment: string | null }>();
       for (const d of dmData) {

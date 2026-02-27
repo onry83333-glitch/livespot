@@ -62,7 +62,8 @@ export default function DmPage() {
           .from('dm_send_log')
           .select('cast_name, status, sent_at')
           .in('account_id', accountIds)
-          .order('sent_at', { ascending: false });
+          .order('sent_at', { ascending: false })
+          .limit(50000);
 
         const statsMap = new Map<string, CastDmStats>();
         for (const cast of castList) {

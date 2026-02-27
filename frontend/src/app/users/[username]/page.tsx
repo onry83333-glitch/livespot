@@ -46,7 +46,8 @@ export default function UserTimelinePage() {
           .select('*')
           .eq('account_id', accountId)
           .eq('user_name', username)
-          .order('message_time', { ascending: false });
+          .order('message_time', { ascending: false })
+          .limit(5000);
 
         if (fetchErr) throw new Error(fetchErr.message);
         setMessages(data || []);

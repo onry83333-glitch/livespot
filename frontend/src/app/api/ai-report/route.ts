@@ -138,7 +138,8 @@ async function generateSessionReport(token: string, sessionId: string) {
     .from('spy_messages')
     .select('user_name, message, msg_type, tokens, message_time')
     .eq('session_id', sessionId)
-    .order('message_time', { ascending: true });
+    .order('message_time', { ascending: true })
+    .limit(10000);
 
   const msgs = messages || [];
   const uniqueUsers = new Set(msgs.map(m => m.user_name).filter(Boolean)).size;
@@ -173,7 +174,8 @@ async function generateSessionReport(token: string, sessionId: string) {
       .from('paid_users')
       .select('user_name, total_coins, last_seen')
       .eq('cast_name', session.cast_name)
-      .in('user_name', usernames.slice(0, 500));
+      .in('user_name', usernames.slice(0, 500))
+      .limit(500);
 
     if (paidUsers && paidUsers.length > 0) {
       const vips = paidUsers.filter(u => u.total_coins >= 5000);

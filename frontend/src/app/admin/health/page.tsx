@@ -265,7 +265,8 @@ export default function HealthPage() {
     try {
       const { data: segData, error } = await sb
         .from('paid_users')
-        .select('cast_name, segment');
+        .select('cast_name, segment')
+        .limit(50000);
 
       if (error) throw error;
 

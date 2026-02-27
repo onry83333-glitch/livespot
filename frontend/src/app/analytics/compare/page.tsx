@@ -66,7 +66,8 @@ export default function CastComparePage() {
           .from('spy_messages')
           .select('cast_name')
           .eq('account_id', accountId)
-          .filter('cast_name', 'not.is', null);
+          .filter('cast_name', 'not.is', null)
+          .limit(50000);
 
         if (fetchErr) throw new Error(fetchErr.message);
         if (data) {
@@ -122,7 +123,7 @@ export default function CastComparePage() {
           query = query.gte('message_time', startDate);
         }
 
-        const { data, error: fetchErr } = await query.order('message_time', { ascending: true });
+        const { data, error: fetchErr } = await query.order('message_time', { ascending: true }).limit(50000);
         if (fetchErr) throw new Error(fetchErr.message);
         const msgs = data || [];
 

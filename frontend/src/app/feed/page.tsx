@@ -142,7 +142,8 @@ export default function FeedPage() {
         .select('*')
         .eq('account_id', selectedAccount)
         .gte('posted_at', since)
-        .order('posted_at', { ascending: false });
+        .order('posted_at', { ascending: false })
+        .limit(5000);
       // Simple analytics from raw data
       const posts = data ?? [];
       const byType: Record<string, number> = {};

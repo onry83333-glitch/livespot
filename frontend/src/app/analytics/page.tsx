@@ -228,7 +228,8 @@ export default function AnalyticsPage() {
       // 応援ユーザー
       const { data: payingData } = await sb.from('paying_users')
         .select('user_name, total_tokens, last_paid, first_paid, tx_count')
-        .eq('account_id', selectedAccount);
+        .eq('account_id', selectedAccount)
+        .limit(50000);
 
       const segs: Record<string, any[]> = { whale: [], regular: [], light: [], free: [] };
       const payingNames = new Set<string>();

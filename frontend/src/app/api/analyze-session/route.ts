@@ -81,7 +81,8 @@ export async function POST(request: NextRequest) {
     .select('message_time, msg_type, user_name, message, tokens, is_vip, metadata')
     .eq('account_id', account_id)
     .eq('session_id', session_id)
-    .order('message_time', { ascending: true });
+    .order('message_time', { ascending: true })
+    .limit(10000);
 
   // --- 3. cast_transcripts 取得（文字起こし） ---
   const { data: transcripts } = await supabase
@@ -91,7 +92,8 @@ export async function POST(request: NextRequest) {
     .eq('cast_name', cast_name)
     .eq('session_id', session_id)
     .eq('processing_status', 'completed')
-    .order('segment_start_seconds', { ascending: true });
+    .order('segment_start_seconds', { ascending: true })
+    .limit(5000);
 
   // --- 4. coin_transactions 取得（配信時間帯 ±マージン） ---
   const { data: coinTx } = await supabase
@@ -102,7 +104,8 @@ export async function POST(request: NextRequest) {
     .gte('date', new Date(new Date(sessionStart).getTime() - 5 * 60000).toISOString())
     .lte('date', new Date(new Date(sessionEnd).getTime() + 30 * 60000).toISOString())
     .gt('tokens', 0)
-    .order('date', { ascending: true });
+    .order('date', { ascending: true })
+    .limit(10000);
 
   // --- 5. タイムラインに統合 ---
   const timeline: TimelineEvent[] = [];

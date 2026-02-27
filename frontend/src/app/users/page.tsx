@@ -64,7 +64,8 @@ export default function UsersPage() {
             .from('spy_messages')
             .select('user_name, tokens, message_time, msg_type')
             .eq('account_id', accountId)
-            .filter('user_name', 'not.is', null);
+            .filter('user_name', 'not.is', null)
+            .limit(50000);
 
           if (fetchErr) throw new Error(fetchErr.message);
           if (!data) { setUsers([]); return; }
