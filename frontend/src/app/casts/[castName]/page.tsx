@@ -3258,6 +3258,12 @@ function CastDetailInner() {
                         disabled={!newScenario.name.trim()}
                         onClick={async () => {
                           if (!accountId || !newScenario.name.trim()) return;
+                          // 重複チェック
+                          const dupName = newScenario.name.trim();
+                          if (scenarios.some(s => s.scenario_name === dupName)) {
+                            alert('同じ名前のシナリオが既に存在します: ' + dupName);
+                            return;
+                          }
                           let config = {};
                           try { config = JSON.parse(newScenario.config); } catch { /* ignore */ }
                           const { error } = await sb.from('dm_scenarios').insert({
@@ -3272,7 +3278,14 @@ function CastDetailInner() {
                             daily_send_limit: 50,
                             min_interval_hours: 24,
                           });
-                          if (error) { alert('作成失敗: ' + error.message); return; }
+                          if (error) {
+                            if (error.code === '23505') {
+                              alert('同じ名前のシナリオが既に存在します');
+                            } else {
+                              alert('作成失敗: ' + error.message);
+                            }
+                            return;
+                          }
                           setScenarioCreating(false);
                           setNewScenario({ name: '', triggerType: 'first_payment', config: '{}' });
                           // リロード
