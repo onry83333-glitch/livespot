@@ -5,8 +5,6 @@ import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 
-const ACCOUNT_ID = '940e7248-1d73-4259-a538-56fdaea9d740';
-
 interface QualityCheck {
   id: string;
   label: string;
@@ -21,18 +19,27 @@ export default function DataQualityPage() {
   const sbRef = useRef(createClient());
   const sb = sbRef.current;
 
+  const [accountId, setAccountId] = useState<string | null>(null);
   const [checks, setChecks] = useState<QualityCheck[]>([]);
   const [running, setRunning] = useState(false);
   const [lastRun, setLastRun] = useState<Date | null>(null);
   const [rpcAvailable, setRpcAvailable] = useState<boolean | null>(null);
 
-  const runChecks = useCallback(async () => {
+  // アカウントIDを動的取得
+  useEffect(() => {
     if (!user) return;
+    sb.from('accounts').select('id').limit(1).single().then(({ data }) => {
+      if (data) setAccountId(data.id);
+    });
+  }, [user, sb]);
+
+  const runChecks = useCallback(async () => {
+    if (!user || !accountId) return;
     setRunning(true);
 
     // Try RPC first
     const { data: rpcResult, error: rpcError } = await sb.rpc('check_spy_data_quality', {
-      p_account_id: ACCOUNT_ID,
+      p_account_id: accountId,
     });
 
     if (!rpcError && rpcResult && typeof rpcResult === 'object') {
@@ -65,7 +72,7 @@ export default function DataQualityPage() {
       const { data: recentMsgs } = await sb
         .from('spy_messages')
         .select('cast_name, message_time, msg_type')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .in('msg_type', ['chat', 'tip'])
         .gte('message_time', oneDayAgo.toISOString())
         .order('cast_name')
@@ -107,7 +114,7 @@ export default function DataQualityPage() {
       const { data: dupMsgs } = await sb
         .from('spy_messages')
         .select('cast_name, message_time, user_name, message')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .gte('message_time', sevenDaysAgo.toISOString())
         .order('message_time', { ascending: false })
         .limit(8000);
@@ -139,7 +146,7 @@ export default function DataQualityPage() {
       const { data: spyCasts } = await sb
         .from('spy_casts')
         .select('cast_name')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .eq('is_active', true);
 
       const staleDetails: string[] = [];
@@ -149,7 +156,7 @@ export default function DataQualityPage() {
         const { data: latestMsgs } = await sb
           .from('spy_messages')
           .select('cast_name, message_time')
-          .eq('account_id', ACCOUNT_ID)
+          .eq('account_id', accountId)
           .gte('message_time', oneDayAgo.toISOString())
           .order('message_time', { ascending: false })
           .limit(5000);
@@ -190,13 +197,13 @@ export default function DataQualityPage() {
       const { data: regCasts } = await sb
         .from('spy_casts')
         .select('cast_name')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .eq('is_active', true);
 
       const { data: ownCasts } = await sb
         .from('registered_casts')
         .select('cast_name')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .eq('is_active', true);
 
       const knownNames = new Set([
@@ -207,7 +214,7 @@ export default function DataQualityPage() {
       const { data: spyNames } = await sb
         .from('spy_messages')
         .select('cast_name')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .gte('message_time', sevenDaysAgo.toISOString())
         .limit(5000);
 
@@ -235,7 +242,7 @@ export default function DataQualityPage() {
       const { count } = await sb
         .from('spy_messages')
         .select('*', { count: 'exact', head: true })
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .gte('message_time', sevenDaysAgo.toISOString())
         .is('session_id', null);
 
@@ -257,13 +264,13 @@ export default function DataQualityPage() {
       const { data: spyCasts } = await sb
         .from('spy_casts')
         .select('cast_name')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .eq('is_active', true);
 
       const { data: msgData } = await sb
         .from('spy_messages')
         .select('cast_name, msg_type, tokens')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .gte('message_time', sevenDaysAgo.toISOString())
         .limit(10000);
 
@@ -310,7 +317,7 @@ export default function DataQualityPage() {
       const { data: spyTips } = await sb
         .from('spy_messages')
         .select('cast_name, message_time')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .eq('msg_type', 'tip')
         .gt('tokens', 0)
         .gte('message_time', sevenDaysAgo.toISOString())
@@ -328,7 +335,7 @@ export default function DataQualityPage() {
       const { data: coinData } = await sb
         .from('coin_transactions')
         .select('cast_name, date')
-        .eq('account_id', ACCOUNT_ID)
+        .eq('account_id', accountId)
         .gte('date', sevenDaysAgo.toISOString())
         .limit(10000);
 
@@ -364,11 +371,11 @@ export default function DataQualityPage() {
     setChecks(results);
     setLastRun(new Date());
     setRunning(false);
-  }, [user, sb]);
+  }, [user, accountId, sb]);
 
   useEffect(() => { runChecks(); }, [runChecks]);
 
-  if (!user) return null;
+  if (!user || !accountId) return null;
 
   const okCount = checks.filter(c => c.status === 'ok').length;
   const warnCount = checks.filter(c => c.status === 'warn').length;

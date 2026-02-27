@@ -523,12 +523,29 @@ async function callOpenAI(systemPrompt: string, userPrompt: string, maxTokens = 
 }
 
 // ============================================================
-// キャスト別デフォルト表示名（DBアクセスなしのフォールバック）
+// キャスト別表示名をDBから取得（cast_personas → registered_casts → castName）
 // ============================================================
-const CAST_DISPLAY_NAMES: Record<string, string> = {
-  Risa_06: 'りさ',
-  hanshakun: 'はんしゃくん',
-};
+async function getCastDisplayName(castName: string): Promise<string> {
+  try {
+    const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    const { data } = await sb
+      .from('cast_personas')
+      .select('display_name')
+      .eq('cast_name', castName)
+      .limit(1)
+      .single();
+    if (data?.display_name) return data.display_name;
+
+    const { data: regCast } = await sb
+      .from('registered_casts')
+      .select('display_name')
+      .eq('cast_name', castName)
+      .limit(1)
+      .single();
+    if (regCast?.display_name) return regCast.display_name;
+  } catch { /* DB接続失敗時はキャスト名をそのまま返す */ }
+  return castName;
+}
 
 // ============================================================
 // POST /api/persona
@@ -566,7 +583,7 @@ export async function POST(req: NextRequest) {
 
     // ── モック: OPENAI_API_KEY 未設定 ──
     if (USE_MOCK_OPENAI) {
-      const displayName = CAST_DISPLAY_NAMES[castName] || castName;
+      const displayName = await getCastDisplayName(castName);
       const mockRes = generateMockDmResponse({
         username,
         segment,
@@ -638,7 +655,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
       const err = e as { message?: string; statusCode?: number };
       // 401（APIキー無効）→ モックにフォールバック
       if (err.statusCode === 502 && err.message?.includes('APIキーが無効')) {
-        const displayName = CAST_DISPLAY_NAMES[castName] || castName;
+        const displayName = await getCastDisplayName(castName);
         const mockRes = generateMockDmResponse({
           username,
           segment,

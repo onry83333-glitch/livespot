@@ -6,16 +6,24 @@ import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import type { SpyCast } from '@/types';
 
-const ACCOUNT_ID = '940e7248-1d73-4259-a538-56fdaea9d740';
-
 const GENRE_PRESETS = ['女性単体', '絡み配信', 'カップル', 'レズ', '3P+', '男性単体'];
 const BENCHMARK_PRESETS = ['新人', '中堅', 'ランカー', 'ベテラン'];
 const CATEGORY_PRESETS = ['人妻', '女子大生', 'ギャル', 'お姉さん', '清楚系', '熟女', 'コスプレ', 'その他'];
 
 export default function SpyCastsPage() {
   const { user } = useAuth();
+  const [accountId, setAccountId] = useState<string | null>(null);
   const [casts, setCasts] = useState<SpyCast[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // アカウントIDを動的取得
+  useEffect(() => {
+    if (!user) return;
+    const supabase = createClient();
+    supabase.from('accounts').select('id').limit(1).single().then(({ data }) => {
+      if (data) setAccountId(data.id);
+    });
+  }, [user]);
 
   // Add form
   const [showForm, setShowForm] = useState(false);
@@ -44,14 +52,14 @@ export default function SpyCastsPage() {
 
   // Fetch spy_casts
   useEffect(() => {
-    if (!user) return;
+    if (!user || !accountId) return;
     setLoading(true);
     const supabase = createClient();
 
     let query = supabase
       .from('spy_casts')
       .select('*')
-      .eq('account_id', ACCOUNT_ID)
+      .eq('account_id', accountId)
       .order('cast_name', { ascending: true });
 
     if (filterActive === 'active') query = query.eq('is_active', true);
@@ -64,7 +72,7 @@ export default function SpyCastsPage() {
       setCasts(data || []);
       setLoading(false);
     });
-  }, [user, filterActive]);
+  }, [user, accountId, filterActive]);
 
   // Filtered by search
   const filteredCasts = casts.filter(c => {
@@ -81,7 +89,7 @@ export default function SpyCastsPage() {
   // Register new cast
   const handleRegister = useCallback(async () => {
     const name = formCastName.trim();
-    if (!name) return;
+    if (!name || !accountId) return;
     setFormSaving(true);
     setFormError(null);
 
@@ -89,7 +97,7 @@ export default function SpyCastsPage() {
     const { data, error } = await supabase
       .from('spy_casts')
       .insert({
-        account_id: ACCOUNT_ID,
+        account_id: accountId,
         cast_name: name,
         display_name: formDisplayName.trim() || null,
         stripchat_url: `https://stripchat.com/${name}`,
@@ -120,7 +128,7 @@ export default function SpyCastsPage() {
     setFormAutoMonitor(false);
     setShowForm(false);
     setFormSaving(false);
-  }, [formCastName, formDisplayName, formCategory, formGenre, formNotes, formAutoMonitor]);
+  }, [accountId, formCastName, formDisplayName, formCategory, formGenre, formNotes, formAutoMonitor]);
 
   // Save edit
   const handleSaveEdit = useCallback(async (castId: number) => {
@@ -208,7 +216,7 @@ export default function SpyCastsPage() {
     setEditScreenshotInterval(cast.screenshot_interval ?? 0);
   };
 
-  if (!user) return null;
+  if (!user || !accountId) return null;
 
   return (
     <div className="space-y-6 anim-fade-up">
