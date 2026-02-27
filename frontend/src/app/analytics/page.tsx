@@ -372,10 +372,13 @@ export default function AnalyticsPage() {
       // Extract unique cast names
       setPlCasts(Array.from(new Set(rows.map(r => r.cast_name))).sort());
     } catch (e: unknown) {
-      if (e instanceof Error && e.message.includes('cast_cost_settings')) {
+      const msg = e && typeof e === 'object' && 'message' in e ? String((e as { message: string }).message) : '';
+      if (msg.includes('cast_cost_settings')) {
         setPlError('コスト設定がありません。設定 → コスト設定タブでキャストのコストを登録してください。');
+      } else if (msg.includes('could not find') || msg.includes('schema cache')) {
+        setPlError('P/L集計関数が未登録です。管理者にマイグレーション 082 の適用を依頼してください。');
       } else {
-        setPlError(e instanceof Error ? e.message : 'データ取得に失敗しました');
+        setPlError(msg || 'データ取得に失敗しました');
       }
       setMonthlyPL([]);
     } finally {
