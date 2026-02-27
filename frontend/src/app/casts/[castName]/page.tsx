@@ -15,7 +15,8 @@ import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 /* ============================================================
    Types
    ============================================================ */
-type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'screenshots' | 'persona' | 'overlap' | 'health' | 'settings';
+// M-6: screenshots タブはデータ0件のため非表示。SPY基盤安定後に再表示
+type TabKey = 'overview' | 'sessions' | 'broadcast' | 'dm' | 'analytics' | 'sales' | 'realtime' | 'persona' | 'overlap' | 'health' | 'settings';
 
 interface CastStatsData {
   total_messages: number;
@@ -121,14 +122,15 @@ interface HourlyPerfItem {
   avg_tokens_per_hour: number;
 }
 
-interface ScreenshotItem {
-  id: string;
-  cast_name: string;
-  session_id: string | null;
-  image_url: string;
-  thumbnail_type: string | null;
-  captured_at: string;
-}
+// M-6: データ0件のため無効化。SPY基盤安定後に復元
+// interface ScreenshotItem {
+//   id: string;
+//   cast_name: string;
+//   session_id: string | null;
+//   image_url: string;
+//   thumbnail_type: string | null;
+//   captured_at: string;
+// }
 
 interface AcquisitionUser {
   user_name: string;
@@ -472,9 +474,9 @@ function CastDetailInner() {
   const [searchExpanded, setSearchExpanded] = useState<string | null>(null);
   const [searchMissesOpen, setSearchMissesOpen] = useState(false);
 
-  // Screenshots
-  const [screenshots, setScreenshots] = useState<ScreenshotItem[]>([]);
-  const [screenshotsLoading, setScreenshotsLoading] = useState(false);
+  // Screenshots — M-6: データ0件のため無効化。SPY基盤安定後に復元
+  // const [screenshots, setScreenshots] = useState<ScreenshotItem[]>([]);
+  // const [screenshotsLoading, setScreenshotsLoading] = useState(false);
 
   // Broadcast analysis
   const [broadcastSessions, setBroadcastSessions] = useState<BroadcastSessionItem[]>([]);
@@ -1687,28 +1689,26 @@ function CastDetailInner() {
   }, [accountId, castName, broadcastSelectedDate, activeTab, sb]);
 
   // ============================================================
-  // Screenshots
+  // Screenshots — M-6: データ0件のため無効化。SPY基盤安定後に復元
   // ============================================================
-  useEffect(() => {
-    if (!accountId || activeTab !== 'screenshots') return;
-    setScreenshotsLoading(true);
-    (async () => {
-      const { data, error } = await sb.from('cast_screenshots')
-        .select('id, cast_name, session_id, image_url, thumbnail_type, captured_at')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .order('captured_at', { ascending: false })
-        .limit(100);
-
-      if (error || !data) {
-        setScreenshotsLoading(false);
-        return;
-      }
-
-      setScreenshots(data as ScreenshotItem[]);
-      setScreenshotsLoading(false);
-    })();
-  }, [accountId, castName, activeTab, sb]);
+  // useEffect(() => {
+  //   if (!accountId || activeTab !== 'screenshots') return;
+  //   setScreenshotsLoading(true);
+  //   (async () => {
+  //     const { data, error } = await sb.from('cast_screenshots')
+  //       .select('id, cast_name, session_id, image_url, thumbnail_type, captured_at')
+  //       .eq('account_id', accountId)
+  //       .eq('cast_name', castName)
+  //       .order('captured_at', { ascending: false })
+  //       .limit(100);
+  //     if (error || !data) {
+  //       setScreenshotsLoading(false);
+  //       return;
+  //     }
+  //     setScreenshots(data as ScreenshotItem[]);
+  //     setScreenshotsLoading(false);
+  //   })();
+  // }, [accountId, castName, activeTab, sb]);
 
   // ============================================================
   // Persona
@@ -5251,69 +5251,7 @@ function CastDetailInner() {
             </div>
           )}
 
-          {/* ============ SCREENSHOTS ============ */}
-          {activeTab === 'screenshots' && (
-            <div className="space-y-4">
-              <div className="glass-card p-4">
-                <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                  スクリーンショット履歴
-                  <span className="text-[10px] px-2 py-0.5 rounded-lg"
-                    style={{ background: 'rgba(56,189,248,0.08)', color: 'var(--accent-primary)' }}>
-                    {screenshots.length} 件
-                  </span>
-                </h3>
-                {screenshotsLoading ? (
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                    {[0,1,2,3].map(i => (
-                      <div key={i} className="rounded-xl overflow-hidden">
-                        <div className="w-full aspect-video animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                        <div className="h-4 mt-2 rounded animate-pulse w-2/3" style={{ background: 'var(--bg-card)' }} />
-                      </div>
-                    ))}
-                  </div>
-                ) : screenshots.length === 0 ? (
-                  <div className="text-center py-8 text-xs" style={{ color: 'var(--text-muted)' }}>
-                    スクリーンショットデータなし。SPY監視中に5分間隔で自動キャプチャされます。
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                    {screenshots.map((ss) => {
-                      return (
-                        <div key={ss.id} className="glass-panel rounded-xl overflow-hidden">
-                          {ss.image_url ? (
-                            <a href={ss.image_url} target="_blank" rel="noopener noreferrer">
-                              <img
-                                src={ss.image_url}
-                                alt={`${ss.cast_name} ${formatJST(ss.captured_at)}`}
-                                className="w-full aspect-video object-cover hover:opacity-80 transition-opacity"
-                                loading="lazy"
-                              />
-                            </a>
-                          ) : (
-                            <div className="w-full aspect-video flex items-center justify-center text-[10px]"
-                              style={{ background: 'rgba(15,23,42,0.6)', color: 'var(--text-muted)' }}>
-                              画像なし
-                            </div>
-                          )}
-                          <div className="p-2">
-                            <p className="text-[10px] truncate flex items-center" style={{ color: 'var(--text-secondary)' }}>
-                              {formatJST(ss.captured_at)}
-                              {ss.thumbnail_type && (
-                                <span className="text-[8px] px-1 py-0.5 rounded ml-1"
-                                  style={{ background: 'rgba(34,197,94,0.1)', color: 'var(--accent-green)' }}>
-                                  {ss.thumbnail_type}
-                                </span>
-                              )}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+          {/* ============ SCREENSHOTS — M-6: データ0件のため非表示。SPY基盤安定後に復元 ============ */}
 
           {/* ============ PERSONA ============ */}
           {activeTab === 'persona' && (
