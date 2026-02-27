@@ -18,6 +18,7 @@ import { createLogger, setLogLevel } from './utils/logger.js';
 import { getAuth } from './auth/index.js';
 import { TriggerEngine } from './triggers/index.js';
 import { evaluateAlerts } from './alerts/index.js';
+import { runCoinSync } from './coin-sync.js';
 
 const log = createLogger('main');
 
@@ -218,7 +219,22 @@ async function main(): Promise<void> {
     }
   }, 5 * 60 * 1000);
 
-  // 9. Start main polling loop
+  // 9. Coin sync (every 2 hours + 起動1分後に初回)
+  const runCoinSyncSafe = async () => {
+    try {
+      await runCoinSync();
+    } catch (err) {
+      log.error('Coin sync failed', err);
+    }
+  };
+
+  // 初回: 起動1分後（DB安定後）
+  setTimeout(() => runCoinSyncSafe(), 60 * 1000);
+  // 定期: 2時間ごと
+  setInterval(() => runCoinSyncSafe(), 2 * 60 * 60 * 1000);
+  log.info('Coin sync scheduled (2h interval)');
+
+  // 10. Start main polling loop
   log.info('Starting collector loop...');
   startCollector(triggerEngine);
 }
