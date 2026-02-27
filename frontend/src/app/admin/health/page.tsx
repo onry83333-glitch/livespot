@@ -42,6 +42,15 @@ const SYNC_TYPE_ICONS: Record<string, string> = {
   screenshot: '📸',
 };
 
+/** Supabase PostgrestError は Error インスタンスではないため .message を安全に取り出す */
+function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'object' && e !== null && 'message' in e) {
+    return String((e as { message: unknown }).message);
+  }
+  return String(e);
+}
+
 /* ============================================================
    Page
    ============================================================ */
@@ -114,7 +123,7 @@ export default function HealthPage() {
         label: 'コイントランザクション蓄積状況',
         icon: '💰',
         status: 'error',
-        summary: `エラー: ${e instanceof Error ? e.message : String(e)}`,
+        summary: `エラー: ${getErrorMessage(e)}`,
         details: [],
       });
     }
@@ -154,7 +163,7 @@ export default function HealthPage() {
         label: 'spy_messages オーバーフロー検出',
         icon: '🔢',
         status: 'error',
-        summary: `エラー: ${e instanceof Error ? e.message : String(e)}`,
+        summary: `エラー: ${getErrorMessage(e)}`,
         details: [],
       });
     }
@@ -202,7 +211,7 @@ export default function HealthPage() {
         label: 'DM送信 sent_via 分布',
         icon: '📨',
         status: 'error',
-        summary: `エラー: ${e instanceof Error ? e.message : String(e)}`,
+        summary: `エラー: ${getErrorMessage(e)}`,
         details: [],
       });
     }
@@ -256,7 +265,7 @@ export default function HealthPage() {
         label: 'spy_viewers 最新データ',
         icon: '👁',
         status: 'error',
-        summary: `エラー: ${e instanceof Error ? e.message : String(e)}`,
+        summary: `エラー: ${getErrorMessage(e)}`,
         details: [],
       });
     }
@@ -306,7 +315,7 @@ export default function HealthPage() {
         label: 'paid_users セグメント分布',
         icon: '🎯',
         status: 'error',
-        summary: `エラー: ${e instanceof Error ? e.message : String(e)}`,
+        summary: `エラー: ${getErrorMessage(e)}`,
         details: [],
       });
     }
