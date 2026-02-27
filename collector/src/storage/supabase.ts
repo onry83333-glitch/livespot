@@ -147,7 +147,7 @@ export async function openSession(
   castName: string,
   sessionId: string,
   startedAt: string,
-): Promise<void> {
+): Promise<string> {
   const sb = getSupabase();
   const { error } = await sb.from('sessions').insert({
     session_id: sessionId,
@@ -157,15 +157,29 @@ export async function openSession(
     started_at: startedAt,
   });
   if (error) {
-    // 重複の場合は無視（deterministic session_id で再起動時に発生しうる）
+    // 部分ユニーク制約 idx_sessions_one_active_per_cast で弾かれた場合、
+    // 既存のアクティブセッションIDを返す（複数インスタンス起動対策）
     if (error.code === '23505') {
-      log.debug(`Session already exists: ${sessionId}`);
+      const { data: existing } = await sb
+        .from('sessions')
+        .select('session_id')
+        .eq('cast_name', castName)
+        .eq('account_id', accountId)
+        .is('ended_at', null)
+        .limit(1)
+        .single();
+      if (existing) {
+        log.info(`Session already active for ${castName}, reusing ${existing.session_id}`);
+        return existing.session_id;
+      }
+      log.debug(`Session duplicate but no active found: ${sessionId}`);
     } else {
       log.error(`Failed to open session ${sessionId}`, error);
     }
   } else {
     log.info(`Session opened: ${castName} (${sessionId})`);
   }
+  return sessionId;
 }
 
 export async function closeSession(

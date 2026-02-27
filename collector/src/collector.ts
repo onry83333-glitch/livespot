@@ -258,8 +258,12 @@ async function pollStatus(state: CastState): Promise<void> {
     log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId}, source=${target.source})`);
 
     // sessions テーブルにレコード作成（自社・他社共通）
-    openSession(target.accountId, target.castName, state.sessionId, startTime)
-      .catch((err) => log.error(`Session open error [${target.source}]: ${err}`));
+    // 部分ユニーク制約で弾かれた場合、既存セッションIDを使う
+    try {
+      state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime);
+    } catch (err) {
+      log.error(`Session open error [${target.source}]: ${err}`);
+    }
 
     enqueue('spy_messages', {
       account_id: target.accountId,
@@ -344,8 +348,12 @@ async function pollStatus(state: CastState): Promise<void> {
     log.info(`${target.castName}: already online (${result.status}), connecting WS (session=${state.sessionId}, source=${target.source})`);
 
     // sessions テーブルにレコード作成（起動時に既にオンラインのキャスト、自社・他社共通）
-    openSession(target.accountId, target.castName, state.sessionId, startTime)
-      .catch((err) => log.error(`Session open error (first poll) [${target.source}]: ${err}`));
+    // 部分ユニーク制約で弾かれた場合、既存セッションIDを使う
+    try {
+      state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime);
+    } catch (err) {
+      log.error(`Session open error (first poll) [${target.source}]: ${err}`);
+    }
 
     state.wsClient = new StripchatWsClient(
       target.castName,
