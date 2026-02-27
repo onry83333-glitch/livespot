@@ -338,6 +338,7 @@ async function buildUserPrompt(
         .from('paid_users')
         .select('total_coins, last_seen')
         .eq('user_name', userName)
+        .eq('cast_name', castName)
         .single();
 
       const segment = paidUser

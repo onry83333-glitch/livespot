@@ -172,7 +172,8 @@ async function generateSessionReport(token: string, sessionId: string) {
     const { data: paidUsers } = await supabase
       .from('paid_users')
       .select('user_name, total_coins, last_seen')
-      .in('user_name', usernames.slice(0, 500)); // RLS制限内に収める
+      .eq('cast_name', session.cast_name)
+      .in('user_name', usernames.slice(0, 500));
 
     if (paidUsers && paidUsers.length > 0) {
       const vips = paidUsers.filter(u => u.total_coins >= 5000);
@@ -366,11 +367,11 @@ export async function POST(req: NextRequest) {
 
   // 2. リクエストボディ取得
   const body = await req.json();
-  const { session_id, prompt, systemPrompt } = body as {
+  const { session_id, prompt } = body as {
     session_id?: string;
     prompt?: string;
-    systemPrompt?: string;
   };
+  // NOTE: systemPrompt はセキュリティ上の理由で受け付けない（プロンプトインジェクション防止）
 
   // 3. session_id指定 → セッションベースFBレポート（新）
   if (session_id) {
@@ -391,7 +392,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await callClaude(prompt, systemPrompt);
+    const result = await callClaude(prompt);
     return NextResponse.json(result);
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };

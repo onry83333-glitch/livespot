@@ -88,14 +88,15 @@ export default function AlertsPage() {
   }, [user, sb]);
 
   // paid_usersルックアップ
-  const lookupUser = useCallback(async (userName: string): Promise<{ total_coins: number; user_level: number; last_payment_date: string | null }> => {
+  const lookupUser = useCallback(async (userName: string, castName?: string): Promise<{ total_coins: number; user_level: number; last_payment_date: string | null }> => {
     if (!accountId) return { total_coins: 0, user_level: 0, last_payment_date: null };
-    const { data } = await sb
+    let query = sb
       .from('paid_users')
       .select('total_coins, user_level, last_payment_date')
       .eq('account_id', accountId)
-      .eq('user_name', userName)
-      .maybeSingle();
+      .eq('user_name', userName);
+    if (castName) query = query.eq('cast_name', castName);
+    const { data } = await query.maybeSingle();
     return data || { total_coins: 0, user_level: 0, last_payment_date: null };
   }, [sb, accountId]);
 
@@ -115,7 +116,7 @@ export default function AlertsPage() {
     const currentTriggers = loadTriggers();
     const enriched = await Promise.all(
       data.map(async (row) => {
-        const info = await lookupUser(row.user_name || '');
+        const info = await lookupUser(row.user_name || '', row.cast_name);
         return {
           id: row.id,
           user_name: row.user_name || '匿名',
@@ -158,7 +159,7 @@ export default function AlertsPage() {
           const row = payload.new as { id: number; account_id: string; msg_type: string; user_name: string; cast_name: string; message_time: string };
           if (row.msg_type !== 'enter') return;
 
-          const info = await lookupUserRef.current(row.user_name || '');
+          const info = await lookupUserRef.current(row.user_name || '', row.cast_name);
           const alert: EnterAlert = {
             id: row.id,
             user_name: row.user_name || '匿名',
@@ -185,16 +186,18 @@ export default function AlertsPage() {
   }, [accountId]); // sb はシングルトン、lookupUser/triggersはRefで参照
 
   // ユーザー詳細を取得
-  const handleSelectUser = useCallback(async (userName: string) => {
+  const handleSelectUser = useCallback(async (userName: string, castName?: string) => {
     setSelectedName(userName);
     if (!accountId) return;
 
+    let paidQuery = sb.from('paid_users')
+      .select('user_name, total_coins, user_level, last_payment_date, created_at')
+      .eq('account_id', accountId)
+      .eq('user_name', userName);
+    if (castName) paidQuery = paidQuery.eq('cast_name', castName);
+
     const [paidRes, dmRes] = await Promise.all([
-      sb.from('paid_users')
-        .select('user_name, total_coins, user_level, last_payment_date, created_at')
-        .eq('account_id', accountId)
-        .eq('user_name', userName)
-        .maybeSingle(),
+      paidQuery.maybeSingle(),
       sb.from('dm_send_log')
         .select('queued_at')
         .eq('account_id', accountId)
@@ -337,7 +340,7 @@ export default function AlertsPage() {
               const isSelected = selectedName === a.user_name;
               return (
                 <div key={a.id}
-                  onClick={() => handleSelectUser(a.user_name)}
+                  onClick={() => handleSelectUser(a.user_name, a.cast_name)}
                   className={`p-4 rounded-xl transition-all duration-200 cursor-pointer ${
                     isSelected ? 'border-2' : 'glass-panel hover:bg-white/[0.03]'
                   }`}
