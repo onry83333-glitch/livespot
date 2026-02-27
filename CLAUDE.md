@@ -6,6 +6,90 @@
 
 ---
 
+## ワークフローのオーケストレーション
+
+### 0. 運用ルール
+- すべて日本語で回答する
+- 技術用語は使わない（使う場合は必ず言い換えを先に置く）
+- 作業はゴールまで自走する。途中で止まるな
+- エラーに遭遇したら、自分で原因を特定して直す
+- YUUTAに手動作業をさせない
+- ポーラー経由（--printモード）の場合は確認なしで自走する
+
+### 1. Planノード（デフォルト）
+- 3ステップ以上の作業はまず計画を立てる
+- おかしくなったらすぐに止まって再計画（押し切らない）
+- plan モードは「作る」だけでなく「確かめる手順」にも使う
+- 曖昧さを減らすため、最初に詳細な仕様を書く
+
+### 2. サブエージェント戦略（役割分担）
+- 調査・探索・並列作業は別の担当に任せる
+- 複雑な問題は担当を増やして同時に進める
+- 1担当につき1タスク（同時に抱えない）
+
+### 3. 自己改善ループ
+- 修正が入ったらその学びを tasks/lessons.md に記録
+- 同じミスを防ぐためのルールを書く
+- セッション開始時に関係する学びを見直す
+
+### 4. 完了前の検証
+- 動くことを証明するまで完了扱いにしない
+- npm run build 成功が完了の最低条件
+- 自問: 「経験豊富な人が見てもOKと言えるか？」
+
+### 5. エレガンス要求
+- 手順が多い変更では立ち止まり、もっとスッキリした方法はないか問う
+- 修正が無理やり感あるなら、自然な解決にする
+- 単純で明らかな修正は深追いしない（やりすぎない）
+- 提出前に自分で厳しく見直す
+
+### 6. 自律的バグ修正
+- バグ報告を受けたらそのまま直しに行く（手取り足取りを求めない）
+- 「どこが変/何が起きているか」を示し、その上で解決する
+- YUUTAに余計な切り替え作業を要求しない
+- 指示されなくても、失敗している自動チェックを直しに行く
+
+### 7. コア原則
+- シンプル最優先: 最小限の手数で最大効果
+- 怠けない: 根本原因を見つける。一時しのぎ禁止
+- 最小影響: 必要な箇所だけ触る。新しい問題を持ち込まない
+
+### 8. 安全ルール
+- 既存ファイルの上書き前にバックアップを作成（.bak）
+- 削除系コマンドは原則実行しない（settings.local.jsonで物理ブロック済み）
+- パッケージ追加前に何を・なぜ・どこにを説明
+- 不明なコマンドは実行前に日本語で説明
+
+### 9. DB絶対ルール（SLS固有）
+- paid_usersのクエリにはcast_name条件必須
+- coin_transactionsは tokensカラムで集計（amountは使うな）
+- 2025-02-15以降のデータのみ使用
+- 「課金」→「応援」表記統一
+
+### 10. タスク管理
+1. まず計画: チェックできる項目で plan を tasks/todo.md に書く
+2. 計画の確認: 実装を始める前にチェックイン
+3. 進捗の追跡: 進めながら項目を完了にしていく
+4. 変更の説明: 各ステップで高レベルの要約を書く
+5. 結果の文書化: tasks/todo.md にレビューセクションを追加
+6. 学びの記録: 修正が入った後に tasks/lessons.md を更新
+
+### 11. ポーラー経由の安全ルール
+- git pushは絶対に実行しない。コミットまで。
+- SQLマイグレーションはファイル作成+コミットまで。Supabaseへの適用はしない。
+- SQLマイグレーションファイルには必ずROLLBACK手順をコメントで含めること。
+- 3ファイル以上の変更が必要な場合、まず変更計画を出力して実行しない。
+- .envファイルは読み取りのみ。編集禁止。
+- RPCの引数を変える場合、呼び出し元のフロントエンドもセットで修正すること。
+
+### 12. タスク完了時の記録義務
+- タスク完了時、成果レポートをNotionタスクページの本文に必ず記録すること
+- Telegram通知だけでは不可。Notionが正式な記録先
+- 調査タスク: 発見事項・原因・修正方針を記録
+- 修正タスク: 変更ファイル一覧・変更内容・ビルド結果を記録
+
+---
+
 ## 技術スタック
 | レイヤー | 技術 | パス |
 |---|---|---|
@@ -663,14 +747,24 @@ claude
 | Stripchat API統合レイヤー | ✅ 完了 |
 | セッション詳細強化（コインAPI並列表示+タイムライン） | ✅ 完了 |
 
-### Phase 4: プロダクション準備 — 🚧 実装中（進捗 85%）
+### Phase 4: プロダクション準備 — 🚧 実装中（進捗 45%）
 | タスク | 状態 |
 |---|---|
-| 本番デプロイ（Vercel + Cloud Run + Supabase） | 未着手 |
+| 本番デプロイ — Vercelフロントエンド | ✅ 完了（livespot-rouge.vercel.app） |
+| 本番デプロイ — Cloud Run バックエンド | 未着手 |
+| Collector常駐プロセス化（WebSocket + バッチINSERT） | ✅ 完了 |
+| P0-6: Collector SPY自動取得パイプライン（API直叩き） | ✅ 完了（12ファイル/2,239行 TypeScript） |
+| DM API直叩き高速送信（15通/分、5倍高速化） | ✅ 完了（Migration 069） |
+| Playwright E2Eテスト自動化（16 RPC疎通 + 7 E2E全合格） | ✅ 完了 |
+| P0-1: レベニューシェア自動計算（RPC + UI） | ✅ 完了 |
+| P0-2: キャスト登録UI（SQL直打ち解消） | 🔜 Next |
+| P0-3: 品質改善バッチ（ErrorBoundary+404+loading+空データ） | 🔜 Next |
+| P0-4: テストデータ削除UI（campaignプレフィックス自動付与） | 🔜 Next |
+| P0-5: DM送信安全機構強化（1日上限/24h重複防止/campaign制限） | 🔜 Next |
+| P0-7: SPYデータ品質管理自動化（欠損/重複/鮮度検出→Telegram） | 🔜 Next |
+| API Routes認証追加（NextAuth session検証） | 未着手 |
 | Stripe決済連携（プラン管理、課金） | 未着手 |
 | Chrome Web Store 公開 | 未着手 |
-| 二重送信防止 | 未着手 |
-| ブラックリスト機能 | 未着手 |
 | CORS本番ドメイン限定 | 未着手 |
 | Chrome拡張メモリリーク対策 | 未着手 |
 | Backend例外処理改善 | 未着手 |
@@ -679,6 +773,21 @@ claude
 ---
 
 ## Recent Changes
+
+### [2026-02-25] P0-6 Collector SPY + Crawler v3 + DM一斉送信
+
+- P0-6: Collector SPY自動取得パイプライン完成 — 12ファイル/2,239行 TypeScript（Centrifugo WebSocket + REST API + Supabase バッチINSERT）
+- Context Crawler v3: Notion↔CLAUDE.md 逆同期+差分レポート+OpenClaw統合（4_reverse_sync.py + 5_diff_report.py）
+- DM一斉送信 2,969件実行（hanshakun: C_vip 636 + D_regular 1,951 + E_churned 323 + B_whale 59）
+- Chrome拡張 host_permissions に livespot-rouge.vercel.app 追加
+
+### [2026-02-24] DM API直叩き高速送信 + E2Eテスト全合格
+
+- DM API直叩き高速送信: executeScript(world:MAIN)方式、DOM方式20秒/通→API方式4秒/通（5倍高速化）、15通/分達成
+- CSRF取得: window.__logger.kibanaLogger.api.csrfParams、myUserId=AMP cookie、targetUserId=DB解決
+- Chrome拡張 v2.11.0+、Migration 069（dm_cleanup_and_dedup）適用
+- Playwright E2Eテスト自動化: 16 RPC疎通 + 7 E2E全合格、1.1分完了、スクリーンショット14枚
+- 5不具合自動修正（dm_triggers.enabled→is_active、カラム名不一致等）
 
 ### [2026-02-24] SPY集計UI・トレンド分析
 
@@ -852,11 +961,103 @@ claude
 
 ## 次のタスク — Phase 4 残タスク
 
-1. **WebSocket直接監視PoC** — Node.jsからStripchat WebSocket接続テスト（docs/stripchat-websocket-protocol.md参照）
-2. **API Routes認証追加** — transcribe/screenshot/analyze-session/persona に Bearer token検証
-3. **DMシナリオエンジン定期実行基盤** — Chrome拡張 or cron でステップ進行を自動実行
-4. **本番デプロイ** — Vercel（フロントエンド）+ Cloud Run（バックエンド）+ Supabase本番
-5. **二重送信防止** — dm_send_log で user_name + campaign の重複チェック
-6. **CORS・セキュリティ強化** — 本番ドメイン限定、Backend例外処理改善
-7. **Stripe決済連携** — プラン管理、課金フロー
-8. **テストDMデータ削除** — dm_send_log の test/bulk キャンペーン削除（SQL確認待ち）
+1. **P0-2: キャスト登録UI** — spy_castsへのキャスト追加・編集UI（/settings/castsページ）
+2. **P0-3: 品質改善バッチ** — ErrorBoundary+404+loading+空データ 全ページ統一品質向上
+3. **P0-4: テストデータ削除UI** — dm_send_logテストデータ削除UI + campaignに`test`プレフィックス自動付与
+4. **P0-5: DM送信安全機構強化** — 1日上限/同一ユーザー24h重複防止/campaign制限（API高速送信対応の安全弁）
+5. **P0-7: SPYデータ品質管理自動化** — P0-6完了後。欠損/重複/ギャップ/鮮度自動検出→alerts+Telegram
+6. **API Routes認証追加** — transcribe/screenshot/analyze-session/persona に Bearer token検証
+7. **Cloud Runバックエンドデプロイ** — FastAPI本番環境（Vercelフロントは済）
+8. **CORS・セキュリティ強化** — 本番ドメイン限定、Backend例外処理改善
+9. **Stripe決済連携** — プラン管理、課金フロー
+
+---
+
+## 品質監査レポート [2026-02-25] — 自律実行
+
+### 監査概要
+| 深刻度 | 件数 | 主な問題 |
+|---|---|---|
+| **Critical** | 4 | CORS wildcard+credentials / RLS全バイパス / DM batch所有権チェック漏れ / AIプロンプトインジェクション |
+| **High** | 6 | テンプレ削除・DM更新・セッション読取の認可欠如 / Screenshot SSRF / re.match monkey-patch競合 / user-scoped client RLS問題 |
+| **Medium** | 10 | env変数チェック不足 / コード重複 / レート制限無効 / 入力長制限なし / フィールドインジェクション / SPY認可欠如 |
+| **Low** | 10 | ハードコード値 / ESLint抑制 / エラー握りつぶし / 認証パターン不統一 / ページネーション欠如 |
+
+### データ整合性
+- **禁止データ（2/15以前）**: 0件（クリーン）
+- **coin_transactions重複**: 4件（ticketShow、おそらく正常）
+- **DM二重送信**: 0件（dedup正常動作）
+- **負数トークン**: 0件（4層防御が機能）
+- **paid_users NULLセグメント**: 3,835名（28.4%）→ `refresh_segments` RPC実行が急務
+- **DMトリガー送信**: 100%エラー（6/6失敗）→ trigger送信パスに問題
+- **SPY監視ギャップ**: 2/16, 2/18のデータ完全欠損。2/24は5件のみ（通常3,000-9,000件/日）
+- **sessions.peak_viewers**: 常に0（SPY監視パイプラインからの更新が機能していない）
+- **dm_scenarios重複名**: 3件（初課金お礼/離脱防止(7日)/来訪フォロー が各2件）
+- **spy_castsメタデータ**: 21件中19件がnull
+
+### Critical修正（即時対応が必要）
+
+**C-1: CORS設定** `backend/main.py:27-33`
+```python
+# 現状: allow_origins=["*"] + allow_credentials=True
+# 修正: allow_origins=get_settings().cors_origins.split(",")
+```
+
+**C-2: RLS全面バイパス** `backend/routers/*.py`
+全ルートが `get_supabase_admin()` を使用。`get_supabase_for_user` もservice role keyで作成されておりRLS無効の可能性。全エンドポイントに所有権チェック追加が必要。
+
+**C-3: DM Batch所有権チェック漏れ** `frontend/src/app/api/dm/batch/route.ts:30-36`
+リクエストbodyの `account_id` に対する所有権検証なし。他ユーザーのアカウントでDM一括送信が可能。
+
+**C-4: AIレポートPromptインジェクション** `frontend/src/app/api/ai-report/route.ts:369-394`
+ユーザー提供の `systemPrompt` をそのままClaude APIに渡している。systemPromptパラメータを除去すべき。
+
+### 機能発火元マッピング
+| 機能 | Chrome拡張 | SLS API | Collector | 状態 | 問題点 |
+|---|---|---|---|---|---|
+| コイン同期 | alarm(6h/配信後/earnings) | POST /sync/coins | - | WORKING | なし |
+| DM送信(単発) | dm_executor.js DOM | POST /api/dm/send | - | WORKING | dm_api_sender.jsはスタブ化 |
+| DM一括送信 | queue polling | POST /api/dm/batch | - | WORKING | 所有権チェック欠如(C-3) |
+| SPY(チャット) | content_spy.js DOM | POST /spy/messages | WebSocket Centrifugo | WORKING | GC追跡SW再起動で消失 |
+| SPY(視聴者) | viewerMembers alarm | - | REST polling | PARTIAL | JWT期限切れで失敗/個別UPSERT遅い |
+| サムネイル取得 | spy-screenshot alarm(1min) | GET /api/screenshot | - | WORKING | 2テーブル分離(screenshots vs cast_screenshots) |
+| 名簿同期 | FETCH_PAYING_USERS | POST /sync/csv | - | WORKING | 複数ソースでデータ競合の可能性 |
+| セグメント算出 | - | RPC + inline計算 | - | WORKING | データソース不一致(spy_messages vs paid_users) |
+| 配信状態検出 | spyAutoPatrol alarm(3min) | - | REST polling | WORKING | Cloudflare 403の可能性 |
+| リアルタイム表示 | - | Supabase Realtime | - | WORKING | サーバー側フィルタなし/2000件上限 |
+| 文字起こし | content_stt.js audio capture | POST /api/transcribe | - | PARTIAL | 2テーブル分離/GPU or OPENAI_API_KEY必要 |
+| Persona Agent | fallback templates | GET/POST/PUT /api/persona | - | WORKING | なし（3段フォールバック完備） |
+| AI分析レポート | - | POST /api/ai-report | - | WORKING | systemPromptインジェクション(C-4) |
+| 配信レビュー | - | POST /api/analyze-session | - | WORKING(Phase1) | ルールベースのみ/AI未統合 |
+
+### 「名簿同期 取得失敗」の原因
+1. **JWT期限切れ**: Stripchat APIは認証済みセッションが必要。`stripchat_sessions`の認証情報が期限切れになると401/403が返る
+2. **userId解決失敗**: `syncCastName`のフォールバックチェーンで`registered_casts`が見つからない場合
+3. **Cloudflare WAFブロック**: 短時間に大量リクエストで403ブロック
+4. **ページネーション中断**: API側が途中でエラーを返すと部分データのみ取得
+修正案: リトライロジック追加、JWT事前チェック・自動リフレッシュ、`refresh_paying_users` RPCによる補完
+
+### 不要機能・外すべきもの
+- `dm_api_sender.js` — v3.0でスタブ化済み。ロジックは全てbackground.jsに移行
+- `api.ts.bak` — バックアップファイルがリポジトリに残存
+- `backend/collector/` (Python版) — Node.js版collectorと機能重複。統一すべき
+- 空テーブル: `dm_templates`(0行), `broadcast_scripts`(0行), `ai_reports`(0行), `audio_recordings`(0行)
+
+### 修正プラン（優先度×工数）
+| 優先度 | 修正項目 | 工数 |
+|---|---|---|
+| P0 | CORS設定修正（config.pyのcors_originsを使用） | 5分 |
+| P0 | DM batch所有権チェック追加 | 15分 |
+| P0 | AI Report systemPrompt除去 | 5分 |
+| P0 | Backend全ルートに所有権チェック追加 | 2時間 |
+| P1 | Screenshot GET認証追加 or model_id検証 | 30分 |
+| P1 | config.py monkey-patch除去 | 1時間 |
+| P1 | refresh_segments RPC実行（3,835名のNULLセグメント解消） | 5分 |
+| P1 | DMトリガーパイプライン100%エラーの原因調査・修正 | 1-2時間 |
+| P2 | 認証パターン統一（3パターン→1パターン） | 2時間 |
+| P2 | DM Batch maxDuration設定 + バックグラウンドジョブ化 | 2時間 |
+| P2 | 重複コード統合（getSegment, callClaude） | 30分 |
+| P3 | 空テーブル整理・テーブル統合（screenshots統合） | 1時間 |
+
+### Notionレポート
+https://www.notion.so/312a72d9e03b819ebc70e99d748b9ac2
