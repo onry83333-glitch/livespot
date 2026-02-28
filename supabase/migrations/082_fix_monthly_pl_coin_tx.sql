@@ -121,6 +121,9 @@ $$ LANGUAGE SQL STABLE;
 -- ============================================================
 -- 2. get_session_pl: coin_transactions ベース
 -- ============================================================
+DROP FUNCTION IF EXISTS get_monthly_pl(uuid, integer);
+DROP FUNCTION IF EXISTS get_session_pl(uuid,text,text,integer);
+
 CREATE OR REPLACE FUNCTION get_session_pl(
   p_account_id UUID,
   p_session_id TEXT DEFAULT NULL,
@@ -146,7 +149,7 @@ CREATE OR REPLACE FUNCTION get_session_pl(
 ) AS $$
   WITH session_coins AS (
     SELECT
-      s.session_id,
+      s.session_id::TEXT,
       s.cast_name,
       s.started_at,
       s.ended_at,
@@ -162,7 +165,7 @@ CREATE OR REPLACE FUNCTION get_session_pl(
       ), COALESCE(s.total_tokens, 0))::BIGINT AS session_tokens
     FROM sessions s
     WHERE s.account_id = p_account_id
-      AND (p_session_id IS NULL OR s.session_id = p_session_id)
+      AND (p_session_id IS NULL OR s.session_id::TEXT = p_session_id)
       AND (p_cast_name IS NULL OR s.cast_name = p_cast_name)
       AND s.started_at >= NOW() - (p_days || ' days')::INTERVAL
   )
