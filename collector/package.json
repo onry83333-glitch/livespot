@@ -9,7 +9,8 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "coin-sync": "tsx src/test-coin-sync.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",

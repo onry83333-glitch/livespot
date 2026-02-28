@@ -91,7 +91,11 @@ async function refreshCookiesViaPlaywright(
   try {
     browser = await chromium.launch({
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+      ],
     });
 
     const context = await browser.newContext({
@@ -100,19 +104,45 @@ async function refreshCookiesViaPlaywright(
       locale: 'ja-JP',
     });
 
-    await context.addInitScript("Object.defineProperty(navigator, 'webdriver', { get: () => false });");
+    await context.addInitScript(`
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      delete navigator.__proto__.webdriver;
+    `);
 
     const page = await context.newPage();
 
-    // ログインページ
-    await page.goto('https://stripchat.com/login', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    // ログインページ（Cloudflare challenge対応で長めのタイムアウト）
+    await page.goto('https://stripchat.com/login', { waitUntil: 'networkidle', timeout: 45_000 });
 
-    // 年齢確認突破
+    // Cloudflare challenge待ち（自動で通過する場合5-15秒）
+    await page.waitForTimeout(3000);
+
+    // 年齢確認突破（複数パターン対応）
     try {
-      const ageBtn = await page.$('button:has-text("18")');
-      if (ageBtn) await ageBtn.click();
-      await page.waitForTimeout(2000);
+      for (const sel of [
+        'button:has-text("18")',
+        'button:has-text("I am 18")',
+        'button:has-text("Enter")',
+        '[data-testid="age-gate-confirm"]',
+        '.age-gate button',
+      ]) {
+        const ageBtn = await page.$(sel);
+        if (ageBtn && await ageBtn.isVisible()) {
+          await ageBtn.click();
+          log.info(`[${accountId}] 年齢確認突破 (${sel})`);
+          await page.waitForTimeout(2000);
+          break;
+        }
+      }
     } catch { /* no gate */ }
+
+    // ログインフォームが表示されるまで待つ
+    try {
+      await page.waitForSelector('input[type="password"]', { timeout: 10_000 });
+    } catch {
+      log.warn(`[${accountId}] ログインフォームが見つからない — URL: ${page.url()}`);
+      try { await page.screenshot({ path: 'docs/playwright-coin-no-form.png' }); } catch { /* */ }
+    }
 
     // ログインフォーム
     for (const sel of ['input[name="login"]', 'input[name="username"]', 'input[type="text"]']) {
@@ -128,13 +158,22 @@ async function refreshCookiesViaPlaywright(
     const submitBtn = await page.$('button[type="submit"]');
     if (submitBtn) await submitBtn.click();
 
+    // ログイン完了待ち（ナビゲーション or cookie出現 で判定）
     try {
-      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15_000 });
+      await Promise.race([
+        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }),
+        page.waitForFunction(
+          () => document.cookie.includes('stripchat_com_userId'),
+          { timeout: 20_000 },
+        ),
+      ]);
     } catch {
+      // ナビゲーションもcookieも検出できなかった → 追加待ち
+      log.warn(`[${accountId}] ログイン応答遅延 — 追加5秒待機`);
       await page.waitForTimeout(5000);
     }
 
-    // Cookie取得
+    // Cookie取得（stripchat.comドメインのみ）
     const cookies = await context.cookies('https://stripchat.com');
     const cookiesJson: Record<string, string> = {};
     for (const c of cookies) {
@@ -143,7 +182,7 @@ async function refreshCookiesViaPlaywright(
 
     const userIdFromCookie = cookiesJson['stripchat_com_userId'];
     if (!userIdFromCookie) {
-      log.warn(`[${accountId}] Playwrightログイン後もuserIdなし — ログイン失敗の可能性`);
+      log.warn(`[${accountId}] Playwrightログイン後もuserIdなし — URL: ${page.url()}`);
       try { await page.screenshot({ path: 'docs/playwright-coin-login-fail.png' }); } catch { /* */ }
       return null;
     }
