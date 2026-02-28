@@ -80,6 +80,26 @@ async function refreshSupabaseToken() {
 }
 
 // ============================================================
+// Token Helpers
+// ============================================================
+function isTokenExpired(token) {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    // 30秒のマージンを持たせる
+    return payload.exp * 1000 < Date.now() + 30000;
+  } catch {
+    return true;
+  }
+}
+
+async function forceLogout() {
+  await chrome.storage.local.remove([
+    'access_token', 'refresh_token', 'logged_in', 'user_email', 'user_id',
+  ]);
+  showLogin();
+}
+
+// ============================================================
 // UI State
 // ============================================================
 function showLogin() {
@@ -110,16 +130,27 @@ function hideError() {
 // ============================================================
 async function fetchAccountsFromSupabase() {
   const data = await chrome.storage.local.get(['access_token']);
-  if (!data.access_token) return [];
+  if (!data.access_token) return null; // null = 認証切れ
+
+  // トークン期限切れなら先にリフレッシュ
+  let token = data.access_token;
+  if (isTokenExpired(token)) {
+    const refreshed = await refreshSupabaseToken();
+    if (!refreshed) return null; // null = 認証切れ
+    const d2 = await chrome.storage.local.get(['access_token']);
+    token = d2.access_token;
+  }
+
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/accounts?select=id,account_name`, {
       headers: {
         'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${data.access_token}`,
+        'Authorization': `Bearer ${token}`,
       },
     });
     if (!res.ok) {
       if (res.status === 401) {
+        // リフレッシュ再試行
         const refreshed = await refreshSupabaseToken();
         if (refreshed) {
           const d2 = await chrome.storage.local.get(['access_token']);
@@ -131,6 +162,7 @@ async function fetchAccountsFromSupabase() {
           });
           if (retry.ok) return retry.json();
         }
+        return null; // null = 認証切れ
       }
       return [];
     }
@@ -143,6 +175,13 @@ async function fetchAccountsFromSupabase() {
 
 async function loadAccounts() {
   const accounts = await fetchAccountsFromSupabase();
+
+  // null = 認証切れ → ログイン画面に戻す
+  if (accounts === null) {
+    await forceLogout();
+    return;
+  }
+
   accountSelect.innerHTML = '<option value="">選択してください</option>';
   accounts.forEach((acc) => {
     const opt = document.createElement('option');
@@ -216,13 +255,17 @@ async function init() {
   ]);
 
   if (data.access_token || data.logged_in) {
-    if (!data.access_token && data.refresh_token) {
+    // トークンが無い or 期限切れ → リフレッシュ試行
+    const needsRefresh = !data.access_token || isTokenExpired(data.access_token);
+    if (needsRefresh && data.refresh_token) {
       const refreshed = await refreshSupabaseToken();
       if (!refreshed) {
-        await chrome.storage.local.remove(['logged_in']);
-        showLogin();
+        await forceLogout();
         return;
       }
+    } else if (needsRefresh && !data.refresh_token) {
+      await forceLogout();
+      return;
     }
 
     showDashboard();
@@ -358,6 +401,12 @@ $('coinSyncBtn').addEventListener('click', async () => {
       statusEl.innerHTML = `<span style="color:#f43f5e;">✕ ${response.error || 'エラー'}</span>`;
     }
   });
+});
+
+// --- Logout ---
+$('logoutLink').addEventListener('click', async (e) => {
+  e.preventDefault();
+  await forceLogout();
 });
 
 // --- Start ---
