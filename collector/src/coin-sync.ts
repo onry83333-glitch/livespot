@@ -164,7 +164,7 @@ async function refreshCookiesViaPlaywright(
       await Promise.race([
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }),
         page.waitForFunction(
-          () => document.cookie.includes('stripchat_com_userId'),
+          'document.cookie.includes("stripchat_com_userId")',
           { timeout: 20_000 },
         ),
       ]);

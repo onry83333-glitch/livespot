@@ -105,7 +105,7 @@ async function main() {
   // 保存済みストレージがあればコンテキストに適用
   if (fs.existsSync(STATE_FILE)) {
     console.log('既存の保存済みセッションを検出 → 再利用を試行\n');
-    launchOptions.storageState = STATE_FILE;
+    (launchOptions as Record<string, unknown>).storageState = STATE_FILE;
   }
 
   const userDataDir = path.join(AUTH_DIR, 'browser-data');
