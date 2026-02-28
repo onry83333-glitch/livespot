@@ -136,19 +136,30 @@ async function main() {
     }
   } catch { /* no gate */ }
 
-  // ログイン完了を待つ（stripchat_com_userId cookieが出現するまで）
+  // ログイン完了を待つ（認証cookie出現まで）
+  // Stripchat API仕様変更対応: stripchat_com_userId OR (isLogged=1 + sessionId) で判定
   console.log('\nログインを待っています...');
-  console.log('（ログインページが表示されたら、メールアドレスとパスワードでログインしてください）\n');
+  console.log('（ログインページが表示されたら、モデルのメールアドレスとパスワードでログインしてください）');
+  console.log('（※ マネージャーではなくモデル本人のアカウントでログインしてください）\n');
 
-  const MAX_WAIT_MS = 5 * 60 * 1000; // 最大5分
+  const MAX_WAIT_MS = 10 * 60 * 1000; // 最大10分
   const startTime = Date.now();
   let authenticated = false;
 
   while (Date.now() - startTime < MAX_WAIT_MS) {
     const cookies = await context.cookies('https://stripchat.com');
     const userIdCookie = cookies.find(c => c.name === 'stripchat_com_userId');
+    const isLoggedCookie = cookies.find(c => c.name === 'isLogged');
+    const sessionIdCookie = cookies.find(c => c.name === 'stripchat_com_sessionId');
+
     if (userIdCookie && userIdCookie.value) {
       console.log(`\n✓ ログイン検出! userId=${userIdCookie.value}`);
+      authenticated = true;
+      break;
+    }
+    // Stripchat API仕様変更: isLogged=1 + sessionId で認証済み判定
+    if (isLoggedCookie?.value === '1' && sessionIdCookie?.value) {
+      console.log('\n✓ ログイン検出! (isLogged=1 + sessionId)');
       authenticated = true;
       break;
     }
@@ -156,7 +167,7 @@ async function main() {
   }
 
   if (!authenticated) {
-    console.error('\n✗ タイムアウト — 5分以内にログインしてください');
+    console.error('\n✗ タイムアウト — 10分以内にログインしてください');
     await context.close();
     process.exit(1);
   }
@@ -172,8 +183,53 @@ async function main() {
     cookiesJson[c.name] = c.value;
   }
 
-  const userId = cookiesJson['stripchat_com_userId'];
+  // userId取得: Cookie → Earnings API
+  let userId = cookiesJson['stripchat_com_userId'];
+
+  if (!userId) {
+    // earningsページのURLからuserIdを取得（ログイン後はリダイレクトされる）
+    const currentUrl = page.url();
+    console.log(`現在のURL: ${currentUrl}`);
+
+    // APIでuserId解決を試行
+    const cookieHeader = Object.entries(cookiesJson).map(([k, v]) => `${k}=${v}`).join('; ');
+    try {
+      // earningsページの内容からuserIdを抽出
+      const pageContent = await page.content();
+      const uidMatch = pageContent.match(/userId["\s:]+(\d{5,})/);
+      if (uidMatch) {
+        userId = uidMatch[1];
+        console.log(`✓ ページ内容からuserId取得: ${userId}`);
+      }
+    } catch { /* ignore */ }
+
+    // registered_castsフォールバック
+    if (!userId) {
+      const sb = getSupabase();
+      const { data: casts } = await sb
+        .from('registered_casts')
+        .select('stripchat_user_id, stripchat_model_id, cast_name')
+        .eq('is_active', true)
+        .limit(1);
+      const fallbackId = casts?.[0]?.stripchat_user_id || casts?.[0]?.stripchat_model_id;
+      if (fallbackId) {
+        userId = String(fallbackId);
+        console.log(`✓ registered_castsからuserId取得: ${userId} (${casts?.[0]?.cast_name})`);
+      }
+    }
+  }
+
   const cookieHeader = Object.entries(cookiesJson).map(([k, v]) => `${k}=${v}`).join('; ');
+
+  // state.jsonにuserIdも保存（loadSavedSession用）
+  if (userId) {
+    try {
+      const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf-8'));
+      state.userId = userId;
+      fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+      console.log(`✓ state.jsonにuserId保存: ${userId}`);
+    } catch { /* ignore */ }
+  }
 
   // Supabase更新
   const sb = getSupabase();

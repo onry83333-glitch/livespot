@@ -11,7 +11,8 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "coin-sync": "tsx src/test-coin-sync.ts",
-    "coin-auth": "tsx src/coin-auth.ts"
+    "coin-auth": "tsx src/coin-auth.ts",
+    "coin-import": "tsx src/coin-import.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
