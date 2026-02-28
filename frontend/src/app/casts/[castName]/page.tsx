@@ -699,18 +699,44 @@ function CastDetailInner() {
     setSessionPLLoading(true);
     sb.rpc('get_session_pl', { p_account_id: accountId, p_cast_name: castName, p_days: 90 })
       .then(({ data, error }) => {
-        if (!error && data) setSessionPL(data as SessionPL[]);
+        if (!error && data) {
+          // total_coins → total_tokens マッピング（旧RPC互換）
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setSessionPL((data as SessionPL[]).map((r: any) => ({
+            ...r,
+            total_tokens: r.total_tokens ?? r.total_coins ?? 0,
+          })));
+        }
         setSessionPLLoading(false);
       });
   }, [accountId, castName, activeTab, sb]);
 
   // Monthly P/L: load when analytics tab active
+  // 082未適用の場合は2引数版にフォールバック + クライアントサイドフィルタ
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
     setMonthlyPLLoading(true);
     sb.rpc('get_monthly_pl', { p_account_id: accountId, p_cast_name: castName, p_months: 6 })
       .then(({ data, error }) => {
-        if (!error && data) setMonthlyPL(data as MonthlyPL[]);
+        if (error?.code === 'PGRST202') {
+          // 082未適用: 2引数版にフォールバック
+          return sb.rpc('get_monthly_pl', { p_account_id: accountId, p_months: 6 });
+        }
+        return { data, error };
+      })
+      .then(({ data, error }) => {
+        if (!error && data) {
+          // cast_nameでフィルタ（2引数版は全キャスト返す）
+          const filtered = (data as MonthlyPL[]).filter(
+            r => r.cast_name === castName
+          );
+          // total_coins → total_tokens マッピング（旧RPC互換）
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          setMonthlyPL(filtered.map((r: any) => ({
+            ...r,
+            total_tokens: r.total_tokens ?? r.total_coins ?? 0,
+          })));
+        }
         setMonthlyPLLoading(false);
       });
   }, [accountId, castName, activeTab, sb]);

@@ -199,6 +199,9 @@ export async function runCoinSync(): Promise<void> {
     byAccount.set(c.account_id, list);
   }
 
+  let overallSuccess = false;
+  let failureReason = '';
+
   for (const [accountId, accountCasts] of byAccount) {
     const result = await syncAccount(sb, accountId, accountCasts);
 
@@ -207,27 +210,39 @@ export async function runCoinSync(): Promise<void> {
       log.info(`[${accountId}] Playwrightでcookie自動取得を試行...`);
       const fresh = await refreshCookiesViaPlaywright(accountId);
       if (fresh) {
-        await syncAccountCasts(sb, accountId, accountCasts, fresh.userId, fresh.cookieHeader, true);
+        const retryResult = await syncAccountCasts(sb, accountId, accountCasts, fresh.userId, fresh.cookieHeader, true);
+        if (retryResult === 'ok') {
+          overallSuccess = true;
+        } else {
+          failureReason = 'Playwrightリトライ後も認証失敗';
+        }
+      } else {
+        failureReason = '認証cookie期限切れ — STRIPCHAT_USERNAME/PASSWORDをcollector/.envに設定してください';
+        log.error(`[${accountId}] ${failureReason}`);
       }
+    } else if (result === 'ok') {
+      overallSuccess = true;
     }
 
-    // MV + セグメント更新（成否に関わらず実行）
-    try {
-      await sb.rpc('refresh_paying_users');
-      log.info(`[${accountId}] refresh_paying_users 完了`);
-    } catch {
-      log.debug('refresh_paying_users スキップ');
-    }
+    // MV + セグメント更新（成功時のみ実行）
+    if (overallSuccess) {
+      try {
+        await sb.rpc('refresh_paying_users');
+        log.info(`[${accountId}] refresh_paying_users 完了`);
+      } catch {
+        log.debug('refresh_paying_users スキップ');
+      }
 
-    try {
-      await sb.rpc('refresh_segments', { p_account_id: accountId });
-      log.info(`[${accountId}] refresh_segments 完了`);
-    } catch {
-      log.debug('refresh_segments スキップ');
+      try {
+        await sb.rpc('refresh_segments', { p_account_id: accountId });
+        log.info(`[${accountId}] refresh_segments 完了`);
+      } catch {
+        log.debug('refresh_segments スキップ');
+      }
     }
   }
 
-  // 5. pipeline_status 更新
+  // 5. pipeline_status 更新（実際の結果を反映）
   try {
     await sb.from('pipeline_status').upsert(
       {
@@ -235,9 +250,12 @@ export async function runCoinSync(): Promise<void> {
         status: 'auto',
         source: 'Stripchat Earnings API',
         destination: 'coin_transactions',
-        detail: `${casts.length}キャスト同期完了`,
+        detail: overallSuccess
+          ? `${casts.length}キャスト同期完了`
+          : `同期失敗: ${failureReason || '不明なエラー'}`,
         last_run_at: new Date().toISOString(),
-        last_success: true,
+        last_success: overallSuccess,
+        error_message: overallSuccess ? null : failureReason,
       },
       { onConflict: 'pipeline_name' },
     );
@@ -245,7 +263,11 @@ export async function runCoinSync(): Promise<void> {
     log.debug('pipeline_status更新スキップ');
   }
 
-  log.info('コイン同期完了');
+  if (overallSuccess) {
+    log.info('コイン同期完了');
+  } else {
+    log.error(`コイン同期失敗: ${failureReason}`);
+  }
 }
 
 /**
@@ -343,6 +365,13 @@ async function syncAccount(
   }
 
   const isAuthenticated = !!sess.cookies_json?.['stripchat_com_userId'];
+
+  // ゲストcookieではEarnings APIは必ず401 → 無駄なAPI呼び出しを回避
+  if (!isAuthenticated) {
+    log.warn(`[${accountId}] ゲストcookieのみ（stripchat_com_userId未設定）— Earnings API呼び出しをスキップ`);
+    return 'auth_failed';
+  }
+
   return syncAccountCasts(sb, accountId, accountCasts, userId, cookieHeader, isAuthenticated);
 }
 
