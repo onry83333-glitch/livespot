@@ -19,8 +19,13 @@
 import { getSupabase, PLAYWRIGHT_CONFIG } from './config.js';
 import { createLogger } from './utils/logger.js';
 import { loadSavedSession } from './coin-auth.js';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 
 const log = createLogger('coin-sync');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const COOKIES_JSON_FILE = path.join(__dirname, '..', 'cookies.json');
 
 const EARNINGS_API = 'https://stripchat.com/api/front/users';
 const MAX_PAGES = 20;
@@ -62,6 +67,41 @@ interface Transaction {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * cookies.json（Chrome拡張がBackend API経由で保存）を読み込み
+ */
+function loadCookiesJsonFile(accountId: string): {
+  cookieHeader: string; userId: string; cookiesJson: Record<string, string>;
+} | null {
+  try {
+    if (!fs.existsSync(COOKIES_JSON_FILE)) return null;
+    const raw = JSON.parse(fs.readFileSync(COOKIES_JSON_FILE, 'utf-8'));
+    const cookies: Record<string, string> = raw.cookies || {};
+    if (Object.keys(cookies).length === 0) return null;
+
+    // account_id チェック（保存されていれば一致確認）
+    if (raw.account_id && raw.account_id !== accountId) {
+      log.debug('cookies.json account_id不一致');
+      return null;
+    }
+
+    const userId = cookies['stripchat_com_userId'];
+    const isLogged = cookies['isLogged'] === '1';
+    const hasSessionId = !!cookies['stripchat_com_sessionId'];
+
+    if (!userId && !(isLogged && hasSessionId)) {
+      log.debug('cookies.json に認証cookieなし');
+      return null;
+    }
+
+    const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+    // userId が Cookie にない場合は空文字を返す（呼び出し元でregistered_castsから解決）
+    return { cookieHeader, userId: userId || '', cookiesJson: cookies };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -257,7 +297,7 @@ export async function runCoinSync(): Promise<void> {
           failureReason = 'Playwrightリトライ後も認証失敗';
         }
       } else {
-        failureReason = '認証cookie期限切れ — 以下のいずれかを実行してください:\n  1. npm run coin-auth（推奨: ブラウザでログインしてセッション保存）\n  2. collector/.envにSTRIPCHAT_USERNAME/PASSWORDを設定';
+        failureReason = '認証cookie期限切れ — 以下のいずれかを実行してください:\n  1. npm run coin-auth（推奨: ブラウザでログインしてセッション保存）\n  2. npm run coin-import（DevToolsからcookie貼り付け）\n  3. collector/.envにSTRIPCHAT_USERNAME/PASSWORDを設定';
         log.error(`[${accountId}] ${failureReason}`);
       }
     } else if (result === 'ok') {
@@ -319,7 +359,7 @@ async function syncAccount(
   accountId: string,
   accountCasts: RegisteredCast[],
 ): Promise<'ok' | 'auth_failed' | 'skipped'> {
-  // 方式0: 保存済みセッション（npm run coin-auth で取得したもの）を最優先
+  // 方式0a: 保存済みセッション（npm run coin-auth で取得したもの）を最優先
   const savedSession = loadSavedSession();
   if (savedSession) {
     log.info(`[${accountId}] 保存済みセッションを検出 (userId=${savedSession.userId})`);
@@ -330,20 +370,54 @@ async function syncAccount(
     log.warn(`[${accountId}] 保存済みセッションが期限切れ — DBフォールバック`);
   }
 
-  // 方式1: stripchat_sessions から有効なcookieを取得
+  // 方式0b: cookies.json（Chrome拡張がBackend API経由で保存したファイル）
+  const cookiesFromFile = loadCookiesJsonFile(accountId);
+  if (cookiesFromFile) {
+    // userId が空の場合はregistered_castsからフォールバック
+    let fileUserId = cookiesFromFile.userId;
+    if (!fileUserId) {
+      const fallbackId = accountCasts[0]?.stripchat_user_id || accountCasts[0]?.stripchat_model_id;
+      if (fallbackId) fileUserId = String(fallbackId);
+    }
+    if (!fileUserId) {
+      log.warn(`[${accountId}] cookies.json: userId解決不可`);
+    } else {
+      log.info(`[${accountId}] cookies.jsonから認証情報を検出 (userId=${fileUserId})`);
+    }
+    const result = fileUserId
+      ? await syncAccountCasts(sb, accountId, accountCasts, fileUserId, cookiesFromFile.cookieHeader, true)
+      : 'auth_failed' as const;
+    if (result === 'ok') {
+      // 成功 → stripchat_sessions も更新
+      await sb.from('stripchat_sessions').upsert({
+        account_id: accountId,
+        cookies_json: cookiesFromFile.cookiesJson,
+        stripchat_user_id: cookiesFromFile.userId,
+        is_valid: true,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'account_id' });
+      return 'ok';
+    }
+    log.warn(`[${accountId}] cookies.jsonのcookieも期限切れ`);
+  }
+
+  // 方式1: stripchat_sessions から有効なcookieを取得（is_valid=falseも試行）
   const { data: sessions, error: sessErr } = await sb
     .from('stripchat_sessions')
     .select('account_id, cookies_json, stripchat_user_id, is_valid')
     .eq('account_id', accountId)
-    .eq('is_valid', true)
+    .order('is_valid', { ascending: false }) // true を先に
     .limit(1);
 
   if (sessErr || !sessions || sessions.length === 0) {
-    log.warn(`[${accountId}] 有効なstripchat_sessionなし`);
+    log.warn(`[${accountId}] stripchat_sessionなし`);
     return 'auth_failed'; // Playwrightフォールバック対象
   }
 
   const sess = sessions[0] as StripchatSession;
+  if (!sess.is_valid) {
+    log.info(`[${accountId}] is_valid=false のセッションを試行（期限切れの可能性あり）`);
+  }
   if (!sess.cookies_json || Object.keys(sess.cookies_json).length === 0) {
     log.warn(`[${accountId}] cookies_jsonが空`);
     return 'auth_failed';
@@ -460,7 +534,18 @@ async function syncAccount(
   }
 
   log.info(`[${accountId}] 認証済み (userId=${userId}, isLogged=${hasLoggedFlag}, userIdCookie=${hasUserIdCookie})`);
-  return syncAccountCasts(sb, accountId, accountCasts, userId, cookieHeader, isAuthenticated);
+  const result = await syncAccountCasts(sb, accountId, accountCasts, userId, cookieHeader, isAuthenticated);
+
+  // API成功 → is_valid=false だった場合は true に復元
+  if (result === 'ok' && !sess.is_valid) {
+    log.info(`[${accountId}] セッション有効確認 → is_valid=true に復元`);
+    await sb
+      .from('stripchat_sessions')
+      .update({ is_valid: true, updated_at: new Date().toISOString() })
+      .eq('account_id', accountId);
+  }
+
+  return result;
 }
 
 /**
