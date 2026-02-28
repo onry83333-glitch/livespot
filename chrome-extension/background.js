@@ -177,6 +177,7 @@ function getFallbackMessage(triggerType, stepNumber, userName, segment) {
 // ============================================================
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.create('coinSyncPeriodic', { periodInMinutes: 60 });  // 60分ごと（Collector主系統のフォールバック）
+chrome.alarms.create('sessionCookieExport', { periodInMinutes: 30 }); // 30分ごと（認証cookie鮮度維持）
 chrome.alarms.create('spyAutoPatrol', { periodInMinutes: 3 });      // 3分ごとに配信開始検出
 chrome.alarms.create('check-extinct-casts', { periodInMinutes: 1440 }); // 24時間ごと（消滅キャスト検出）
 chrome.alarms.create('spyRotation', { periodInMinutes: 3 });          // 3分ごと（他社SPYローテーション）
@@ -212,6 +213,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     console.log('[LS-BG] AutoCoinSync: リトライ発火 (', coinSyncRetryCount, '/', COIN_SYNC_MAX_RETRIES, ')');
     triggerAutoCoinSync('retry').catch(e => {
       console.warn('[LS-BG] AutoCoinSync: リトライ失敗:', e.message);
+    });
+  }
+
+  // 認証cookie定期エクスポート（30分ごと）
+  if (alarm.name === 'sessionCookieExport') {
+    exportSessionCookie().catch(e => {
+      console.warn('[LS-BG] SessionExport定期: 失敗:', e.message);
     });
   }
 
@@ -5906,18 +5914,70 @@ async function exportSessionCookie() {
       return;
     }
 
-    // 2. userId クッキー取得
+    // 2. userId クッキー取得（Cookie → API /initial-dynamic フォールバック）
     const userIdCookie = await chrome.cookies.get({
       url: 'https://stripchat.com',
       name: 'stripchat_com_userId'
     });
-    const stripchatUserId = userIdCookie?.value || null;
+    let stripchatUserId = userIdCookie?.value || null;
 
     // 3. 全Stripchatクッキーを取得してJSON化
     const allCookies = await chrome.cookies.getAll({ domain: '.stripchat.com' });
     const cookiesJson = {};
     for (const c of allCookies) {
       cookiesJson[c.name] = c.value;
+    }
+
+    // 3.5. userId が Cookie から取れなかった場合、API で取得
+    if (!stripchatUserId) {
+      const cookieStr = allCookies.map(c => `${c.name}=${c.value}`).join('; ');
+      try {
+        // 方法A: /initial-dynamic API
+        const dynRes = await fetch('https://stripchat.com/api/front/v2/initial-dynamic?requestType=initial', {
+          headers: {
+            'Accept': 'application/json',
+            'Cookie': cookieStr,
+          },
+        });
+        if (dynRes.ok) {
+          const dynData = await dynRes.json();
+          const dynUid = dynData?.initialDynamic?.user?.id || dynData?.user?.id;
+          if (dynUid && dynUid > 0) {
+            stripchatUserId = String(dynUid);
+            console.log('[LS-BG] SessionExport: /initial-dynamic からuserId取得:', stripchatUserId);
+          }
+        }
+      } catch (e) {
+        console.warn('[LS-BG] SessionExport: /initial-dynamic 失敗:', e.message);
+      }
+    }
+
+    // 3.6. Stripchatタブの content script 経由でuserIdを取得（最終フォールバック）
+    if (!stripchatUserId) {
+      try {
+        const tabs = await chrome.tabs.query({ url: '*://*.stripchat.com/*' });
+        if (tabs.length > 0) {
+          const [result] = await chrome.scripting.executeScript({
+            target: { tabId: tabs[0].id },
+            func: () => {
+              try {
+                const m = document.cookie.match(/stripchat_com_userId=(\d+)/);
+                if (m) return m[1];
+                // __NEXT_DATA__ fallback
+                const nd = window.__NEXT_DATA__;
+                if (nd?.props?.pageProps?.user?.id) return String(nd.props.pageProps.user.id);
+              } catch { /* */ }
+              return null;
+            },
+          });
+          if (result?.result) {
+            stripchatUserId = result.result;
+            console.log('[LS-BG] SessionExport: content script からuserId取得:', stripchatUserId);
+          }
+        }
+      } catch (e) {
+        console.warn('[LS-BG] SessionExport: content script userId取得失敗:', e.message);
+      }
     }
 
     // 4. csrfToken取得を試行（/api/front/v2/config から）

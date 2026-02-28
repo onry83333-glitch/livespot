@@ -18,6 +18,7 @@
 
 import { getSupabase, PLAYWRIGHT_CONFIG } from './config.js';
 import { createLogger } from './utils/logger.js';
+import { loadSavedSession } from './coin-auth.js';
 
 const log = createLogger('coin-sync');
 
@@ -256,7 +257,7 @@ export async function runCoinSync(): Promise<void> {
           failureReason = 'Playwrightリトライ後も認証失敗';
         }
       } else {
-        failureReason = '認証cookie期限切れ — STRIPCHAT_USERNAME/PASSWORDをcollector/.envに設定してください';
+        failureReason = '認証cookie期限切れ — 以下のいずれかを実行してください:\n  1. npm run coin-auth（推奨: ブラウザでログインしてセッション保存）\n  2. collector/.envにSTRIPCHAT_USERNAME/PASSWORDを設定';
         log.error(`[${accountId}] ${failureReason}`);
       }
     } else if (result === 'ok') {
@@ -318,7 +319,18 @@ async function syncAccount(
   accountId: string,
   accountCasts: RegisteredCast[],
 ): Promise<'ok' | 'auth_failed' | 'skipped'> {
-  // 2. stripchat_sessions から有効なcookieを取得
+  // 方式0: 保存済みセッション（npm run coin-auth で取得したもの）を最優先
+  const savedSession = loadSavedSession();
+  if (savedSession) {
+    log.info(`[${accountId}] 保存済みセッションを検出 (userId=${savedSession.userId})`);
+    const result = await syncAccountCasts(
+      sb, accountId, accountCasts, savedSession.userId, savedSession.cookieHeader, true,
+    );
+    if (result === 'ok') return 'ok';
+    log.warn(`[${accountId}] 保存済みセッションが期限切れ — DBフォールバック`);
+  }
+
+  // 方式1: stripchat_sessions から有効なcookieを取得
   const { data: sessions, error: sessErr } = await sb
     .from('stripchat_sessions')
     .select('account_id, cookies_json, stripchat_user_id, is_valid')
@@ -387,6 +399,39 @@ async function syncAccount(
     }
   }
 
+  // /initial-dynamic API フォールバック（/user/me が 404 の場合）
+  if (!userId) {
+    try {
+      const dynResp = await fetch('https://stripchat.com/api/front/v2/initial-dynamic?requestType=initial', {
+        headers: {
+          Cookie: cookieHeader,
+          Accept: 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      });
+      if (dynResp.ok) {
+        const dynData = (await dynResp.json()) as {
+          initialDynamic?: { user?: { id?: number } };
+          user?: { id?: number };
+        };
+        const dynUserId = dynData?.initialDynamic?.user?.id || dynData?.user?.id;
+        if (dynUserId && dynUserId > 0) {
+          userId = String(dynUserId);
+          log.info(`[${accountId}] API /initial-dynamic からuserId取得: ${userId}`);
+          await sb
+            .from('stripchat_sessions')
+            .update({ stripchat_user_id: userId })
+            .eq('account_id', accountId)
+            .eq('is_valid', true);
+        }
+      } else {
+        log.warn(`[${accountId}] /initial-dynamic HTTP ${dynResp.status}`);
+      }
+    } catch (err) {
+      log.warn(`[${accountId}] /initial-dynamic 取得失敗`, err);
+    }
+  }
+
   // 最終フォールバック: registered_casts.stripchat_user_id → stripchat_model_id
   if (!userId) {
     const registeredUserId = accountCasts[0]?.stripchat_user_id;
@@ -403,14 +448,18 @@ async function syncAccount(
     return 'auth_failed';
   }
 
-  const isAuthenticated = !!sess.cookies_json?.['stripchat_com_userId'];
+  // 認証判定: stripchat_com_userId cookie または isLogged=1 + 有効なsessionId
+  const hasUserIdCookie = !!sess.cookies_json?.['stripchat_com_userId'];
+  const hasLoggedFlag = sess.cookies_json?.['isLogged'] === '1';
+  const hasSessionId = !!sess.cookies_json?.['stripchat_com_sessionId'];
+  const isAuthenticated = hasUserIdCookie || (hasLoggedFlag && hasSessionId);
 
-  // ゲストcookieではEarnings APIは必ず401 → 無駄なAPI呼び出しを回避
   if (!isAuthenticated) {
-    log.warn(`[${accountId}] ゲストcookieのみ（stripchat_com_userId未設定）— Earnings API呼び出しをスキップ`);
+    log.warn(`[${accountId}] ゲストcookieのみ（isLogged=${sess.cookies_json?.['isLogged']}, sessionId=${hasSessionId}）— Earnings API呼び出しをスキップ`);
     return 'auth_failed';
   }
 
+  log.info(`[${accountId}] 認証済み (userId=${userId}, isLogged=${hasLoggedFlag}, userIdCookie=${hasUserIdCookie})`);
   return syncAccountCasts(sb, accountId, accountCasts, userId, cookieHeader, isAuthenticated);
 }
 
