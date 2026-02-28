@@ -37,6 +37,20 @@ interface CastPersona {
   updated_at: string;
 }
 
+// cast_persona テーブル（039）の構造化データ
+interface CastPersonaDetail {
+  speaking_style: {
+    suffix?: string[];
+    emoji_rate?: string;
+    formality?: string;
+    max_length?: number;
+  } | null;
+  personality_traits: string[] | null;
+  ng_behaviors: string[] | null;
+  greeting_patterns: Record<string, string> | null;
+  dm_tone_examples: Record<string, string> | null;
+}
+
 interface DmGenerateBody {
   cast_name: string;
   account_id: string;
@@ -170,9 +184,29 @@ function generateDmFromTemplate(
 }
 
 // ============================================================
-// Layer B — キャスト人格定義（cast_personas テーブルから動的生成）
+// cast_persona テーブルからの詳細データ取得
 // ============================================================
-function buildLayerB(persona: CastPersona): string {
+async function fetchCastPersonaDetail(
+  token: string,
+  castName: string,
+): Promise<CastPersonaDetail | null> {
+  try {
+    const sb = getAuthClient(token);
+    const { data } = await sb
+      .from('cast_persona')
+      .select('speaking_style, personality_traits, ng_behaviors, greeting_patterns, dm_tone_examples')
+      .eq('cast_name', castName)
+      .single();
+    return data as CastPersonaDetail | null;
+  } catch {
+    return null;
+  }
+}
+
+// ============================================================
+// Layer B — キャスト人格定義（cast_personas + cast_persona 統合）
+// ============================================================
+function buildLayerB(persona: CastPersona, detail?: CastPersonaDetail | null): string {
   const parts = [
     `=== あなたのキャラクター ===`,
     `キャスト名: ${persona.display_name || persona.cast_name}`,
@@ -184,6 +218,39 @@ function buildLayerB(persona: CastPersona): string {
   if (persona.dm_tone) parts.push(`DMトーン: ${persona.dm_tone}`);
   if (persona.byaf_style) parts.push(`BYAF: ${persona.byaf_style}`);
   if (persona.taboo_topics) parts.push(`\n禁止話題:\n${persona.taboo_topics}`);
+
+  // ── cast_persona テーブルからの構造化データ（Layer B 強化） ──
+  if (detail) {
+    if (detail.speaking_style) {
+      const ss = detail.speaking_style;
+      if (ss.suffix?.length) parts.push(`語尾パターン: ${ss.suffix.join('、')}`);
+      if (ss.emoji_rate) parts.push(`絵文字使用頻度: ${ss.emoji_rate}`);
+      if (ss.formality) parts.push(`フォーマリティ: ${ss.formality}`);
+      if (ss.max_length) parts.push(`最大文字数: ${ss.max_length}文字`);
+    }
+
+    if (detail.personality_traits?.length) {
+      parts.push(`\n性格特性:\n${detail.personality_traits.map(t => `- ${t}`).join('\n')}`);
+    }
+
+    if (detail.ng_behaviors?.length) {
+      parts.push(`\nNG行動（絶対にしないこと）:\n${detail.ng_behaviors.map(b => `- ${b}`).join('\n')}`);
+    }
+
+    if (detail.greeting_patterns && Object.keys(detail.greeting_patterns).length) {
+      const labels: Record<string, string> = { first_time: '初見', regular: '常連', vip: 'VIP' };
+      const lines = Object.entries(detail.greeting_patterns)
+        .map(([k, v]) => `- ${labels[k] || k}: 「${v}」`);
+      parts.push(`\n挨拶パターン:\n${lines.join('\n')}`);
+    }
+
+    if (detail.dm_tone_examples && Object.keys(detail.dm_tone_examples).length) {
+      const labels: Record<string, string> = { thankyou: 'お礼', churn: '離脱防止', follow: 'フォロー', pre_broadcast: '配信前' };
+      const lines = Object.entries(detail.dm_tone_examples)
+        .map(([k, v]) => `- ${labels[k] || k}: 「${v}」`);
+      parts.push(`\nDMトーン見本:\n${lines.join('\n')}`);
+    }
+  }
 
   // L2: キャスト固有プロンプト
   if (persona.system_prompt_cast) {
@@ -611,10 +678,12 @@ export async function POST(req: NextRequest) {
         ? (persona as CastPersona)
         : { ...DEFAULT_PERSONA, cast_name: castName };
 
+      const detail = await fetchCastPersonaDetail(auth.token, castName);
+
       const systemPrompt = [
         LAYER_A_ANDO_FOUNDATION,
         '',
-        buildLayerB(activePersona),
+        buildLayerB(activePersona, detail),
         '',
         activePersona.system_prompt_context ? `=== 直近コンテキスト ===\n${activePersona.system_prompt_context}` : '',
         '',
@@ -740,12 +809,14 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
       ? (persona as CastPersona)
       : { ...DEFAULT_PERSONA, cast_name };
 
+    const detail = await fetchCastPersonaDetail(auth.token, cast_name);
+
     // System Prompt = L1(base) + Layer A + Layer B + Layer C
     const l1 = activePersona.system_prompt_base || LAYER_A_ANDO_FOUNDATION;
     const systemPrompt = [
       l1,
       '',
-      buildLayerB(activePersona),
+      buildLayerB(activePersona, detail),
       '',
       activePersona.system_prompt_context ? `=== 直近コンテキスト ===\n${activePersona.system_prompt_context}` : '',
       '',
