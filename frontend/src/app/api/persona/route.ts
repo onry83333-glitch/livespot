@@ -275,46 +275,74 @@ const LAYER_C_RULES: Record<TaskType, string> = {
 - spy_messagesのハイライトがあれば触れて個別感を出す。
 - 1メッセージ=1トピック。
 - セグメント別トーン:
-  S1-S3(VIP)=特別感を強調
-  S4-S6(常連)=居場所感・安心感
-  S7-S8(中堅)=軽い誘い
-  S9-S10(ライト/単発)=軽く短く
+  S1-S3(VIP)=特別感・唯一性を強調。「〇〇さんだけ」「特別」
+  S4-S6(常連)=居場所感・安心感。「いつもの」「安心する」
+  S7-S8(中堅)=軽い誘い・好奇心。「この前の続き」「気になってた」
+  S9-S10(ライト/単発)=軽く短く。感謝のみ。押さない。
+- シナリオ別目的:
+  thankyou_regular=感謝+再来訪の種まき（直接誘わない）
+  churn_recovery=存在を思い出させる+懐かしさ（理由を聞かない）
+  pre_broadcast=期待感+個別感（「〇〇さんに会いたい」）
+  vip_special=承認欲求充足+特別扱い（限定情報を匂わせる）
+  return_nudge=軽い接触+BYAF強め（圧ゼロ）
 - 必ず以下のJSON形式で出力:
 {"message": "...", "reasoning": "..."}`,
 
   fb_report: `=== FBレポート生成ルール ===
 - 構造化フォーマットで出力:
-  1. 総合評価（S/A/B/C/D）
-  2. 良かった点（3つ、数値根拠必須）
-  3. 改善点（3つ、具体的なアクション付き）
-  4. 次回アクション（優先度順に3つ）
-- 数値根拠必須。「良かった」ではなく「チップ率30%増」。
-- キャストのキャラで書く。
+  1. 総合評価（S/A/B/C/D）— 基準: S=売上前回比150%以上, A=120%以上, B=100%以上, C=80%以上, D=80%未満
+  2. 良かった点（3つ、数値根拠必須）— 「良かった」ではなく「チップ率30%増」
+  3. 改善点（3つ、具体的なアクション付き）— 「もっと頑張る」禁止。「22時台に1回ゴール設定を入れる」レベル
+  4. 次回アクション（優先度順に3つ）— 測定可能な行動目標
+- キャストのキャラクターの口調で書く。
+- 根拠のない主観評価禁止。必ずデータから読み取れる事実を引用。
 - JSON形式で出力:
 {"evaluation": "A", "good_points": [...], "improvements": [...], "next_actions": [...], "summary": "..."}`,
 
   dm_evaluate: `=== DM評価ルール ===
 - DM文面を評価してスコア0-100で採点。
-- 評価軸: BYAF有無/キャラ一致度/文字数/個別感/セグメント適合度
-- 改善案3つを具体的に提示。
+- 評価軸（各20点満点）:
+  1. BYAF有無（末尾に「自由」要素があるか）
+  2. キャラ一致度（口調・絵文字・語尾がキャストらしいか）
+  3. 文字数適正（120文字以内か、短すぎないか）
+  4. 個別感（ユーザー名・過去の発言への言及があるか）
+  5. セグメント適合度（VIPに軽すぎ、ライトに重すぎないか）
+- 改善案3つを「修正前→修正後」の具体例で提示。
 - JSON形式で出力:
-{"score": 85, "breakdown": {...}, "improvements": [...]}`,
+{"score": 85, "breakdown": {"byaf": 20, "character": 18, "length": 15, "personal": 16, "segment_fit": 16}, "improvements": ["修正前→修正後の形式で3つ"]}`,
 
   realtime_coach: `=== リアルタイムコーチルール ===
 - 短文3行以内。即座に使える具体的アクション。
-- 数字やユーザー名を必ず含める。
+- 1行目: 何をするか（動詞で始める）
+- 2行目: なぜ今やるべきか（数字で根拠）
+- 3行目: 具体的なセリフ例（「」で囲む）
+- 曖昧な助言禁止。「盛り上げましょう」→「〇〇さんに名前呼びで話しかけて」
 - JSON形式で出力:
 {"action": "...", "reasoning": "...", "urgency": "high|medium|low"}`,
 
   recruitment_copy: `=== 採用コピー生成ルール ===
-- Princess Marketing Realism 4Step準拠
-- 主語は「あなた」。
-- 禁止: 「チャットレディ」「アダルト」「風俗」「恐怖訴求」「簡単に稼げる」
+- Princess Marketing Realism 4Step準拠。どのStepを使ったか明示。
+- 訴求軸変換（必ず守ること）:
+  主語: ×商品・サービス → ○「あなた」
+  訴求: ×ナンバーワン（実績・スペック） → ○オンリーワン（共感・特別感）
+  動詞: ×「解決する」「実現する」「稼げる」 → ○「整う」「余裕ができる」「自分で選べる」
+  CTA: ×「今すぐ応募」「簡単登録」 → ○「まずは話だけ聞いてみませんか？」
+  BYAF: 必ず末尾に「もちろん合わなかったらそれでOK」系を入れる
+- 禁止ワード: 「チャットレディ」「アダルト」「風俗」「水商売」「簡単に稼げる」「誰でもできる」「ノーリスク」
+- 恐怖訴求禁止: 「今のままだと…」「このまま年を取ったら…」は絶対に使わない
+- 職業名: 「ライブ配信パフォーマー」「オンラインパフォーマー」を使用
+- 金銭表現: ×「投げ銭」「チップ」 → ○「応援」「サポート」
 - JSON形式で出力:
-{"copy": "...", "step_breakdown": {...}}`,
+{"copy": "...", "step_breakdown": {"step1_empathy": "...", "step2_vision": "...", "step3_proof": "...", "step4_safe_cta": "..."}, "target_persona_fit": "..."}`,
 
   training_task: `=== 育成タスク生成ルール ===
-- 具体的で3つ。測定可能。
+- 具体的で測定可能な3タスク。曖昧な目標禁止。
+- 各タスクの形式:
+  task: 何をするか（動詞で始める）
+  success_criteria: 成功基準（数値 or Yes/No で判定可能）
+  deadline: いつまでに（「次回配信まで」「今週中」等）
+- 例: ×「トークを改善する」 → ○「配信開始5分以内に視聴者3人に名前呼びで挨拶する」
+- FBレポートの改善点から逆算して設計する。
 - JSON形式で出力:
 {"tasks": [{"task": "...", "success_criteria": "...", "deadline": "..."}]}`,
 };
@@ -526,17 +554,25 @@ ${recentMessages}
     }
 
     case 'recruitment_copy': {
-      const targetPersona = context.target_persona as string || 'あかり（24歳・事務職OL）';
+      const targetPersona = context.target_persona as string || 'あかり（24歳・事務職OL・手取り18万・推し活費用が足りない）';
       const medium = context.medium as string || 'SNS広告';
       const maxLength = context.max_length as number || 200;
       const existingCopy = context.existing_copy as string || '';
+      const focusStep = context.focus_step as string || '';
 
       return `ターゲットペルソナ: ${targetPersona}
 媒体: ${medium}
 文字数上限: ${maxLength}文字
-${existingCopy ? `既存コピー: 「${existingCopy}」\n→ これを改善してください。` : 'Princess Marketing 4Stepに沿った採用コピーを新規作成してください。'}
+${focusStep ? `フォーカスStep: ${focusStep}` : ''}
+${existingCopy ? `既存コピー: 「${existingCopy}」\n→ 訴求軸変換ルールに照らして改善してください。特に主語が「あなた」になっているか、動詞が穏やかか、CTAが安心CTAかをチェック。` : 'Princess Marketing 4Stepに沿った採用コピーを新規作成してください。'}
 
-4Stepのどの要素を使うか明示してください。`;
+必須チェック:
+1. 主語が「あなた」になっているか
+2. 動詞が「整う」「余裕ができる」系の穏やか表現か
+3. CTAが「まずは話だけ聞いてみませんか？」系の安心CTAか
+4. 禁止ワードが含まれていないか
+5. BYAF（「合わなかったらそれでOK」）が末尾にあるか
+6. 4Stepのどの要素を使ったか明示`;
     }
 
     case 'training_task': {
@@ -683,6 +719,41 @@ function selectLayerA(mode: string, personaBase: string | null): string {
   if (mode === 'recruitment') return LAYER_A_PRINCESS_MARKETING;
   return personaBase || LAYER_A_ANDO_FOUNDATION;
 }
+
+// ============================================================
+// モードB訴求軸変換レイヤー — recruitment mode 専用
+// Layer A(Princess Marketing) と Layer C の間に挟む変換ルール
+// ============================================================
+const RECRUITMENT_AXIS_TRANSFORM = `=== 訴求軸変換チェックリスト ===
+生成したコピーが以下の変換ルールに従っているか、出力前に必ずセルフチェックすること。
+
+【主語変換】
+× 「当社は」「弊社の」「このサービスは」
+○ 「あなたは」「あなたの」「あなたが」
+→ 全文中の主語を「あなた」に統一。商品説明ではなく「あなたの未来」を語る。
+
+【訴求変換】
+× ナンバーワン訴求: 「業界No.1」「実績○件」「稼げる額」
+○ オンリーワン訴求: 「あなたらしく」「自分のペースで」「他にない働き方」
+→ スペック競争ではなく「この人だから」という共感で選ばれる設計。
+
+【動詞変換】
+× 「解決する」「実現する」「稼げる」「儲かる」「叶える」
+○ 「整う」「余裕ができる」「自分で選べる」「好きなことに使える」
+→ 力強い動詞ではなく、自然体で穏やかな変化を表現。
+
+【CTA変換】
+× 「今すぐ応募」「限定○名」「急いで」「簡単登録」
+○ 「まずは話だけ聞いてみませんか？」「見学だけでもOK」「相談してみる」
+→ 応募ではなく「相談」「見学」の導線。ハードルを最大限下げる。
+
+【BYAF必須】
+生成文の末尾に必ず「もちろん合わなかったらそれでOK」系の一文を入れる。
+例: 「もちろん話を聞いて違うなと思ったら、それで全然大丈夫です」
+
+【禁止ワード最終チェック】
+以下が含まれていたら書き直し:
+チャットレディ / アダルト / 風俗 / 水商売 / 簡単に稼げる / 誰でもできる / ノーリスク / 今のままだと… / このまま年を取ったら…`;
 
 // ============================================================
 // ペルソナ反応シミュレーション（設計書 Layer 2 簡易版）
@@ -962,15 +1033,20 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
     // Layer A: mode に応じて安藤式 or Princess Marketing を選択
     const layerA = selectLayerA(mode, activePersona.system_prompt_base);
 
-    // System Prompt = Layer A + Layer B + Context + Layer C
+    // System Prompt = Layer A + Layer B + Context + Layer C (+ 訴求軸変換 for recruitment)
     const systemPrompt = [
       layerA,
       '',
-      buildLayerB(activePersona, detail),
+      // mode=recruitment: キャスト人格の代わりにエージェンシーブランドとして振る舞う
+      mode === 'recruitment'
+        ? `=== あなたの役割 ===\nライブ配信エージェンシーの採用マーケター。\n温かく、共感的で、押しつけがましくない。\n「この人なら相談できそう」と思わせるトーン。`
+        : buildLayerB(activePersona, detail),
       '',
       activePersona.system_prompt_context ? `=== 直近コンテキスト ===\n${activePersona.system_prompt_context}` : '',
       '',
       LAYER_C_RULES[task_type],
+      // mode=recruitment: 訴求軸変換チェックリストを追加
+      mode === 'recruitment' ? `\n${RECRUITMENT_AXIS_TRANSFORM}` : '',
     ].filter(Boolean).join('\n');
 
     const userPrompt = await buildUserPrompt(task_type, { ...context, cast_name }, auth.token);
