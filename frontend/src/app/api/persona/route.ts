@@ -4,6 +4,7 @@ import { authenticateAndValidateAccount } from '@/lib/api-auth';
 import { reportError } from '@/lib/error-handler';
 import { generateMockDmResponse, generateGenericMockResponse } from './mock-responses';
 import { LAYER_A_ANDO_FOUNDATION } from '@/lib/prompts/layer-a-ando';
+import { LAYER_A_PRINCESS_MARKETING } from '@/lib/prompts/layer-a-princess';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
@@ -494,6 +495,65 @@ ${chatSample || 'なし'}
 このデータをもとにFBレポートを生成してください。キャストのキャラクターに合った口調で書いてください。`;
     }
 
+    case 'dm_evaluate': {
+      const dmText = context.dm_text as string || '';
+      const targetSegment = context.target_segment as string || '不明';
+      const castName = context.cast_name as string || '';
+
+      return `以下のDM文面を評価してください。
+
+DM文面: 「${dmText}」
+ターゲットセグメント: ${targetSegment}
+キャスト: ${castName}
+
+評価軸: BYAF有無 / キャラ一致度 / 文字数 / 個別感 / セグメント適合度
+0-100でスコアリングし、改善案を3つ提示してください。`;
+    }
+
+    case 'realtime_coach': {
+      const recentMessages = context.recent_messages as string || 'なし';
+      const viewerCount = context.viewer_count as number || 0;
+      const sessionDuration = context.session_duration as string || '不明';
+
+      return `配信状況:
+視聴者数: ${viewerCount}名
+配信経過: ${sessionDuration}
+
+直近のチャット:
+${recentMessages}
+
+今すぐ実行できる具体的なアクションを1つ提案してください。`;
+    }
+
+    case 'recruitment_copy': {
+      const targetPersona = context.target_persona as string || 'あかり（24歳・事務職OL）';
+      const medium = context.medium as string || 'SNS広告';
+      const maxLength = context.max_length as number || 200;
+      const existingCopy = context.existing_copy as string || '';
+
+      return `ターゲットペルソナ: ${targetPersona}
+媒体: ${medium}
+文字数上限: ${maxLength}文字
+${existingCopy ? `既存コピー: 「${existingCopy}」\n→ これを改善してください。` : 'Princess Marketing 4Stepに沿った採用コピーを新規作成してください。'}
+
+4Stepのどの要素を使うか明示してください。`;
+    }
+
+    case 'training_task': {
+      const castName = context.cast_name as string || '';
+      const recentReport = context.recent_report as string || 'なし';
+      const castType = context.cast_type as string || '不明';
+
+      return `キャスト: ${castName}
+キャストタイプ: ${castType}
+
+直近FBレポート:
+${recentReport}
+
+このキャストが次回配信までに取り組むべき練習タスクを3つ生成してください。
+具体的かつ測定可能なものにしてください。`;
+    }
+
     default:
       return JSON.stringify(context);
   }
@@ -617,18 +677,93 @@ async function getCastDisplayName(castName: string): Promise<string> {
 }
 
 // ============================================================
+// Layer A 選択 — mode に応じて安藤式 or Princess Marketing
+// ============================================================
+function selectLayerA(mode: string, personaBase: string | null): string {
+  if (mode === 'recruitment') return LAYER_A_PRINCESS_MARKETING;
+  return personaBase || LAYER_A_ANDO_FOUNDATION;
+}
+
+// ============================================================
+// ペルソナ反応シミュレーション（設計書 Layer 2 簡易版）
+// task_type と mode に応じて仮想ペルソナの反応を生成
+// ============================================================
+interface PersonaReaction {
+  persona: string;
+  reaction: string;
+}
+
+function buildPersonaReactions(
+  taskType: TaskType,
+  mode: string,
+  parsed: Record<string, unknown> | null,
+): PersonaReaction[] {
+  if (mode === 'recruitment') {
+    return [
+      { persona: 'あかり(24歳・事務職OL)', reaction: `共感${parsed ? '◎' : '○'} 信頼○ 応募△` },
+      { persona: 'みゆ(28歳・シングルマザー)', reaction: `共感○ 信頼${parsed ? '◎' : '○'} 応募○` },
+      { persona: 'ひな(32歳・派遣社員)', reaction: `共感△ 信頼○ 応募△` },
+    ];
+  }
+
+  // モードA（男性顧客向け）
+  switch (taskType) {
+    case 'dm_generate':
+      return [
+        { persona: 'S2 VIP準現役', reaction: `開封◎ 返信${parsed ? '◎' : '○'} 来訪△` },
+        { persona: 'S5 常連離脱危機', reaction: `開封○ 返信△ 来訪${parsed ? '○' : '△'}` },
+        { persona: 'S9 お試し', reaction: `開封△ 返信△ 来訪△` },
+      ];
+    case 'fb_report':
+      return [
+        { persona: 'キャスト本人', reaction: `理解◎ モチベ${parsed ? '◎' : '○'} 実行○` },
+      ];
+    case 'dm_evaluate':
+      return [
+        { persona: 'S1-S3 VIP層', reaction: `反応${parsed ? '◎' : '○'}` },
+        { persona: 'S7-S10 ライト層', reaction: `反応${parsed ? '○' : '△'}` },
+      ];
+    default:
+      return [];
+  }
+}
+
+// ============================================================
+// Confidence 算出（出力のJSON構造の完全性で簡易判定）
+// ============================================================
+function calcConfidence(parsed: Record<string, unknown> | null, taskType: TaskType): number {
+  if (!parsed) return 0.3;
+
+  const requiredFields: Record<TaskType, string[]> = {
+    dm_generate: ['message', 'reasoning'],
+    fb_report: ['evaluation', 'good_points', 'improvements'],
+    dm_evaluate: ['score', 'breakdown', 'improvements'],
+    realtime_coach: ['action', 'reasoning', 'urgency'],
+    recruitment_copy: ['copy', 'step_breakdown'],
+    training_task: ['tasks'],
+  };
+
+  const fields = requiredFields[taskType] || [];
+  if (fields.length === 0) return 0.7;
+
+  const present = fields.filter(f => f in parsed).length;
+  return Math.round((0.4 + 0.6 * (present / fields.length)) * 100) / 100;
+}
+
+// ============================================================
 // POST /api/persona
-// mode=customer  → OpenAI DM生成（モック/実API自動切替）
-// mode=generate  → Phase 1 テンプレート文面生成
-// mode=ai        → Phase 2 Claude API文面生成
-// (後方互換) task_type指定 → Phase 2
+// mode=customer    → モードA OpenAI DM生成（モック/実API自動切替）
+// mode=recruitment → モードB Princess Marketing（採用向け）
+// mode=generate    → Phase 1 テンプレート文面生成
+// mode=ai          → Phase 2/3 Claude API統一生成
+// (後方互換) task_type指定 → Phase 2/3
 // ============================================================
 export async function POST(req: NextRequest) {
   const body = await req.json();
   const mode = body.mode as string || (body.task_type ? 'ai' : 'generate');
   const reqAccountId = body.account_id as string | null;
 
-  // ── mode=customer: OpenAI DM生成パス ──
+  // ── mode=customer: モードA OpenAI DM生成パス ──
   // OPENAI_API_KEY なし → モック（認証不要）
   // OPENAI_API_KEY あり → 認証 + DB + OpenAI
   if (mode === 'customer') {
@@ -711,15 +846,19 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
       }
 
       return NextResponse.json({
-        message: (parsed.message as string) || result.text,
+        output: { message: (parsed.message as string) || result.text },
         reasoning: (parsed.reasoning as string) || '',
+        persona_reactions: buildPersonaReactions('dm_generate', 'customer', parsed),
+        confidence: calcConfidence(parsed, 'dm_generate'),
+        cost_tokens: result.tokensUsed,
+        // 後方互換フィールド
+        message: (parsed.message as string) || result.text,
         tone: (parsed.tone as string) || 'emotional',
         byaf_used: (parsed.byaf_used as string) || activePersona.byaf_style || '',
         persona_used: activePersona.display_name || activePersona.cast_name,
         persona_found: !!persona,
         is_mock: false,
         model: 'gpt-4o-mini',
-        cost_tokens: result.tokensUsed,
         cost_usd: result.costUsd,
       });
     } catch (e: unknown) {
@@ -743,7 +882,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
     }
   }
 
-  // ── 以下は既存モード（認証必須） ──
+  // ── 以下は認証必須モード ──
   const auth = await authenticateAndValidateAccount(req, reqAccountId);
   if (!auth.authenticated) return auth.error;
 
@@ -771,7 +910,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
     return NextResponse.json(result);
   }
 
-  // ── Phase 2: Claude API生成 ──
+  // ── Phase 3: AI統一生成（mode=ai / mode=recruitment） ──
   const { task_type, cast_name, context } = body as AiGenerateBody;
 
   if (!task_type || !cast_name) {
@@ -780,6 +919,15 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
   if (!LAYER_C_RULES[task_type]) {
     return NextResponse.json({ error: `未対応のtask_type: ${task_type}` }, { status: 400 });
   }
+
+  // mode=recruitment で task_type が customer向けの場合はエラー
+  if (mode === 'recruitment' && !['recruitment_copy', 'training_task'].includes(task_type)) {
+    return NextResponse.json(
+      { error: `mode=recruitment では recruitment_copy または training_task のみ対応。受信: ${task_type}` },
+      { status: 400 },
+    );
+  }
+
   // APIキー未設定 → OpenAIフォールバック or モック
   if (USE_MOCK_CLAUDE && USE_MOCK_OPENAI) {
     if (task_type === 'dm_generate') {
@@ -811,10 +959,12 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
 
     const detail = await fetchCastPersonaDetail(auth.token, cast_name);
 
-    // System Prompt = L1(base) + Layer A + Layer B + Layer C
-    const l1 = activePersona.system_prompt_base || LAYER_A_ANDO_FOUNDATION;
+    // Layer A: mode に応じて安藤式 or Princess Marketing を選択
+    const layerA = selectLayerA(mode, activePersona.system_prompt_base);
+
+    // System Prompt = Layer A + Layer B + Context + Layer C
     const systemPrompt = [
-      l1,
+      layerA,
       '',
       buildLayerB(activePersona, detail),
       '',
@@ -834,18 +984,20 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
       : await callClaude(systemPrompt, userPrompt, maxTokens);
     const modelUsed = useOpenAiFallback ? 'gpt-4o' : 'claude-sonnet-4-20250514';
 
-    let parsed: unknown = null;
+    let parsed: Record<string, unknown> | null = null;
     try {
       const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+      if (jsonMatch) parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>;
     } catch { /* ignore */ }
 
     return NextResponse.json({
       output: parsed || result.text,
-      raw_text: result.text,
-      reasoning: parsed && typeof parsed === 'object' && 'reasoning' in parsed
-        ? (parsed as Record<string, unknown>).reasoning : null,
+      reasoning: parsed && 'reasoning' in parsed ? parsed.reasoning : null,
+      persona_reactions: buildPersonaReactions(task_type, mode, parsed),
+      confidence: calcConfidence(parsed, task_type),
       cost_tokens: result.tokensUsed,
+      // 補助フィールド
+      raw_text: result.text,
       cost_usd: result.costUsd,
       model: modelUsed,
       persona_used: activePersona.display_name || activePersona.cast_name,
@@ -853,7 +1005,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
     });
   } catch (e: unknown) {
     const err = e as { message?: string; statusCode?: number };
-    await reportError(e, { file: 'api/persona', context: 'Persona Agent AI生成' });
+    await reportError(e, { file: 'api/persona', context: `Persona Agent AI生成 (mode=${mode})` });
     return NextResponse.json(
       { error: err.message || 'Persona Agent エラー' },
       { status: err.statusCode || 500 },
