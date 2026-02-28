@@ -8719,3 +8719,967 @@
 [36m[2026-02-28 03:02:56] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
 [36m[2026-02-28 03:02:57] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=129d04b1-beb8-45cb-8ca4-a17e05837202
 [36m[2026-02-28 03:03:07] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:03:22] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:03:22] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:03:22] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:03:22] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:03:23] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:03:23] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:03:23] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:03:23] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:03:23] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:03:25] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:03:28] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:03:30] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:03:31] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:03:31] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:03:31] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (oOUwW0kGjnBfvuom3rU5...)
+[36m[2026-02-28 03:03:31] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-9212, expires=12:58:31)
+[36m[2026-02-28 03:03:31] [INFO][0m [auth] Auth acquired via playwright (expires 12:58:31)
+[36m[2026-02-28 03:03:31] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:03:32] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:03:32] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=573f42c1-a7d6-4446-8360-b9dbb963e7cf
+[36m[2026-02-28 03:03:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 502 msgs, 8359tk, 0 profiles
+[36m[2026-02-28 03:03:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 306msg 2334tk
+[36m[2026-02-28 03:03:37] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[33m[2026-02-28 03:03:47] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:03:47] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:03:57] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:03:57] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:03:57] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:03:57] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:03:58] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:03:58] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:03:59] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:03:59] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:03:59] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:04:00] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:04:03] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:04:05] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:04:06] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:04:06] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:04:06] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (QaMQwxn6LGCYmCQoPslT...)
+[36m[2026-02-28 03:04:06] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-7734, expires=12:59:06)
+[36m[2026-02-28 03:04:06] [INFO][0m [auth] Auth acquired via playwright (expires 12:59:06)
+[36m[2026-02-28 03:04:06] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:04:07] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:04:07] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=0f0358d9-6019-4846-ac04-4b5075a74f4c
+[36m[2026-02-28 03:04:07] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:04:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 504 msgs, 8359tk, 0 profiles
+[36m[2026-02-28 03:04:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 308msg 2334tk
+[36m[2026-02-28 03:04:33] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:04:33] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:04:33] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:04:33] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:04:34] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:04:34] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:04:34] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:04:34] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:04:34] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:04:35] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:04:37] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:04:38] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:04:41] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:04:41] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:04:42] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:04:42] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (hvRbqaJVY_AGTYmhI.FK...)
+[36m[2026-02-28 03:04:42] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-5521, expires=12:59:42)
+[36m[2026-02-28 03:04:42] [INFO][0m [auth] Auth acquired via playwright (expires 12:59:42)
+[36m[2026-02-28 03:04:42] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:04:43] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:04:43] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=f5cc0ae9-69ba-4214-babf-de54795ce81a
+[33m[2026-02-28 03:04:48] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:04:48] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:05:07] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[36m[2026-02-28 03:05:08] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:05:08] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:05:08] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:05:08] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:05:09] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:05:09] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:05:09] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:05:09] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:05:10] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:05:11] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:05:14] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:05:16] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:05:17] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:05:18] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:05:18] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (kmSAV0GAddEuHninmdn9...)
+[36m[2026-02-28 03:05:18] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-832, expires=13:00:18)
+[36m[2026-02-28 03:05:18] [INFO][0m [auth] Auth acquired via playwright (expires 13:00:18)
+[36m[2026-02-28 03:05:18] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:05:18] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:05:19] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=f5ee3ade-e3a4-4a4c-b776-aafb04031a49
+[36m[2026-02-28 03:05:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 507 msgs, 8359tk, 0 profiles
+[36m[2026-02-28 03:05:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 311msg 2334tk
+[36m[2026-02-28 03:05:37] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:05:44] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:05:44] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:05:44] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:05:44] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:05:45] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326955 (line 1 column 326956)
+[36m[2026-02-28 03:05:45] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:05:45] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:05:45] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:05:45] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:05:47] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[33m[2026-02-28 03:05:48] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:05:48] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:05:50] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:05:52] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:05:53] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:05:53] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:05:53] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (Zjw1QahJ48UTaeCEXW8c...)
+[36m[2026-02-28 03:05:53] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-8363, expires=13:00:53)
+[36m[2026-02-28 03:05:53] [INFO][0m [auth] Auth acquired via playwright (expires 13:00:53)
+[36m[2026-02-28 03:05:53] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:05:54] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:05:54] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=7e3b6549-1af4-431b-b3ff-02468ee60164
+[36m[2026-02-28 03:06:07] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:06:20] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:06:20] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:06:20] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:06:20] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:06:20] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:06:20] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:06:21] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:06:21] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:06:21] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:06:22] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:06:25] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:06:27] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:06:28] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:06:28] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:06:28] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (8YeqDYfELcqlrf25RcqJ...)
+[36m[2026-02-28 03:06:28] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-8479, expires=13:01:28)
+[36m[2026-02-28 03:06:28] [INFO][0m [auth] Auth acquired via playwright (expires 13:01:28)
+[36m[2026-02-28 03:06:28] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:06:29] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:06:30] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=05267b03-2111-4a95-8e28-4f655caa5687
+[36m[2026-02-28 03:06:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 511 msgs, 8359tk, 0 profiles
+[36m[2026-02-28 03:06:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 315msg 2334tk
+[36m[2026-02-28 03:06:37] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:06:38] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 55tk ""
+[33m[2026-02-28 03:06:51] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:06:51] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:06:55] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:06:55] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:06:55] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:06:55] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:06:56] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:06:56] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:06:56] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:06:56] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:06:56] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:06:57] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:07:00] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:07:03] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:07:04] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:07:04] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:07:04] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (1IozjJPu9noyAMWGWM1S...)
+[36m[2026-02-28 03:07:04] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-2897, expires=13:02:04)
+[36m[2026-02-28 03:07:04] [INFO][0m [auth] Auth acquired via playwright (expires 13:02:04)
+[36m[2026-02-28 03:07:04] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:07:05] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:07:05] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=49757af3-dd59-4ddb-8ae0-1a2c96a70594
+[36m[2026-02-28 03:07:08] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:07:29] [INFO][0m [config] Loaded 24 targets (自社=2, 他社SPY=22)
+[36m[2026-02-28 03:07:29] [INFO][0m [trigger-engine] TriggerEngine: loaded 6 active triggers
+[36m[2026-02-28 03:07:30] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:07:30] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:07:30] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:07:30] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:07:31] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326968 (line 1 column 326969)
+[36m[2026-02-28 03:07:31] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:07:31] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:07:31] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:07:31] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:07:33] [INFO][0m [main] [HEALTH] 1/24 online, 0 WS, 517 msgs, 8414tk, 0 profiles
+[36m[2026-02-28 03:07:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=off 321msg 2389tk
+[36m[2026-02-28 03:07:33] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:07:36] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:07:37] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:07:38] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:07:39] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:07:39] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:07:39] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (LZ653EU0t_sWKANGyZCf...)
+[36m[2026-02-28 03:07:39] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-7023, expires=13:02:39)
+[36m[2026-02-28 03:07:39] [INFO][0m [auth] Auth acquired via playwright (expires 13:02:39)
+[36m[2026-02-28 03:07:39] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:07:40] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:07:40] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=affeef32-44f2-424a-adce-edfab465caf5
+[36m[2026-02-28 03:07:44] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 55tk ""
+[33m[2026-02-28 03:07:52] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:07:52] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:08:06] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:08:06] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:08:06] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:08:06] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:08:06] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:08:06] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:08:07] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:08:07] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:08:07] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:08:08] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:08:08] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:08:11] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:08:14] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:08:14] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:08:15] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:08:15] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (MgAn.4mpgBqyQloYt1YT...)
+[36m[2026-02-28 03:08:15] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-3703, expires=13:03:15)
+[36m[2026-02-28 03:08:15] [INFO][0m [auth] Auth acquired via playwright (expires 13:03:15)
+[36m[2026-02-28 03:08:15] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:08:16] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:08:16] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=ca8c9bff-c4a7-423a-a919-cd6bd6814c7a
+[36m[2026-02-28 03:08:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 521 msgs, 8469tk, 0 profiles
+[36m[2026-02-28 03:08:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 325msg 2444tk
+[36m[2026-02-28 03:08:35] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 55tk ""
+[36m[2026-02-28 03:08:37] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:08:41] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:08:41] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:08:41] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:08:41] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:08:43] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:08:43] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:08:43] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:08:43] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:08:43] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:08:44] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:08:47] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:08:49] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:08:50] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:08:50] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:08:50] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (1gHsyy7e1_EgEUbRp7.s...)
+[36m[2026-02-28 03:08:50] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-892, expires=13:03:50)
+[36m[2026-02-28 03:08:50] [INFO][0m [auth] Auth acquired via playwright (expires 13:03:50)
+[36m[2026-02-28 03:08:50] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:08:51] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:08:51] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=54d14de4-5ed5-428a-8b60-874a9674b2d3
+[33m[2026-02-28 03:08:53] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:08:53] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:09:07] [INFO][0m [storage] Wrote 4 rows to spy_messages
+[36m[2026-02-28 03:09:12] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 55tk ""
+[36m[2026-02-28 03:09:17] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:09:17] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:09:17] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:09:17] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:09:19] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:09:19] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:09:19] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:09:19] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:09:19] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:09:20] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:09:23] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:09:25] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:09:26] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:09:27] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:09:27] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (TT_QyosIxS2sOOKXTBRc...)
+[36m[2026-02-28 03:09:27] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-2546, expires=13:04:27)
+[36m[2026-02-28 03:09:27] [INFO][0m [auth] Auth acquired via playwright (expires 13:04:27)
+[36m[2026-02-28 03:09:27] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:09:27] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:09:28] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=9104db04-425a-49b5-aaf9-d3ef6d5d8914
+[36m[2026-02-28 03:09:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 531 msgs, 8579tk, 0 profiles
+[36m[2026-02-28 03:09:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 335msg 2554tk
+[36m[2026-02-28 03:09:34] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 100tk "🫵🏻もっと全力ぐりぐり(負けないw) 1分"
+[36m[2026-02-28 03:09:37] [INFO][0m [storage] Wrote 6 rows to spy_messages
+[36m[2026-02-28 03:09:53] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:09:53] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:09:53] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:09:53] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:09:54] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:09:54] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:09:54] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:09:54] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[33m[2026-02-28 03:09:54] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:09:54] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:09:54] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:09:55] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:09:58] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:10:00] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:10:01] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:10:02] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:10:02] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (gM0TQOrfxJRXXIqu5ie9...)
+[36m[2026-02-28 03:10:02] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-8325, expires=13:05:02)
+[36m[2026-02-28 03:10:02] [INFO][0m [auth] Auth acquired via playwright (expires 13:05:02)
+[36m[2026-02-28 03:10:02] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:10:03] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:10:03] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=c4973a78-722e-4165-83d0-9c93fe7a473b
+[36m[2026-02-28 03:10:08] [INFO][0m [storage] Wrote 4 rows to spy_messages
+[36m[2026-02-28 03:10:28] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:10:28] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:10:28] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:10:28] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:10:29] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:10:29] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:10:29] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:10:29] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:10:29] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:10:31] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:10:33] [INFO][0m [main] [HEALTH] 1/24 online, 0 WS, 540 msgs, 8679tk, 0 profiles
+[36m[2026-02-28 03:10:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=off 344msg 2654tk
+[36m[2026-02-28 03:10:34] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:10:36] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:10:37] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:10:37] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:10:37] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (SOhEs1TxE71V3rsflFna...)
+[36m[2026-02-28 03:10:37] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-7396, expires=13:05:37)
+[36m[2026-02-28 03:10:37] [INFO][0m [auth] Auth acquired via playwright (expires 13:05:37)
+[36m[2026-02-28 03:10:37] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:10:37] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:10:38] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:10:38] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=9ce2190f-a3ae-42cc-9beb-05826c8940f5
+[33m[2026-02-28 03:10:55] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:10:55] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:11:03] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:11:03] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:11:03] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:11:03] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:11:04] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:11:04] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:11:04] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:11:04] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:11:05] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:11:06] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:11:08] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[36m[2026-02-28 03:11:09] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:11:11] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:11:12] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:11:12] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:11:12] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (UOYVEVZk7KMDntJQi9BY...)
+[36m[2026-02-28 03:11:12] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-7793, expires=13:06:12)
+[36m[2026-02-28 03:11:12] [INFO][0m [auth] Auth acquired via playwright (expires 13:06:12)
+[36m[2026-02-28 03:11:12] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:11:13] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:11:13] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=6165c262-9d44-471d-9fc6-9c6b13e4f5d9
+[36m[2026-02-28 03:11:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 542 msgs, 8679tk, 0 profiles
+[36m[2026-02-28 03:11:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 346msg 2654tk
+[36m[2026-02-28 03:11:39] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:11:39] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:11:39] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:11:39] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:11:40] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:11:40] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:11:40] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:11:40] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:11:40] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:11:41] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:11:44] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:11:46] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:11:47] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:11:48] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:11:48] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (ymv5fhyPiadRWdPXbv97...)
+[36m[2026-02-28 03:11:48] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-6515, expires=13:06:48)
+[36m[2026-02-28 03:11:48] [INFO][0m [auth] Auth acquired via playwright (expires 13:06:48)
+[36m[2026-02-28 03:11:48] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:11:48] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:11:49] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=c2a06d58-0a7b-4f33-be6f-ed52b7e573fc
+[33m[2026-02-28 03:12:07] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:12:07] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:12:08] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[36m[2026-02-28 03:12:14] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:12:14] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:12:14] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:12:14] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:12:15] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:12:15] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:12:16] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:12:16] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:12:16] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:12:17] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:12:20] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:12:22] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:12:23] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:12:23] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:12:23] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (xdZDFheuQUVu0U1HSVz3...)
+[36m[2026-02-28 03:12:23] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-7677, expires=13:07:23)
+[36m[2026-02-28 03:12:23] [INFO][0m [auth] Auth acquired via playwright (expires 13:07:23)
+[36m[2026-02-28 03:12:23] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:12:24] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:12:24] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=f01271b0-e1fa-458e-853c-9a1ec469796f
+[36m[2026-02-28 03:12:29] [INFO][0m [config] Loaded 24 targets (自社=2, 他社SPY=22)
+[36m[2026-02-28 03:12:29] [INFO][0m [trigger-engine] TriggerEngine: loaded 6 active triggers
+[36m[2026-02-28 03:12:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 544 msgs, 8679tk, 0 profiles
+[36m[2026-02-28 03:12:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 348msg 2654tk
+[36m[2026-02-28 03:12:49] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:12:49] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:12:49] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:12:49] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:12:51] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:12:51] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:12:51] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:12:51] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:12:51] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:12:52] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:12:55] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:12:57] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:12:58] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:12:59] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:12:59] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (_8I37C1juLI68GF2KBVz...)
+[36m[2026-02-28 03:12:59] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-6013, expires=13:07:59)
+[36m[2026-02-28 03:12:59] [INFO][0m [auth] Auth acquired via playwright (expires 13:07:59)
+[36m[2026-02-28 03:12:59] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:12:59] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:13:00] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=0874c6c9-1530-499e-a5d4-c7f08d86c1f6
+[33m[2026-02-28 03:13:16] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:13:16] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:13:25] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:13:25] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:13:25] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:13:25] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:13:26] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:13:26] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:13:26] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:13:26] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:13:26] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:13:27] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:13:31] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:13:33] [INFO][0m [main] [HEALTH] 1/24 online, 0 WS, 545 msgs, 8679tk, 0 profiles
+[36m[2026-02-28 03:13:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=off 349msg 2654tk
+[36m[2026-02-28 03:13:33] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:13:34] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:13:34] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:13:34] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (H8zknLLr6OGTC_Ph9HCE...)
+[36m[2026-02-28 03:13:34] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-5253, expires=13:08:34)
+[36m[2026-02-28 03:13:34] [INFO][0m [auth] Auth acquired via playwright (expires 13:08:34)
+[36m[2026-02-28 03:13:34] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:13:35] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:13:35] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=55b8fa04-04cf-4a19-a57c-512fdf652c8f
+[36m[2026-02-28 03:13:38] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:14:00] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:14:00] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:14:00] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:14:00] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:14:01] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:14:01] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:14:01] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:14:01] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:14:02] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:14:03] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:14:06] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:14:08] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:14:09] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:14:09] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:14:10] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:14:10] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (SnNBhWP_GRVtodeMvXXg...)
+[36m[2026-02-28 03:14:10] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-4888, expires=13:09:10)
+[36m[2026-02-28 03:14:10] [INFO][0m [auth] Auth acquired via playwright (expires 13:09:10)
+[36m[2026-02-28 03:14:10] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:14:11] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:14:11] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=30111118-4fc3-4795-a809-fcd74250e94d
+[33m[2026-02-28 03:14:22] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:14:22] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:14:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 548 msgs, 8679tk, 0 profiles
+[36m[2026-02-28 03:14:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 352msg 2654tk
+[36m[2026-02-28 03:14:36] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:14:36] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:14:36] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:14:36] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:14:37] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326955 (line 1 column 326956)
+[36m[2026-02-28 03:14:37] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:14:37] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:14:37] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:14:37] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:14:39] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:14:42] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:14:44] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:14:45] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:14:46] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:14:46] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (j8_xg21hW4fbIhTDRU1i...)
+[36m[2026-02-28 03:14:46] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-6515, expires=13:09:46)
+[36m[2026-02-28 03:14:46] [INFO][0m [auth] Auth acquired via playwright (expires 13:09:46)
+[36m[2026-02-28 03:14:46] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:14:46] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:14:47] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=822ec608-e125-45dc-8783-668f4aef4b02
+[36m[2026-02-28 03:15:12] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:15:12] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:15:12] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:15:12] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:15:13] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:15:13] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:15:14] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:15:14] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:15:14] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:15:15] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:15:18] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:15:20] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:15:21] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:15:21] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:15:21] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (JqkFwifLJuc8P06E5adP...)
+[36m[2026-02-28 03:15:21] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-6113, expires=13:10:21)
+[36m[2026-02-28 03:15:21] [INFO][0m [auth] Auth acquired via playwright (expires 13:10:21)
+[36m[2026-02-28 03:15:21] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:15:22] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:15:22] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=14344246-d81b-4551-bac0-ac4655c12df0
+[33m[2026-02-28 03:15:30] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:15:30] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:15:30] [INFO][0m [collector] -Yomogimochi-: TIP KICKFLIP 39tk ""
+[36m[2026-02-28 03:15:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 550 msgs, 8718tk, 0 profiles
+[36m[2026-02-28 03:15:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 354msg 2693tk
+[36m[2026-02-28 03:15:38] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:15:38] [INFO][0m [collector] -Yomogimochi-: TIP NAO-9NA4KLV 39tk ""
+[36m[2026-02-28 03:15:47] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:15:47] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:15:47] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:15:47] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:15:49] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:15:49] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:15:49] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:15:49] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:15:49] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:15:50] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:15:53] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:15:56] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:15:56] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:15:57] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:15:57] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (kuA2c30durz0UNy3.0r....)
+[36m[2026-02-28 03:15:57] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-5076, expires=13:10:57)
+[36m[2026-02-28 03:15:57] [INFO][0m [auth] Auth acquired via playwright (expires 13:10:57)
+[36m[2026-02-28 03:15:57] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:15:58] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:15:58] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=1a7afe7e-6d3e-43ee-a6d5-d4f93f5fa89e
+[36m[2026-02-28 03:16:08] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[36m[2026-02-28 03:16:23] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:16:23] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:16:23] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:16:23] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:16:24] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:16:24] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:16:24] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:16:24] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:16:24] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:16:26] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:16:29] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:16:31] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:16:32] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:16:32] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:16:32] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (wlxaXwTllxSncq5kCOCI...)
+[36m[2026-02-28 03:16:32] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-4370, expires=13:11:32)
+[36m[2026-02-28 03:16:32] [INFO][0m [auth] Auth acquired via playwright (expires 13:11:32)
+[36m[2026-02-28 03:16:32] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:16:33] [INFO][0m [main] [HEALTH] 1/24 online, 0 WS, 555 msgs, 8757tk, 0 profiles
+[36m[2026-02-28 03:16:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=off 359msg 2732tk
+[36m[2026-02-28 03:16:33] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:16:33] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=f20ad1d9-4559-4d17-89fa-2499ec91f68c
+[36m[2026-02-28 03:16:38] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[33m[2026-02-28 03:16:39] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:16:39] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:16:50] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 39tk ""
+[36m[2026-02-28 03:16:55] [INFO][0m [collector] -Yomogimochi-: TIP yamasandes 39tk ""
+[36m[2026-02-28 03:16:58] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:16:58] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:16:58] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:16:58] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:16:59] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:16:59] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:17:00] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:17:00] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:17:00] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:17:01] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:17:04] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:17:06] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:17:07] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:17:07] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:17:07] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (dSrft1Bgiy8jL1HnKNrh...)
+[36m[2026-02-28 03:17:07] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-3072, expires=13:12:07)
+[36m[2026-02-28 03:17:07] [INFO][0m [auth] Auth acquired via playwright (expires 13:12:07)
+[36m[2026-02-28 03:17:07] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:17:08] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:17:08] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:17:08] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=1c72cd83-8a17-4108-b792-b5e877a019bc
+[36m[2026-02-28 03:17:18] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 39tk ""
+[36m[2026-02-28 03:17:28] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 39tk ""
+[36m[2026-02-28 03:17:29] [INFO][0m [config] Loaded 24 targets (自社=2, 他社SPY=22)
+[36m[2026-02-28 03:17:29] [INFO][0m [trigger-engine] TriggerEngine: loaded 6 active triggers
+[36m[2026-02-28 03:17:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 562 msgs, 8913tk, 0 profiles
+[36m[2026-02-28 03:17:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 366msg 2888tk
+[36m[2026-02-28 03:17:34] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:17:34] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:17:34] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:17:34] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:17:35] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:17:35] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:17:35] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:17:35] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:17:35] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:17:36] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:17:38] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:17:39] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:17:41] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:17:42] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:17:42] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:17:42] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (Uwv8QZA0bxPKB0OF4oBd...)
+[36m[2026-02-28 03:17:42] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-2799, expires=13:12:42)
+[36m[2026-02-28 03:17:42] [INFO][0m [auth] Auth acquired via playwright (expires 13:12:42)
+[36m[2026-02-28 03:17:42] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:17:43] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:17:43] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=f0a4b7af-e56a-470e-a5ee-02cee2d718aa
+[36m[2026-02-28 03:17:44] [INFO][0m [collector] -Yomogimochi-: TIP yamasandes 39tk ""
+[33m[2026-02-28 03:17:47] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:17:47] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:17:53] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 39tk ""
+[36m[2026-02-28 03:18:00] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 39tk ""
+[36m[2026-02-28 03:18:04] [INFO][0m [collector] -Yomogimochi-: TIP hirochan1 39tk ""
+[36m[2026-02-28 03:18:08] [INFO][0m [storage] Wrote 5 rows to spy_messages
+[36m[2026-02-28 03:18:09] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:18:09] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:18:09] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:18:09] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:18:10] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:18:10] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:18:10] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:18:10] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:18:10] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:18:11] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:18:14] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:18:16] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:18:17] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:18:18] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:18:18] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (bzInNmCER3blTt85m.Zz...)
+[36m[2026-02-28 03:18:18] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-7444, expires=13:13:18)
+[36m[2026-02-28 03:18:18] [INFO][0m [auth] Auth acquired via playwright (expires 13:13:18)
+[36m[2026-02-28 03:18:18] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:18:19] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:18:19] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=f9205ad2-01fe-46bd-9dc8-ea4b262c8941
+[36m[2026-02-28 03:18:26] [INFO][0m [collector] -Yomogimochi-: TIP syuuuyaya 39tk ""
+[36m[2026-02-28 03:18:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 570 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:18:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 374msg 3083tk
+[36m[2026-02-28 03:18:38] [INFO][0m [storage] Wrote 4 rows to spy_messages
+[36m[2026-02-28 03:18:44] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:18:44] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:18:44] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:18:44] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:18:45] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326968 (line 1 column 326969)
+[36m[2026-02-28 03:18:45] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:18:46] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:18:46] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:18:46] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:18:47] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:18:50] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:18:52] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[33m[2026-02-28 03:18:52] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:18:52] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:18:53] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:18:54] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:18:54] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (jPDMFlF0X0C9TO1z0B7q...)
+[36m[2026-02-28 03:18:54] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-9162, expires=13:13:54)
+[36m[2026-02-28 03:18:54] [INFO][0m [auth] Auth acquired via playwright (expires 13:13:54)
+[36m[2026-02-28 03:18:54] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:18:54] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:18:55] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=e4c6b512-861a-4781-b477-ffa74a8d3969
+[36m[2026-02-28 03:19:08] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:19:20] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:19:20] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:19:20] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:19:20] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:19:21] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:19:21] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:19:21] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:19:21] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:19:21] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:19:22] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:19:25] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:19:28] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:19:29] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:19:29] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:19:29] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (IMNb9P5Hc6UwkP7Zfpvj...)
+[36m[2026-02-28 03:19:29] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-6917, expires=13:14:29)
+[36m[2026-02-28 03:19:29] [INFO][0m [auth] Auth acquired via playwright (expires 13:14:29)
+[36m[2026-02-28 03:19:29] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:19:30] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:19:30] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=ea2bfed8-16e5-48da-ad5c-f24a3e478a06
+[36m[2026-02-28 03:19:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 574 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:19:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 378msg 3083tk
+[36m[2026-02-28 03:19:38] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[36m[2026-02-28 03:19:56] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:19:56] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:19:56] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:19:56] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:19:56] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:19:56] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:19:57] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:19:57] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:19:57] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:19:58] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:20:01] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:20:03] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[33m[2026-02-28 03:20:03] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:20:03] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:20:05] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:20:05] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:20:05] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (FDnW2OEHK02TXO1EU5Ue...)
+[36m[2026-02-28 03:20:05] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-1729, expires=13:15:05)
+[36m[2026-02-28 03:20:05] [INFO][0m [auth] Auth acquired via playwright (expires 13:15:05)
+[36m[2026-02-28 03:20:05] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:20:06] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:20:06] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=1c9a769e-d7a7-4443-9a31-3626c511e16f
+[36m[2026-02-28 03:20:08] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:20:32] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:20:32] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:20:32] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:20:32] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:20:33] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:20:33] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[36m[2026-02-28 03:20:33] [INFO][0m [main] [HEALTH] 1/24 online, 0 WS, 576 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:20:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=off 380msg 3083tk
+[33m[2026-02-28 03:20:33] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:20:33] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:20:33] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:20:34] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:20:37] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:20:38] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:20:40] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:20:40] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:20:41] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:20:41] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (si5_JRATX47R2ajbSAlJ...)
+[36m[2026-02-28 03:20:41] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-5492, expires=13:15:41)
+[36m[2026-02-28 03:20:41] [INFO][0m [auth] Auth acquired via playwright (expires 13:15:41)
+[36m[2026-02-28 03:20:41] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:20:42] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:20:42] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=a2fbdbbb-2c93-42cd-aab5-cb2a8b42f2b7
+[33m[2026-02-28 03:21:04] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:21:04] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:21:07] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:21:07] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:21:07] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:21:07] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:21:08] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[31m[2026-02-28 03:21:08] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:21:08] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:21:09] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:21:09] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:21:09] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:21:10] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:21:13] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:21:15] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:21:16] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:21:16] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:21:16] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (wzuASyZIuDGIH13lg2dz...)
+[36m[2026-02-28 03:21:16] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-3458, expires=13:16:16)
+[36m[2026-02-28 03:21:16] [INFO][0m [auth] Auth acquired via playwright (expires 13:16:16)
+[36m[2026-02-28 03:21:16] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:21:17] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:21:17] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=f9782ab4-f5ce-4ed7-bb79-1b48c0b628f3
+[36m[2026-02-28 03:21:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 578 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:21:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 382msg 3083tk
+[36m[2026-02-28 03:21:38] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:21:43] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:21:43] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:21:43] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:21:43] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:21:43] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326955 (line 1 column 326956)
+[36m[2026-02-28 03:21:43] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:21:44] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:21:44] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:21:44] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:21:45] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:21:48] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:21:50] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:21:51] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:21:51] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:21:51] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (uvdWmFnGn_skKpRQwMJQ...)
+[36m[2026-02-28 03:21:51] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-5811, expires=13:16:51)
+[36m[2026-02-28 03:21:51] [INFO][0m [auth] Auth acquired via playwright (expires 13:16:51)
+[36m[2026-02-28 03:21:51] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:21:52] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:21:52] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=8847bda5-8a9a-453e-a89e-dff6aa627ab4
+[33m[2026-02-28 03:22:07] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:22:07] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:22:08] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[36m[2026-02-28 03:22:18] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:22:18] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:22:18] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:22:18] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:22:19] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:22:19] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:22:19] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:22:19] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:22:19] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:22:20] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:22:23] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:22:25] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:22:26] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:22:27] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:22:27] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (W3bSRna1_NZ0dEHv0afn...)
+[36m[2026-02-28 03:22:27] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-2877, expires=13:17:27)
+[36m[2026-02-28 03:22:27] [INFO][0m [auth] Auth acquired via playwright (expires 13:17:27)
+[36m[2026-02-28 03:22:27] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:22:28] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:22:28] [INFO][0m [alerts] [ALERT] Evaluating alerts for 1 account(s)...
+[36m[2026-02-28 03:22:28] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=fc1348ec-3799-42c1-9bac-2f62f1c38733
+[36m[2026-02-28 03:22:28] [INFO][0m [trigger-engine] Scheduled trigger evaluation starting...
+[36m[2026-02-28 03:22:29] [INFO][0m [trigger:segment-upgrade] segment_upgrade: 15 upgrades detected
+[36m[2026-02-28 03:22:29] [INFO][0m [config] Loaded 24 targets (自社=2, 他社SPY=22)
+[36m[2026-02-28 03:22:29] [INFO][0m [trigger-engine] TriggerEngine: loaded 6 active triggers
+[36m[2026-02-28 03:22:30] [INFO][0m [alerts] [ALERT] Evaluation complete
+[36m[2026-02-28 03:22:30] [INFO][0m [trigger:competitor-outflow] competitor_outflow: 6 users spending at competitors but dormant at own casts
+[36m[2026-02-28 03:22:31] [INFO][0m [trigger-engine] Scheduled trigger evaluation complete
+[36m[2026-02-28 03:22:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 581 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:22:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 385msg 3083tk
+[36m[2026-02-28 03:22:38] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[36m[2026-02-28 03:22:53] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:22:53] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:22:53] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:22:53] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:22:54] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:22:54] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:22:54] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:22:54] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:22:54] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:22:56] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:22:59] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:23:01] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:23:02] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:23:02] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:23:02] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (JDm1pjs8XqAlTd.3Vsb7...)
+[36m[2026-02-28 03:23:02] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-9386, expires=13:18:02)
+[36m[2026-02-28 03:23:02] [INFO][0m [auth] Auth acquired via playwright (expires 13:18:02)
+[36m[2026-02-28 03:23:02] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:23:03] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:23:03] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=488fa3d7-8db1-4027-b570-5a7e2e501f4c
+[33m[2026-02-28 03:23:07] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:23:07] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:23:08] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:23:28] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:23:28] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:23:28] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:23:28] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:23:29] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:23:29] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:23:30] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:23:30] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:23:30] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:23:31] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:23:33] [INFO][0m [main] [HEALTH] 1/24 online, 0 WS, 586 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:23:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=off 390msg 3083tk
+[36m[2026-02-28 03:23:34] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:23:36] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:23:37] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:23:37] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:23:37] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (4g09oZJKDScaXVv5OxHt...)
+[36m[2026-02-28 03:23:37] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-1363, expires=13:18:37)
+[36m[2026-02-28 03:23:37] [INFO][0m [auth] Auth acquired via playwright (expires 13:18:37)
+[36m[2026-02-28 03:23:37] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:23:38] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:23:38] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:23:38] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=4daab0e2-188c-4993-a359-fd783fea6a54
+[36m[2026-02-28 03:24:04] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:24:04] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:24:04] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:24:04] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:24:05] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:24:05] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:24:05] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:24:05] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:24:05] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:24:06] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[33m[2026-02-28 03:24:07] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:24:07] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:24:08] [INFO][0m [storage] Wrote 1 rows to spy_messages
+[36m[2026-02-28 03:24:09] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:24:11] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:24:12] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:24:13] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:24:13] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (oOo9tFpfLilzVrbPuAJQ...)
+[36m[2026-02-28 03:24:13] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-5003, expires=13:19:13)
+[36m[2026-02-28 03:24:13] [INFO][0m [auth] Auth acquired via playwright (expires 13:19:13)
+[36m[2026-02-28 03:24:13] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:24:13] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:24:14] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=e532d80e-1806-4b04-9126-7f3f4382b645
+[36m[2026-02-28 03:24:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 589 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:24:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 393msg 3083tk
+[36m[2026-02-28 03:24:38] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[36m[2026-02-28 03:24:39] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:24:39] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:24:39] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:24:39] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:24:40] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:24:40] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:24:40] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:24:40] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:24:40] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:24:41] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:24:44] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:24:46] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:24:47] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:24:48] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:24:48] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (b0rebs9.uXO0bsXiGDMD...)
+[36m[2026-02-28 03:24:48] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-8808, expires=13:19:48)
+[36m[2026-02-28 03:24:48] [INFO][0m [auth] Auth acquired via playwright (expires 13:19:48)
+[36m[2026-02-28 03:24:48] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:24:49] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:24:49] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=da27ae74-3614-485f-aa98-018af1fdca22
+[36m[2026-02-28 03:25:08] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[33m[2026-02-28 03:25:09] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:25:09] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:25:14] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:25:14] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:25:14] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:25:14] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:25:15] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:25:15] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:25:15] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:25:15] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:25:15] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:25:16] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:25:19] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:25:22] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:25:23] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:25:23] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:25:23] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (P.8e57Jk96KXmZQ4c0HD...)
+[36m[2026-02-28 03:25:23] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-5905, expires=13:20:23)
+[36m[2026-02-28 03:25:23] [INFO][0m [auth] Auth acquired via playwright (expires 13:20:23)
+[36m[2026-02-28 03:25:23] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:25:24] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:25:24] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=8d4d332d-9fcc-4897-8568-7f88ff685d57
+[36m[2026-02-28 03:25:33] [INFO][0m [main] [HEALTH] 1/24 online, 1 WS, 594 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:25:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=ON 398msg 3083tk
+[36m[2026-02-28 03:25:38] [INFO][0m [storage] Wrote 3 rows to spy_messages
+[36m[2026-02-28 03:25:49] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:25:49] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:25:49] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:25:49] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:25:50] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:25:50] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:25:50] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:25:50] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:25:51] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:25:52] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:25:55] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:25:58] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:25:59] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:25:59] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:25:59] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (0CctW._vLP4l6dtgHYr3...)
+[36m[2026-02-28 03:25:59] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-5477, expires=13:20:59)
+[36m[2026-02-28 03:25:59] [INFO][0m [auth] Auth acquired via playwright (expires 13:20:59)
+[36m[2026-02-28 03:25:59] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:26:00] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:26:00] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=482abd80-84b8-4afe-8b63-c9ae19379a71
+[36m[2026-02-28 03:26:08] [INFO][0m [storage] Wrote 2 rows to spy_messages
+[33m[2026-02-28 03:26:10] [WARN][0m [ws-client] -Yomogimochi-: viewer list HTTP 401
+[31m[2026-02-28 03:26:10] [ERROR][0m [reconnect] viewers:-Yomogimochi-: max retries (5) exceeded — giving up
+[36m[2026-02-28 03:26:26] [INFO][0m [ws-client] -Yomogimochi-: WS closed (code=3501, reason=bad request)
+[33m[2026-02-28 03:26:26] [WARN][0m [collector] -Yomogimochi-: Auth error — invalidating and retrying
+[36m[2026-02-28 03:26:26] [INFO][0m [auth] Auth cache invalidated
+[36m[2026-02-28 03:26:26] [INFO][0m [auth] [方式C] Fetching page: https://stripchat.com/Risa_06
+[31m[2026-02-28 03:26:26] [ERROR][0m [auth] [方式C] JSON parse failed: Unexpected non-whitespace character after JSON at position 326969 (line 1 column 326970)
+[36m[2026-02-28 03:26:26] [INFO][0m [auth] [方式B] Fetching /api/front/v2/config
+[33m[2026-02-28 03:26:27] [WARN][0m [auth] [方式B] HTTP 404
+[36m[2026-02-28 03:26:27] [INFO][0m [playwright-auth] [方式A] Playwright起動 (model=Risa_06, headless=true)
+[36m[2026-02-28 03:26:27] [INFO][0m [playwright-auth] [方式A] ページアクセス: https://stripchat.com/Risa_06
+[36m[2026-02-28 03:26:28] [INFO][0m [playwright-auth] [方式A] 年齢確認ゲート突破 (method=text)
+[36m[2026-02-28 03:26:31] [INFO][0m [playwright-auth] [方式A] ページ状態: title="Risa_06 のキャスト：無料のライブセックス＆チャット | Stripchat", url=https://ja.stripchat.com/Risa_06
+[36m[2026-02-28 03:26:33] [INFO][0m [main] [HEALTH] 1/24 online, 0 WS, 598 msgs, 9108tk, 0 profiles
+[36m[2026-02-28 03:26:33] [INFO][0m [main]   -Yomogimochi-: public (0 viewers) WS=off 402msg 3083tk
+[36m[2026-02-28 03:26:33] [INFO][0m [playwright-auth] [方式A] WS接続検出: wss://websocket-sp-v6.stripchat.com/connection/websocket
+[36m[2026-02-28 03:26:34] [INFO][0m [playwright-auth] [方式A] JWT捕捉 (eyJ0eXAiOiJKV1QiLCJhbGciOiJIUz...)
+[36m[2026-02-28 03:26:34] [INFO][0m [playwright-auth] [方式A] ゲストJWT取得成功
+[36m[2026-02-28 03:26:34] [INFO][0m [playwright-auth] [方式A] cf_clearance取得 (DrvpV1.sqW809e7Cgfwv...)
+[36m[2026-02-28 03:26:34] [INFO][0m [playwright-auth] [方式A] 認証取得完了 (userId=-4099, expires=13:21:34)
+[36m[2026-02-28 03:26:34] [INFO][0m [auth] Auth acquired via playwright (expires 13:21:34)
+[36m[2026-02-28 03:26:34] [INFO][0m [ws-client] -Yomogimochi-: WS connecting (modelId=231524791, auth=yes)
+[36m[2026-02-28 03:26:35] [INFO][0m [ws-client] -Yomogimochi-: WS open — sending Centrifugo connect
+[36m[2026-02-28 03:26:35] [INFO][0m [ws-client] -Yomogimochi-: CONNECT OK client=2290539a-1fcb-475d-a36b-44f9e7da41d9
+[36m[2026-02-28 03:26:38] [INFO][0m [storage] Wrote 2 rows to spy_messages
