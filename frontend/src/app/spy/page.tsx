@@ -345,13 +345,20 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
     return () => clearInterval(timer);
   }, [scopedMessages]);
 
-  // Viewer stats (only for own casts)
+  // Viewer stats (only for own casts, cast_nameフィルタ付き)
   useEffect(() => {
     if (!user || castFilter !== 'own') return;
     const supabase = createClient();
     const loadViewer = () => {
-      supabase.from('viewer_stats')
-        .select('total, coin_users, others, recorded_at')
+      let query = supabase.from('viewer_stats')
+        .select('total, coin_users, others, recorded_at, cast_name');
+      // 特定キャスト選択時はフィルタ、未選択時は自社キャスト全体の最新
+      if (selectedCast) {
+        query = query.eq('cast_name', selectedCast);
+      } else if (registeredCastNames.size > 0) {
+        query = query.in('cast_name', Array.from(registeredCastNames));
+      }
+      query
         .order('recorded_at', { ascending: false })
         .limit(1)
         .then(({ data }) => {
@@ -361,7 +368,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
     loadViewer();
     const interval = setInterval(loadViewer, 30000);
     return () => clearInterval(interval);
-  }, [user, castFilter]);
+  }, [user, castFilter, selectedCast, registeredCastNames]);
 
   // Filtered messages
   const allFilterTypes = useMemo(() => {

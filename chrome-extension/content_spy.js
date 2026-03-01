@@ -898,6 +898,29 @@
 
   function startUrlCheck() {
     if (urlCheckTimer) return;
+
+    // SPA遷移を即時検出（pushState/replaceState/popstate）
+    const onUrlChange = () => {
+      if (location.href !== lastUrl) {
+        lastUrl = location.href;
+        console.log(LOG, 'URL変化検出(即時) → 再初期化');
+        reconnect();
+      }
+    };
+    window.addEventListener('popstate', onUrlChange);
+    // pushState/replaceState をラップして検出
+    const origPushState = history.pushState;
+    const origReplaceState = history.replaceState;
+    history.pushState = function(...args) {
+      origPushState.apply(this, args);
+      onUrlChange();
+    };
+    history.replaceState = function(...args) {
+      origReplaceState.apply(this, args);
+      onUrlChange();
+    };
+
+    // フォールバック: 2秒間隔でポーリング（pushState以外の遷移対策）
     urlCheckTimer = setInterval(() => {
       if (location.href !== lastUrl) {
         lastUrl = location.href;
@@ -913,7 +936,7 @@
           reconnect();
         }
       }
-    }, 5000);
+    }, 2000);
   }
 
   function stopUrlCheck() {
@@ -931,12 +954,16 @@
     processedIds.clear();
     reconnectAttempts = 0;
 
+    // castNameを即座に更新（遅延中に古いcast_nameでメッセージが送られるのを防止）
+    castName = extractCastName();
+    console.log(LOG, 'reconnect: castName即時更新 →', castName);
+
     setTimeout(() => {
       if (enabled) {
         startObserving();
         startViewerStatsPolling();
       }
-    }, 2000);
+    }, 500);
   }
 
   // ============================================================

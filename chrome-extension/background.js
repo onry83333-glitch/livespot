@@ -1012,11 +1012,12 @@ async function flushViewerStats() {
 
   try {
     const data = await chrome.storage.local.get(['last_cast_name']);
-    const castName = data.last_cast_name || 'unknown';
+    const fallbackCastName = data.last_cast_name || 'unknown';
 
     const rows = batch.map(s => ({
       account_id: accountId,
-      cast_name: castName,
+      // バッファ記録時のcast_nameを優先（フォールバックはlast_cast_name）
+      cast_name: s.cast_name || fallbackCastName,
       total: s.total,
       coin_users: s.coin_users,
       others: s.others,
@@ -1060,11 +1061,11 @@ async function flushViewerStats() {
  * SPY開始時: sessionsテーブルにセッション開始を記録
  * title カラムに cast_name を格納（sessions に cast_name カラムなし）
  */
-async function insertSession(sessionId, acctId) {
+async function insertSession(sessionId, acctId, castNameArg) {
   if (!accessToken) return;
 
-  const storageData = await chrome.storage.local.get(['last_cast_name']);
-  const castName = storageData.last_cast_name || 'unknown';
+  // cast_nameは引数から取得（last_cast_nameフォールバックによる混在を防止）
+  const castName = castNameArg || 'unknown';
 
   try {
     const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/sessions`, {
@@ -2243,7 +2244,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
     }
 
-    // session_id: per-cast session優先、fallback to global currentSessionId
+    // session_id: per-cast sessionのみ使用（currentSessionIdフォールバック禁止 = 他キャスト混在防止）
     const perCastSessionId = castName ? (castSessions.get(castName) || null) : null;
 
     // account_id は含めない（flush時にstorageから最新値を付与）
@@ -2258,7 +2259,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       user_league: msg.user_league || null,
       user_level: msg.user_level != null ? msg.user_level : null,
       metadata: msg.metadata || {},
-      session_id: perCastSessionId || currentSessionId || null,
+      session_id: perCastSessionId,
     };
 
     // GC（グループチャット）トラッキング
@@ -2858,8 +2859,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       chrome.storage.local.set({ spy_started_at: new Date().toISOString(), current_session_id: currentSessionId });
       // sessionsテーブルにセッション開始を記録（fire-and-forget）
       if (accountId) {
-        insertSession(currentSessionId, accountId).catch(e => {
-          console.error('[LS-BG] sessions開始記録失敗:', e.message);
+        chrome.storage.local.get(['last_cast_name'], (d) => {
+          insertSession(currentSessionId, accountId, d.last_cast_name).catch(e => {
+            console.error('[LS-BG] sessions開始記録失敗:', e.message);
+          });
         });
       }
       // スクリーンショットタイマー開始
@@ -3626,7 +3629,7 @@ async function fetchNextDMTask() {
     + `?account_id=eq.${accountId}&status=eq.queued`
     + `&created_at=lt.${encodeURIComponent(graceThreshold)}`
     + `&order=created_at.asc&limit=1`
-    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order`;
+    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order,cast_name`;
 
   const res = await fetch(url, {
     headers: {
@@ -3658,7 +3661,7 @@ async function fetchDMBatch(limit = 50) {
   const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
     + `?account_id=eq.${accountId}&status=eq.queued`
     + `&order=created_at.asc&limit=${limit}`
-    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order`;
+    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order,cast_name`;
 
   const res = await fetch(url, {
     headers: {
@@ -3942,6 +3945,33 @@ async function tryDMviaAPI(task, tab) {
       return null;
     }
     console.log('[LS-BG] DM API myUserId:', myUserId);
+
+    // ---- 1.5. キャスト身元検証ゲート（P0-5: 誤送信防止） ----
+    // task.cast_nameがある場合、registered_castsのstripchat_user_idとAMP cookie由来のmyUserIdを照合
+    if (task.cast_name && accountId && accessToken) {
+      try {
+        const rcRes = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(task.cast_name)}&is_active=eq.true&stripchat_user_id=not.is.null&select=stripchat_user_id&limit=1`,
+          { headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` } }
+        );
+        if (rcRes.ok) {
+          const rcRows = await rcRes.json();
+          if (rcRows?.[0]?.stripchat_user_id) {
+            const registeredId = String(rcRows[0].stripchat_user_id);
+            if (registeredId !== myUserId) {
+              const errMsg = `CAST_IDENTITY_MISMATCH: cast=${task.cast_name}(登録ID:${registeredId}) != AMP cookie(${myUserId})。誤送信を防止しました。`;
+              console.error('[LS-BG] ❌ DM身元検証失敗:', errMsg);
+              return { success: false, error: errMsg, castIdentityMismatch: true };
+            }
+            console.log('[LS-BG] ✓ DM身元検証OK: cast=', task.cast_name, 'registeredId=', registeredId, '== myUserId=', myUserId);
+          } else {
+            console.warn('[LS-BG] DM身元検証: cast=', task.cast_name, 'のstripchat_user_idが未登録 → 検証スキップ（要登録）');
+          }
+        }
+      } catch (e) {
+        console.warn('[LS-BG] DM身元検証エラー（送信は続行）:', e.message);
+      }
+    }
 
     // ---- 2. targetUserId (DB解決) ----
     let targetUserId = task.target_user_id ? String(task.target_user_id) : null;
@@ -4417,7 +4447,16 @@ async function processDMQueueSerial(tasks) {
     }
 
     if (apiResult) {
-      if (apiResult.success) {
+      if (apiResult.castIdentityMismatch) {
+        // ❌ キャスト身元不一致 → 全タスク即時停止（同一セッションで全タスク同じ結果）
+        console.error(`[LS-BG] ❌ CAST_IDENTITY_MISMATCH検出 → 全${tasks.length}タスク停止`);
+        await updateDMTaskStatus(task.id, 'error', apiResult.error);
+        for (let j = i + 1; j < tasks.length; j++) {
+          await updateDMTaskStatus(tasks[j].id, 'error', apiResult.error);
+        }
+        try { await chrome.tabs.remove(tabId); } catch (e) { /* ignore */ }
+        return []; // DOMフォールバックも禁止
+      } else if (apiResult.success) {
         await updateDMTaskStatus(task.id, 'success', null, 'api');
         console.log(`[LS-BG] DM API送信成功! ${task.user_name} (${i + 1}/${tasks.length})`);
       } else if (apiResult.rateLimited) {
@@ -5103,7 +5142,7 @@ async function runAutoPatrol() {
 
         // sessionsテーブルにセッション開始を記録
         chrome.storage.local.set({ last_cast_name: castName });
-        insertSession(currentSessionId, accountId).catch(e => {
+        insertSession(currentSessionId, accountId, castName).catch(e => {
           console.error('[LS-BG] AutoPatrol: sessions開始記録失敗:', e.message);
         });
 
@@ -6123,7 +6162,8 @@ restoreBuffers().then(() => {
           if (checkRes.ok) {
             const existing = await checkRes.json();
             if (existing.length === 0) {
-              await insertSession(currentSessionId, accountId);
+              const restoreData = await chrome.storage.local.get(['last_cast_name']);
+              await insertSession(currentSessionId, accountId, restoreData.last_cast_name);
               console.log('[LS-BG] sessions復元INSERT:', currentSessionId);
             } else {
               console.log('[LS-BG] sessions既存確認OK:', currentSessionId);
