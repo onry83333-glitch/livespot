@@ -11,7 +11,7 @@ import { createLogger } from './utils/logger.js';
 
 const log = createLogger('thumbnails');
 
-const THUMBNAIL_CDN = 'https://img.strpst.com/thumbs';
+const THUMBNAIL_CDN = 'https://img.doppiocdn.org/thumbs';
 const STORAGE_BUCKET = 'screenshots';
 const CAPTURE_INTERVAL_MS = 60 * 1000; // 60秒
 
