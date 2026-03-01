@@ -123,6 +123,7 @@ async function generateSessionReport(token: string, sessionId: string) {
     const { data: lastMsg } = await supabase
       .from('spy_messages')
       .select('message_time')
+      .eq('account_id', session.account_id)
       .eq('session_id', sessionId)
       .order('message_time', { ascending: false })
       .limit(1)
@@ -138,6 +139,7 @@ async function generateSessionReport(token: string, sessionId: string) {
   const { data: messages } = await supabase
     .from('spy_messages')
     .select('user_name, message, msg_type, tokens, message_time')
+    .eq('account_id', session.account_id)
     .eq('session_id', sessionId)
     .order('message_time', { ascending: true })
     .limit(10000);

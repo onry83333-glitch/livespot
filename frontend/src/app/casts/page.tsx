@@ -250,10 +250,10 @@ export default function CastsPage() {
             return { data: total };
           })(),
           supabase.from('spy_messages').select('id', { count: 'exact', head: true })
-            .eq('account_id', selectedAccount).eq('is_vip', true)
+            .eq('account_id', selectedAccount).in('cast_name', castNames).eq('is_vip', true)
             .gte('message_time', todayStartUTC.toISOString()),
           supabase.from('dm_send_log').select('id', { count: 'exact', head: true })
-            .eq('account_id', selectedAccount).gte('queued_at', since7d),
+            .eq('account_id', selectedAccount).in('cast_name', castNames).gte('queued_at', since7d),
         ]);
 
         setCastStats((statsRes.data || []) as CastStats[]);
