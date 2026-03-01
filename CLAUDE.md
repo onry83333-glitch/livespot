@@ -6,6 +6,35 @@
 
 ---
 
+## 🤖 Multi-Poller チーム情報
+
+このプロジェクトは **北関東OS Multi-Poller** の自律実行対象チームです。
+
+| 項目 | 値 |
+|---|---|
+| チーム名 | 💻 SLS |
+| Notionプロジェクトフィルタ | `💻 SLS`, `🧠 Persona Agent` |
+| CWD | `C:\dev\livespot` |
+| タスクボード | collection://48e5a7f8-642b-476b-98b2-2f0f0baba967 |
+| task_queue source tag | `notion:{page_id}:sls` |
+
+### ポーラー経由実行時の動作
+- `claude.cmd --print --dangerously-skip-permissions` で実行される
+- タスクのinstructionはNotionのメモ欄（なければタスク名）
+- 完了後: Notion ✅ Done → git push → Telegram通知
+- 失敗時: Notion ⏸ Blocked → Telegram通知
+- **確認なしで自走する**（--printモード）
+
+### ポーラー経由の安全ルール
+- git pushは絶対に実行しない。コミットまで。
+- SQLマイグレーションはファイル作成+コミットまで。Supabaseへの適用はしない。
+- SQLマイグレーションファイルには必ずROLLBACK手順をコメントで含めること。
+- 3ファイル以上の変更が必要な場合、まず変更計画を出力して実行しない。
+- .envファイルは読み取りのみ。編集禁止。
+- RPCの引数を変える場合、呼び出し元のフロントエンドもセットで修正すること。
+
+---
+
 ## ワークフローのオーケストレーション
 
 ### 0. 運用ルール
