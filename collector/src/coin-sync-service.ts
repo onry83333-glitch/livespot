@@ -333,7 +333,7 @@ async function upsertTransactions(
     const { error } = await sb
       .from('coin_transactions')
       .upsert(batch, {
-        onConflict: 'account_id,user_name,cast_name,tokens,date',
+        onConflict: 'account_id,stripchat_tx_id',
         ignoreDuplicates: true,
       });
     if (error) {
