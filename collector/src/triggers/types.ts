@@ -1,15 +1,14 @@
 /**
  * triggers/types.ts — DM Trigger Engine type definitions
  *
- * DB schema (Migration 064):
- *   dm_triggers: id, account_id, trigger_name, trigger_type, cast_name,
- *     condition_config (JSONB), action_type, message_template, scenario_id,
- *     target_segments (TEXT[]), cooldown_hours, daily_limit, enabled,
- *     priority, created_at, updated_at
+ * DB schema (actual — verified 2026-03-01):
+ *   dm_triggers: id, account_id, trigger_name, trigger_type, is_active,
+ *     conditions (JSONB), dm_template_id, dm_content_template,
+ *     cooldown_hours, daily_limit, target_segment (TEXT/JSON string),
+ *     created_at, updated_at
  *
- *   dm_trigger_logs: id, trigger_id, account_id, cast_name, user_name,
- *     action_taken, dm_send_log_id, enrollment_id, metadata (JSONB),
- *     error_message, fired_at
+ *   dm_trigger_logs: id, trigger_id, account_id, user_id, username,
+ *     cast_name, triggered_at, dm_sent_at, status, reason
  */
 
 export type TriggerType =
@@ -33,23 +32,20 @@ export type ActionTaken =
   | 'error';
 
 /**
- * DmTriggerRow — matches actual DB columns from Migration 064
+ * DmTriggerRow — matches actual DB columns (verified 2026-03-01)
  */
 export interface DmTriggerRow {
   id: string;
   account_id: string;
   trigger_name: string;
   trigger_type: TriggerType;
-  cast_name: string | null;
-  condition_config: Record<string, unknown>;
-  action_type: ActionType;
-  message_template: string | null;
-  scenario_id: string | null;
-  target_segments: string[] | null;
+  is_active: boolean;
+  conditions: Record<string, unknown>;
+  dm_template_id: string | null;
+  dm_content_template: string | null;
   cooldown_hours: number;
   daily_limit: number;
-  enabled: boolean;
-  priority: number;
+  target_segment: string | null; // JSON string e.g. '["S1","S2"]'
   created_at: string;
   updated_at: string;
 }
@@ -74,37 +70,36 @@ export interface DmTrigger {
 
 /** Convert DB row to normalized DmTrigger */
 export function normalizeTrigger(row: DmTriggerRow): DmTrigger {
-  // target_segments is TEXT[] in DB — already an array
+  // target_segment is TEXT in DB storing JSON string like '["S1","S2"]'
   let targetSegments: string[] = [];
-  if (row.target_segments) {
-    if (Array.isArray(row.target_segments)) {
-      targetSegments = row.target_segments;
-    } else if (typeof row.target_segments === 'string') {
-      // Fallback: parse JSON string or CSV
+  if (row.target_segment) {
+    if (typeof row.target_segment === 'string') {
       try {
-        const parsed = JSON.parse(row.target_segments as string);
+        const parsed = JSON.parse(row.target_segment);
         if (Array.isArray(parsed)) targetSegments = parsed;
       } catch {
-        targetSegments = (row.target_segments as string).split(',').map((s) => s.trim()).filter(Boolean);
+        targetSegments = row.target_segment.split(',').map((s) => s.trim()).filter(Boolean);
       }
     }
   }
+
+  const cond = row.conditions || {};
 
   return {
     id: row.id,
     account_id: row.account_id,
     trigger_name: row.trigger_name,
     trigger_type: row.trigger_type,
-    cast_name: row.cast_name || null,
-    condition_config: row.condition_config || {},
-    action_type: row.action_type || 'direct_dm',
-    message_template: row.message_template,
-    scenario_id: row.scenario_id,
+    cast_name: (cond.cast_name as string) || null,
+    condition_config: cond,
+    action_type: (cond.action_type as ActionType) || 'direct_dm',
+    message_template: row.dm_content_template,
+    scenario_id: (cond.scenario_id as string) || null,
     target_segments: targetSegments,
     cooldown_hours: row.cooldown_hours,
     daily_limit: row.daily_limit,
-    is_active: row.enabled,
-    priority: row.priority ?? 100,
+    is_active: row.is_active,
+    priority: (cond.priority as number) ?? 100,
   };
 }
 

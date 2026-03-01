@@ -450,30 +450,26 @@ export interface DmTrigger {
   account_id: string;
   trigger_name: string;
   trigger_type: 'first_visit' | 'vip_no_tip' | 'churn_risk' | 'segment_upgrade' | 'competitor_outflow' | 'post_session' | 'cross_promotion';
-  cast_name: string | null;
-  condition_config: Record<string, unknown>;
-  action_type: 'direct_dm' | 'enroll_scenario';
-  message_template: string | null;
-  scenario_id: string | null;
-  target_segments: string[];
+  is_active: boolean;
+  conditions: Record<string, unknown>;
+  dm_template_id: string | null;
+  dm_content_template: string | null;
   cooldown_hours: number;
   daily_limit: number;
-  enabled: boolean;
-  priority: number;
+  target_segment: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface DmTriggerLog {
-  id: number;
+  id: string;
   trigger_id: string;
   account_id: string;
+  user_id: number;
+  username: string;
   cast_name: string;
-  user_name: string;
-  action_taken: 'dm_queued' | 'scenario_enrolled' | 'skipped_cooldown' | 'skipped_duplicate' | 'skipped_segment' | 'skipped_daily_limit' | 'error';
-  dm_send_log_id: number | null;
-  enrollment_id: string | null;
-  metadata: Record<string, unknown>;
-  error_message: string | null;
-  fired_at: string;
+  triggered_at: string;
+  dm_sent_at: string | null;
+  status: 'dm_queued' | 'scenario_enrolled' | 'skipped_cooldown' | 'skipped_duplicate' | 'skipped_segment' | 'skipped_daily_limit' | 'error';
+  reason: string | null;
 }
