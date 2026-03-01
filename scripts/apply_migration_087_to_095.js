@@ -32,8 +32,8 @@ const files = [
 
 async function main() {
   const pool = new Pool({
-    host: 'aws-0-ap-northeast-1.pooler.supabase.com',
-    port: 5432,
+    host: 'aws-1-ap-northeast-1.pooler.supabase.com',
+    port: 6543,
     database: 'postgres',
     user: `postgres.${PROJECT_REF}`,
     password: DB_PASSWORD,

@@ -54,8 +54,8 @@ def main():
         sys.exit(1)
 
     conn_params = {
-        "host": "aws-0-ap-northeast-1.pooler.supabase.com",
-        "port": 5432,
+        "host": "aws-1-ap-northeast-1.pooler.supabase.com",
+        "port": 6543,
         "dbname": "postgres",
         "user": "postgres.ujgbhkllfeacbgpdbjto",
         "password": password,
