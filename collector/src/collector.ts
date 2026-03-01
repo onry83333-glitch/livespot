@@ -48,9 +48,9 @@ let currentAuthToken = '';
 let currentCfClearance = '';
 let triggerEngineRef: TriggerEngine | null = null;
 
-/** cast_name + 配信開始時刻 → 決定的session_id (UUID形式) */
-function generateSessionId(castName: string, startTime: string): string {
-  const hex = createHash('sha256').update(`${castName}:${startTime}`).digest('hex');
+/** account_id + cast_name + 配信開始時刻 → 決定的session_id (UUID形式) */
+function generateSessionId(accountId: string, castName: string, startTime: string): string {
+  const hex = createHash('sha256').update(`${accountId}:${castName}:${startTime}`).digest('hex');
   // Format as UUID v5-style: xxxxxxxx-xxxx-5xxx-yxxx-xxxxxxxxxxxx
   return [
     hex.substring(0, 8),
@@ -273,7 +273,7 @@ async function pollStatus(state: CastState): Promise<void> {
   if (isOnline && !wasOnline && prevStatus !== 'unknown') {
     const startTime = new Date().toISOString();
     state.sessionStartTime = startTime;
-    state.sessionId = generateSessionId(target.castName, startTime);
+    state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
     state.wsMessageCount = 0;
     state.wsTipTotal = 0;
 
@@ -342,7 +342,7 @@ async function pollStatus(state: CastState): Promise<void> {
 
     // sessions テーブルにセッション終了を記録
     if (state.sessionId) {
-      closeSession(state.sessionId, state.wsMessageCount, state.wsTipTotal, state.viewerCount)
+      closeSession(state.sessionId, target.accountId, target.castName, state.wsMessageCount, state.wsTipTotal, state.viewerCount)
         .catch((err) => log.error(`Session close error: ${err}`));
     }
 
@@ -376,7 +376,7 @@ async function pollStatus(state: CastState): Promise<void> {
 
     const startTime = new Date().toISOString();
     state.sessionStartTime = startTime;
-    state.sessionId = generateSessionId(target.castName, startTime);
+    state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
     log.info(`${target.castName}: already online (${result.status}), connecting WS (session=${state.sessionId}, source=${target.source})`);
 
     // sessions テーブルにレコード作成（起動時に既にオンラインのキャスト、自社・他社共通）
@@ -505,7 +505,7 @@ export async function closeAllActiveSessions(): Promise<number> {
   for (const state of castStates.values()) {
     if (state.sessionId) {
       try {
-        await closeSession(state.sessionId, state.wsMessageCount, state.wsTipTotal, state.viewerCount);
+        await closeSession(state.sessionId, state.target.accountId, state.target.castName, state.wsMessageCount, state.wsTipTotal, state.viewerCount);
         closed++;
         log.info(`Shutdown: closed session ${state.sessionId} (${state.target.castName})`);
       } catch (err) {

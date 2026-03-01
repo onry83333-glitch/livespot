@@ -27,7 +27,7 @@ export function parseViewerList(apiResponse: unknown): ViewerEntry[] {
     const obj = m as Record<string, unknown>;
 
     const userName = String(obj.username || obj.userName || obj.user_name || '');
-    if (!userName) continue;
+    if (!userName || userName === 'unknown') continue;
 
     viewers.push({
       userName,

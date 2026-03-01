@@ -184,6 +184,8 @@ export async function openSession(
 
 export async function closeSession(
   sessionId: string,
+  accountId: string,
+  castName: string,
   messageCount: number,
   tipTotal: number,
   peakViewers: number,
@@ -192,7 +194,7 @@ export async function closeSession(
   const sb = getSupabase();
   const endedAt = new Date().toISOString();
 
-  // 全カラムUPDATEを試行
+  // 全カラムUPDATEを試行（account_id + cast_name でデータ分離を保証）
   const { error } = await sb
     .from('sessions')
     .update({
@@ -201,7 +203,9 @@ export async function closeSession(
       total_tokens: tipTotal,
       peak_viewers: peakViewers,
     })
-    .eq('session_id', sessionId);
+    .eq('session_id', sessionId)
+    .eq('account_id', accountId)
+    .eq('cast_name', castName);
 
   if (error) {
     // PostgRESTスキーマキャッシュ問題の場合、ended_atだけでも記録する
@@ -210,7 +214,9 @@ export async function closeSession(
       const { error: fallbackErr } = await sb
         .from('sessions')
         .update({ ended_at: endedAt })
-        .eq('session_id', sessionId);
+        .eq('session_id', sessionId)
+        .eq('account_id', accountId)
+        .eq('cast_name', castName);
 
       if (fallbackErr) {
         log.error(`Session ${sessionId}: fallback update also failed`, fallbackErr);
