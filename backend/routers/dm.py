@@ -345,3 +345,141 @@ async def trigger_adm(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ADMトリガー実行に失敗: {e}")
+
+
+# ============================================================
+# DM Triggers CRUD — トリガー一覧/作成/更新/削除
+# ============================================================
+@router.get("/triggers")
+async def list_triggers(user=Depends(get_current_user)):
+    """有効・無効を含む全トリガーの一覧を返す"""
+    sb = get_supabase_admin()
+    account_id = _get_first_account_id(sb, user["user_id"])
+
+    result = (
+        sb.table("dm_triggers")
+        .select("*")
+        .eq("account_id", account_id)
+        .order("priority")
+        .execute()
+    )
+    return {"data": result.data or []}
+
+
+@router.post("/triggers")
+async def create_trigger(body: dict, user=Depends(get_current_user)):
+    """新規トリガーを作成する"""
+    sb = get_supabase_admin()
+    account_id = _get_first_account_id(sb, user["user_id"])
+
+    VALID_TRIGGER_TYPES = {
+        "first_visit", "vip_no_tip", "churn_risk", "segment_upgrade",
+        "competitor_outflow", "post_session", "cross_promotion",
+    }
+    trigger_type = body.get("trigger_type")
+    if trigger_type not in VALID_TRIGGER_TYPES:
+        raise HTTPException(status_code=400, detail=f"無効なtrigger_type: {trigger_type}")
+
+    trigger_name = body.get("trigger_name", "").strip()
+    if not trigger_name:
+        raise HTTPException(status_code=400, detail="trigger_nameは必須です")
+
+    insert_data = {
+        "account_id": account_id,
+        "trigger_name": trigger_name,
+        "trigger_type": trigger_type,
+        "cast_name": body.get("cast_name"),
+        "condition_config": body.get("condition_config", {}),
+        "action_type": body.get("action_type", "direct_dm"),
+        "message_template": body.get("message_template"),
+        "scenario_id": body.get("scenario_id"),
+        "target_segments": body.get("target_segments", []),
+        "cooldown_hours": body.get("cooldown_hours", 168),
+        "daily_limit": body.get("daily_limit", 50),
+        "enabled": body.get("enabled", True),
+        "priority": body.get("priority", 100),
+    }
+
+    result = sb.table("dm_triggers").insert(insert_data).execute()
+    return {"data": result.data[0] if result.data else None}
+
+
+@router.put("/triggers/{trigger_id}")
+async def update_trigger(trigger_id: str, body: dict, user=Depends(get_current_user)):
+    """既存トリガーを更新する"""
+    sb = get_supabase_admin()
+    account_id = _get_first_account_id(sb, user["user_id"])
+
+    # 所有権チェック
+    existing = (
+        sb.table("dm_triggers")
+        .select("id")
+        .eq("id", trigger_id)
+        .eq("account_id", account_id)
+        .execute()
+    )
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="トリガーが見つかりません")
+
+    UPDATABLE_FIELDS = {
+        "trigger_name", "cast_name", "condition_config", "action_type",
+        "message_template", "scenario_id", "target_segments",
+        "cooldown_hours", "daily_limit", "enabled", "priority",
+    }
+    update_data = {k: v for k, v in body.items() if k in UPDATABLE_FIELDS}
+    if not update_data:
+        raise HTTPException(status_code=400, detail="更新フィールドがありません")
+
+    result = (
+        sb.table("dm_triggers")
+        .update(update_data)
+        .eq("id", trigger_id)
+        .eq("account_id", account_id)
+        .execute()
+    )
+    return {"data": result.data[0] if result.data else None}
+
+
+@router.delete("/triggers/{trigger_id}")
+async def delete_trigger(trigger_id: str, user=Depends(get_current_user)):
+    """トリガーを削除する"""
+    sb = get_supabase_admin()
+    account_id = _get_first_account_id(sb, user["user_id"])
+
+    # 所有権チェック
+    existing = (
+        sb.table("dm_triggers")
+        .select("id")
+        .eq("id", trigger_id)
+        .eq("account_id", account_id)
+        .execute()
+    )
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="トリガーが見つかりません")
+
+    sb.table("dm_triggers").delete().eq("id", trigger_id).eq("account_id", account_id).execute()
+    return {"success": True}
+
+
+@router.get("/trigger-logs")
+async def list_trigger_logs(
+    trigger_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    user=Depends(get_current_user),
+):
+    """トリガー発火ログを取得する"""
+    sb = get_supabase_admin()
+    account_id = _get_first_account_id(sb, user["user_id"])
+
+    query = (
+        sb.table("dm_trigger_logs")
+        .select("*")
+        .eq("account_id", account_id)
+        .order("fired_at", desc=True)
+        .limit(limit)
+    )
+    if trigger_id:
+        query = query.eq("trigger_id", trigger_id)
+
+    result = query.execute()
+    return {"data": result.data or []}
