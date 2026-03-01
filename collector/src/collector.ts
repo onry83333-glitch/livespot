@@ -19,6 +19,7 @@ import {
 import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast } from './storage/supabase.js';
 import { accumulateViewer } from './storage/spy-profiles.js';
 import { parseCentrifugoChat } from './parsers/chat.js';
+import { normalizeMessage, normalizeViewers } from './normalizer/index.js';
 import { RetryTracker, sleep } from './utils/reconnect.js';
 import { createLogger } from './utils/logger.js';
 import { getAuth, invalidateAuth } from './auth/index.js';
@@ -142,8 +143,8 @@ function createWsHandler(state: CastState) {
       const isVip = parsed.tokens >= 1000 || parsed.isKing || parsed.isKnight;
       if (parsed.tokens > 0) state.wsTipTotal += parsed.tokens;
 
-      // Write to spy_messages via batch
-      enqueue('spy_messages', {
+      // Normalize → validate → enqueue
+      const normalized = normalizeMessage({
         account_id: target.accountId,
         cast_name: target.castName,
         message_time: parsed.messageTime,
@@ -166,6 +167,13 @@ function createWsHandler(state: CastState) {
         },
       });
 
+      if (!normalized) {
+        log.debug(`${target.castName}: message rejected by normalizer (user=${parsed.userName})`);
+        return;
+      }
+
+      enqueue('spy_messages', normalized);
+
       if (parsed.tokens > 0) {
         log.info(`${target.castName}: TIP ${parsed.userName} ${parsed.tokens}tk "${parsed.message.substring(0, 40)}"`);
       } else {
@@ -175,7 +183,7 @@ function createWsHandler(state: CastState) {
       const eventType = String(msg.data.event || msg.data.type || 'unknown');
       log.info(`${target.castName}: EVENT ${eventType}`);
 
-      enqueue('spy_messages', {
+      const sysMsg = normalizeMessage({
         account_id: target.accountId,
         cast_name: target.castName,
         message_time: msg.receivedAt,
@@ -187,6 +195,7 @@ function createWsHandler(state: CastState) {
         session_id: state.sessionId,
         metadata: { source: 'collector-ws', event: eventType, rawData: msg.data },
       });
+      if (sysMsg) enqueue('spy_messages', sysMsg);
     } else if (msg.event === 'userUpdated') {
       log.debug(`${target.castName}: USER_UPDATED ${JSON.stringify(msg.data).substring(0, 100)}`);
     }
@@ -322,7 +331,7 @@ async function pollStatus(state: CastState): Promise<void> {
       log.error(`Session open error [${target.source}]: ${err}`);
     }
 
-    enqueue('spy_messages', {
+    const startMsg = normalizeMessage({
       account_id: target.accountId,
       cast_name: target.castName,
       message_time: startTime,
@@ -334,6 +343,7 @@ async function pollStatus(state: CastState): Promise<void> {
       session_id: state.sessionId,
       metadata: { source: 'collector', modelId: result.modelId, viewerCount: result.viewerCount },
     });
+    if (startMsg) enqueue('spy_messages', startMsg);
 
     // Connect WebSocket for live chat
     if (state.modelId) {
@@ -362,7 +372,7 @@ async function pollStatus(state: CastState): Promise<void> {
   if (!isOnline && wasOnline) {
     log.info(`${target.castName}: OFFLINE (${state.wsMessageCount} msgs, ${state.wsTipTotal}tk captured)`);
 
-    enqueue('spy_messages', {
+    const endMsg = normalizeMessage({
       account_id: target.accountId,
       cast_name: target.castName,
       message_time: new Date().toISOString(),
@@ -374,6 +384,7 @@ async function pollStatus(state: CastState): Promise<void> {
       session_id: state.sessionId,
       metadata: { source: 'collector', lastViewerCount: state.viewerCount },
     });
+    if (endMsg) enqueue('spy_messages', endMsg);
 
     // sessions テーブルにセッション終了を記録
     if (state.sessionId) {
@@ -470,18 +481,22 @@ async function pollViewerList(state: CastState): Promise<void> {
 
   if (result.viewers.length === 0) return;
 
+  // Normalize: unknown除外、重複排除、型検証
+  const normalizedViewers = normalizeViewers(result.viewers);
+  if (normalizedViewers.length === 0) return;
+
   const upserted = await upsertViewers(
     target.accountId,
     target.castName,
     state.sessionId,
-    result.viewers,
+    normalizedViewers,
   );
 
-  for (const v of result.viewers) {
+  for (const v of normalizedViewers) {
     accumulateViewer(target.castName, v);
   }
 
-  log.debug(`${target.castName}: ${result.viewers.length} viewers, ${upserted} upserted`);
+  log.debug(`${target.castName}: ${result.viewers.length} raw → ${normalizedViewers.length} normalized, ${upserted} upserted`);
 
   // Trigger: viewer list update
   if (triggerEngineRef) {

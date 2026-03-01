@@ -1,4 +1,5 @@
 import { getSupabase, BATCH_CONFIG } from '../config.js';
+import { normalizeSession } from '../normalizer/index.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('storage');
@@ -37,7 +38,7 @@ export function enqueue(table: string, row: Record<string, unknown>, onConflict?
   }
 }
 
-async function flushBuffer(): Promise<void> {
+export async function flushBuffer(): Promise<void> {
   if (buffer.length === 0) return;
 
   const items = buffer.splice(0);
@@ -87,7 +88,7 @@ export async function upsertViewers(
   accountId: string,
   castName: string,
   sessionId: string | null,
-  viewers: { userName: string; userIdStripchat: string; league: string; level: number; isFanClub: boolean }[],
+  viewers: { userName: string; userIdStripchat: string; league: string; level: number; isFanClub: boolean; isNew?: boolean }[],
 ): Promise<number> {
   const sb = getSupabase();
   const now = new Date().toISOString();
@@ -148,13 +149,20 @@ export async function openSession(
   sessionId: string,
   startedAt: string,
 ): Promise<string> {
+  // Normalizer: 必須フィールド + UUID形式 + ISO timestamp 検証
+  const validated = normalizeSession({ sessionId, accountId, castName, startedAt });
+  if (!validated) {
+    log.error(`Session rejected by normalizer: ${castName} (session=${sessionId})`);
+    return sessionId;
+  }
+
   const sb = getSupabase();
   const { error } = await sb.from('sessions').insert({
-    session_id: sessionId,
-    account_id: accountId,
-    title: castName,
-    cast_name: castName,
-    started_at: startedAt,
+    session_id: validated.sessionId,
+    account_id: validated.accountId,
+    title: validated.castName,
+    cast_name: validated.castName,
+    started_at: validated.startedAt,
   });
   if (error) {
     // 部分ユニーク制約 idx_sessions_one_active_per_cast で弾かれた場合、
