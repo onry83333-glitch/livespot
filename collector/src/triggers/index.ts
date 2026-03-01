@@ -46,7 +46,7 @@ export class TriggerEngine {
     const { data, error } = await sb
       .from('dm_triggers')
       .select('*')
-      .eq('is_active', true);
+      .eq('enabled', true);
 
     if (error) {
       log.error(`Failed to load triggers: ${error.message}`);
@@ -379,10 +379,12 @@ export class TriggerEngine {
       trigger_id: trigger.id,
       account_id: ctx.accountId,
       cast_name: ctx.castName,
-      user_id: 0, // placeholder — actual user ID unknown
-      username: ctx.userName,
-      status: actionTaken,
-      reason: errorMessage || `${trigger.trigger_type}: segment=${ctx.segment || 'any'}, tokens=${ctx.totalTokens || 0}`,
+      user_name: ctx.userName,
+      action_taken: actionTaken,
+      dm_send_log_id: dmSendLogId ?? null,
+      enrollment_id: enrollmentId ?? null,
+      error_message: errorMessage || null,
+      metadata: { trigger_type: trigger.trigger_type, segment: ctx.segment || 'any', tokens: ctx.totalTokens || 0 },
     });
 
     if (error) {

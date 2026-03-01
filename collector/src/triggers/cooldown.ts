@@ -1,8 +1,10 @@
 /**
  * triggers/cooldown.ts — Cooldown + daily limit checks via dm_trigger_logs
  *
- * Actual DB columns: id, trigger_id, account_id, user_id, username,
- *   cast_name, triggered_at, dm_sent_at, status, reason
+ * DB columns (Migration 064):
+ *   id, trigger_id, account_id, cast_name, user_name,
+ *   action_taken, dm_send_log_id, enrollment_id, metadata,
+ *   error_message, fired_at
  */
 
 import { getSupabase } from '../config.js';
@@ -26,9 +28,9 @@ export async function isInCooldown(
     .from('dm_trigger_logs')
     .select('id')
     .eq('trigger_id', triggerId)
-    .eq('username', userName)
-    .in('status', ['dm_queued', 'scenario_enrolled'])
-    .gte('triggered_at', since)
+    .eq('user_name', userName)
+    .in('action_taken', ['dm_queued', 'scenario_enrolled'])
+    .gte('fired_at', since)
     .limit(1);
 
   if (error) {
@@ -55,8 +57,8 @@ export async function isDailyLimitReached(
     .from('dm_trigger_logs')
     .select('id', { count: 'exact', head: true })
     .eq('trigger_id', triggerId)
-    .in('status', ['dm_queued', 'scenario_enrolled'])
-    .gte('triggered_at', todayStart.toISOString());
+    .in('action_taken', ['dm_queued', 'scenario_enrolled'])
+    .gte('fired_at', todayStart.toISOString());
 
   if (error) {
     log.error(`Daily limit check failed: ${error.message}`);
