@@ -9,7 +9,7 @@
  * 出力: tests/screenshots/YYYY-MM-DD/gallery-*.png
  */
 import { test, Page } from '@playwright/test';
-import { login, saveScreenshot } from './helpers';
+import { login, saveScreenshot, generateHtmlReport } from './helpers';
 
 // ========== 設定 ==========
 
@@ -84,7 +84,14 @@ test.describe('全画面スクリーンショット撮影', () => {
     await page.waitForTimeout(3_000);
     await shot(page, 'login');
 
+    // ---------- 0.5. 新規登録画面 ----------
+    await page.goto('/signup');
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(2_000);
+    await shot(page, 'signup');
+
     // ---------- 1. ログイン実行 ----------
+    await page.goto('/login');
     await login(page);
     await page.waitForTimeout(2_000);
 
@@ -156,6 +163,10 @@ test.describe('全画面スクリーンショット撮影', () => {
     // ---------- 11. アラート ----------
     await visitPage(page, '/alerts');
     await shot(page, 'alerts');
+
+    // ---------- 11.5. システムアラート ----------
+    await visitPage(page, '/alerts/system');
+    await shot(page, 'alerts-system');
 
     // ---------- 12. アナリティクス ----------
     await visitPage(page, '/analytics');
@@ -237,8 +248,11 @@ test.describe('全画面スクリーンショット撮影', () => {
     await visitPage(page, '/admin/casts');
     await shot(page, 'admin-casts');
 
-    // ---------- 完了 ----------
+    // ---------- 完了 + HTMLレポート生成 ----------
+    generateHtmlReport();
     console.log(`\n✅ 全画面スクリーンショット完了: ${shotIndex}枚`);
-    console.log(`📁 保存先: tests/screenshots/${new Date().toISOString().split('T')[0]}/`);
+    const reportDir = `tests/screenshots/${new Date().toISOString().split('T')[0]}`;
+    console.log(`📁 保存先: ${reportDir}/`);
+    console.log(`🌐 HTMLレポート: ${reportDir}/index.html をブラウザで開いてください`);
   });
 });

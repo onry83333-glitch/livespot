@@ -10,7 +10,7 @@
  * YUUTAはスクショフォルダを開いて確認するだけ。
  */
 import { test, expect } from '@playwright/test';
-import { login, saveScreenshot, assertNoErrors } from './helpers';
+import { login, saveScreenshot, assertNoErrors, generateHtmlReport } from './helpers';
 
 // 巡回対象ページ定義
 const pages: { name: string; path: string; waitFor?: string; delay?: number }[] = [
@@ -146,7 +146,10 @@ test.describe('Visual Patrol — 全画面巡回', () => {
       }
     }
 
-    console.log('\n  スクショ保存先: tests/screenshots/' + new Date().toISOString().split('T')[0] + '/');
+    generateHtmlReport();
+    const dir = 'tests/screenshots/' + new Date().toISOString().split('T')[0] + '/';
+    console.log(`\n  スクショ保存先: ${dir}`);
+    console.log(`  HTMLレポート: ${dir}index.html`);
     console.log('='.repeat(60) + '\n');
   });
 });
