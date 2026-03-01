@@ -148,6 +148,18 @@ async function detectLoggedInCast() {
       return;
     }
 
+    // 複数userId検出: 即座に警告（DM送信不可状態）
+    if (response.multipleDetected) {
+      section.className = 'cast-identity warning';
+      icon.innerHTML = '&#9888;';
+      text.innerHTML = `<strong>複数アカウント検出!</strong><br>` +
+        `<span style="font-size:10px;">ID: ${(response.allUserIds || []).join(', ')}<br>` +
+        `「リセット」を押してcookieをクリアし、正しいキャストで再ログインしてください。<br>` +
+        `<strong>この状態ではDM送信はブロックされます。</strong></span>`;
+      clearBtn.style.display = 'block';
+      return;
+    }
+
     if (!response.userId) {
       section.className = 'cast-identity unknown';
       icon.innerHTML = '&#9679;';
@@ -397,14 +409,20 @@ passwordInput.addEventListener('keydown', (e) => {
 });
 
 // --- Account Selection ---
-accountSelect.addEventListener('change', () => {
+accountSelect.addEventListener('change', async () => {
   const id = accountSelect.value;
   if (id) {
     chrome.storage.local.set({ account_id: id });
     chrome.runtime.sendMessage({ type: 'SET_ACCOUNT', account_id: id });
     loadCastsForSync();
-    // アカウント切り替え時にキャスト身元を再検出
-    setTimeout(detectLoggedInCast, 500);
+    // アカウント切り替え時にAMP cookieを自動クリーンアップ（誤送信防止）
+    chrome.runtime.sendMessage({ type: 'CLEAR_CAST_COOKIES' }, (response) => {
+      if (response && response.ok) {
+        console.log('[LSP] アカウント切替: AMP cookie', response.cleared, '件クリア');
+      }
+      // クリーンアップ後にキャスト身元を再検出
+      setTimeout(detectLoggedInCast, 500);
+    });
   }
 });
 

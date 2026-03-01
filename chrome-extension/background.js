@@ -3909,10 +3909,11 @@ async function waitForPageLoad(tabId, maxWait = 8000) {
 // ============================================================
 
 /**
- * AMP cookie / baseAmplからStripchat userIdを抽出
- * @returns {string|null} userId文字列
+ * AMP cookie / baseAmplからStripchat userIdを抽出（複数検出時はnull）
+ * @returns {{ userId: string|null, multipleDetected: boolean, allUserIds: string[] }}
  */
 async function getMyUserIdFromCookies() {
+  const userIds = new Set();
   try {
     const allCookies = await chrome.cookies.getAll({ domain: 'stripchat.com' });
     for (const c of allCookies) {
@@ -3920,21 +3921,28 @@ async function getMyUserIdFromCookies() {
         try {
           const decoded = decodeURIComponent(atob(c.value));
           const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
-          if (match) return match[1];
+          if (match) userIds.add(match[1]);
         } catch (e) { /* skip */ }
       }
     }
-    for (const c of allCookies) {
-      if (c.name === 'baseAmpl') {
-        try {
-          const decoded = decodeURIComponent(c.value);
-          const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
-          if (match) return match[1];
-        } catch (e) { /* skip */ }
+    if (userIds.size === 0) {
+      for (const c of allCookies) {
+        if (c.name === 'baseAmpl') {
+          try {
+            const decoded = decodeURIComponent(c.value);
+            const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
+            if (match) userIds.add(match[1]);
+          } catch (e) { /* skip */ }
+        }
       }
     }
   } catch (e) { /* skip */ }
-  return null;
+  const allArr = [...userIds];
+  if (allArr.length > 1) {
+    console.error('[LS-BG] ⚠ AMP cookie に複数userId検出:', allArr.join(', '), '→ cookieクリーンアップが必要');
+    return { userId: null, multipleDetected: true, allUserIds: allArr };
+  }
+  return { userId: allArr.length === 1 ? allArr[0] : null, multipleDetected: false, allUserIds: allArr };
 }
 
 /**
@@ -3942,9 +3950,14 @@ async function getMyUserIdFromCookies() {
  * @returns {{ castName: string|null, userId: string|null, allCasts: Array }}
  */
 async function getLoggedInCastFromCookies() {
-  const myUserId = await getMyUserIdFromCookies();
+  const cookieResult = await getMyUserIdFromCookies();
+  const myUserId = cookieResult.userId;
   if (!myUserId || !accountId || !accessToken) {
-    return { castName: null, userId: myUserId, allCasts: [] };
+    return {
+      castName: null, userId: myUserId, allCasts: [],
+      multipleDetected: cookieResult.multipleDetected,
+      allUserIds: cookieResult.allUserIds,
+    };
   }
 
   try {
@@ -3952,7 +3965,7 @@ async function getLoggedInCastFromCookies() {
       `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&stripchat_user_id=not.is.null&select=cast_name,stripchat_user_id,display_name`,
       { headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` } }
     );
-    if (!res.ok) return { castName: null, userId: myUserId, allCasts: [] };
+    if (!res.ok) return { castName: null, userId: myUserId, allCasts: [], multipleDetected: false, allUserIds: [myUserId] };
     const casts = await res.json();
     const matched = casts.find(c => String(c.stripchat_user_id) === myUserId);
     return {
@@ -3960,9 +3973,11 @@ async function getLoggedInCastFromCookies() {
       displayName: matched ? (matched.display_name || matched.cast_name) : null,
       userId: myUserId,
       allCasts: casts.map(c => ({ cast_name: c.cast_name, stripchat_user_id: String(c.stripchat_user_id) })),
+      multipleDetected: cookieResult.multipleDetected,
+      allUserIds: cookieResult.allUserIds,
     };
   } catch (e) {
-    return { castName: null, userId: myUserId, allCasts: [] };
+    return { castName: null, userId: myUserId, allCasts: [], multipleDetected: false, allUserIds: [myUserId] };
   }
 }
 
@@ -4019,63 +4034,69 @@ async function tryDMviaAPI(task, tab) {
   const tabId = typeof tab === 'object' ? tab.id : tab;
 
   try {
-    // ---- 1. myUserId (AMP cookie decode) ----
-    let myUserId = null;
-    try {
-      const allCookies = await chrome.cookies.getAll({ domain: 'stripchat.com' });
-      for (const c of allCookies) {
-        if (c.name.startsWith('AMP_')) {
-          try {
-            const decoded = decodeURIComponent(atob(c.value));
-            const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
-            if (match) { myUserId = match[1]; break; }
-          } catch (e) { /* skip */ }
-        }
-      }
-      if (!myUserId) {
-        for (const c of allCookies) {
-          if (c.name === 'baseAmpl') {
-            try {
-              const decoded = decodeURIComponent(c.value);
-              const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
-              if (match) { myUserId = match[1]; break; }
-            } catch (e) { /* skip */ }
-          }
-        }
-      }
-    } catch (e) { /* skip */ }
+    // ---- 1. myUserId (AMP cookie decode — 複数検出時はブロック) ----
+    const cookieResult = await getMyUserIdFromCookies();
 
+    if (cookieResult.multipleDetected) {
+      const errMsg = `MULTIPLE_COOKIES: AMP cookieに複数のuserIdが検出されました(${cookieResult.allUserIds.join(', ')})。popupの「リセット」ボタンでcookieをクリーンアップし、正しいキャストで再ログインしてください。`;
+      console.error('[LS-BG] ❌', errMsg);
+      return { success: false, error: errMsg, castIdentityMismatch: true };
+    }
+
+    const myUserId = cookieResult.userId;
     if (!myUserId) {
       console.warn('[LS-BG] DM API: myUserId取得失敗 → DOMフォールバック');
       return null;
     }
     console.log('[LS-BG] DM API myUserId:', myUserId);
 
-    // ---- 1.5. キャスト身元検証ゲート（P0-5: 誤送信防止） ----
-    // task.cast_nameがある場合、registered_castsのstripchat_user_idとAMP cookie由来のmyUserIdを照合
-    if (task.cast_name && accountId && accessToken) {
-      try {
-        const rcRes = await fetch(
-          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(task.cast_name)}&is_active=eq.true&stripchat_user_id=not.is.null&select=stripchat_user_id&limit=1`,
-          { headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` } }
-        );
-        if (rcRes.ok) {
-          const rcRows = await rcRes.json();
-          if (rcRows?.[0]?.stripchat_user_id) {
-            const registeredId = String(rcRows[0].stripchat_user_id);
-            if (registeredId !== myUserId) {
-              const errMsg = `CAST_IDENTITY_MISMATCH: cast=${task.cast_name}(登録ID:${registeredId}) != AMP cookie(${myUserId})。誤送信を防止しました。`;
-              console.error('[LS-BG] ❌ DM身元検証失敗:', errMsg);
-              return { success: false, error: errMsg, castIdentityMismatch: true };
-            }
-            console.log('[LS-BG] ✓ DM身元検証OK: cast=', task.cast_name, 'registeredId=', registeredId, '== myUserId=', myUserId);
-          } else {
-            console.warn('[LS-BG] DM身元検証: cast=', task.cast_name, 'のstripchat_user_idが未登録 → 検証スキップ（要登録）');
-          }
-        }
-      } catch (e) {
-        console.warn('[LS-BG] DM身元検証エラー（送信は続行）:', e.message);
+    // ---- 1.5. キャスト身元検証ゲート — FAIL-CLOSED（P0-5: 誤送信防止） ----
+    // cast_nameが必須。registered_castsのstripchat_user_idとAMP cookie由来のmyUserIdが一致しなければ全拒否。
+    if (!task.cast_name) {
+      const errMsg = `CAST_NAME_MISSING: DMタスクにcast_nameが設定されていません。送信を拒否しました。`;
+      console.error('[LS-BG] ❌', errMsg);
+      return { success: false, error: errMsg, castIdentityMismatch: true };
+    }
+
+    if (!accountId || !accessToken) {
+      const errMsg = `AUTH_MISSING: 認証情報が不足しています(accountId=${accountId ? 'ok' : 'missing'})。送信を拒否しました。`;
+      console.error('[LS-BG] ❌', errMsg);
+      return { success: false, error: errMsg, castIdentityMismatch: true };
+    }
+
+    // DB照合: registered_castsのstripchat_user_idを取得（NULLも含めて取得）
+    try {
+      const rcRes = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(task.cast_name)}&is_active=eq.true&select=stripchat_user_id&limit=1`,
+        { headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` } }
+      );
+      if (!rcRes.ok) {
+        const errMsg = `CAST_VERIFY_HTTP_ERROR: 身元検証のDB照会でHTTP ${rcRes.status}エラー。安全のため送信を拒否しました。`;
+        console.error('[LS-BG] ❌', errMsg);
+        return { success: false, error: errMsg, castIdentityMismatch: true };
       }
+      const rcRows = await rcRes.json();
+      if (!rcRows || rcRows.length === 0) {
+        const errMsg = `CAST_NOT_FOUND: cast=${task.cast_name}がregistered_castsに見つかりません。送信を拒否しました。`;
+        console.error('[LS-BG] ❌', errMsg);
+        return { success: false, error: errMsg, castIdentityMismatch: true };
+      }
+      const registeredId = rcRows[0].stripchat_user_id ? String(rcRows[0].stripchat_user_id) : null;
+      if (!registeredId) {
+        const errMsg = `CAST_ID_NOT_REGISTERED: cast=${task.cast_name}のstripchat_user_idが未登録です。registered_castsにIDを登録してからDMを送信してください。`;
+        console.error('[LS-BG] ❌', errMsg);
+        return { success: false, error: errMsg, castIdentityMismatch: true };
+      }
+      if (registeredId !== myUserId) {
+        const errMsg = `CAST_IDENTITY_MISMATCH: cast=${task.cast_name}(登録ID:${registeredId}) != ブラウザログイン中(${myUserId})。誤送信を防止しました。popupの「リセット」ボタンでcookieをクリーンアップし、${task.cast_name}で再ログインしてください。`;
+        console.error('[LS-BG] ❌ DM身元検証失敗:', errMsg);
+        return { success: false, error: errMsg, castIdentityMismatch: true };
+      }
+      console.log('[LS-BG] ✓ DM身元検証OK: cast=', task.cast_name, 'registeredId=', registeredId, '== myUserId=', myUserId);
+    } catch (e) {
+      const errMsg = `CAST_VERIFY_EXCEPTION: 身元検証でエラー発生: ${e.message}。安全のため送信を拒否しました。`;
+      console.error('[LS-BG] ❌', errMsg);
+      return { success: false, error: errMsg, castIdentityMismatch: true };
     }
 
     // ---- 2. targetUserId (DB解決) ----
@@ -4758,8 +4779,58 @@ async function processDMPipeline(tabCount) {
   // Phase 1: API直列送信（タブ1つ、4秒±1.5秒間隔）
   const domFallbackTasks = await processDMQueueSerial(allTasks);
 
-  // Phase 2: API失敗分があればDOMパイプラインでフォールバック
+  // Phase 2: API失敗分があればDOMパイプラインでフォールバック（身元検証必須）
   if (domFallbackTasks.length > 0) {
+    console.log('[LS-BG] DOMフォールバック前の身元検証...');
+
+    // DOMフォールバック前にも身元検証を実施（FAIL-CLOSED）
+    const cookieResult = await getMyUserIdFromCookies();
+    if (cookieResult.multipleDetected) {
+      const errMsg = `MULTIPLE_COOKIES: AMP cookieに複数userId検出(${cookieResult.allUserIds.join(', ')})。DOMフォールバックを拒否。`;
+      console.error('[LS-BG] ❌', errMsg);
+      for (const t of domFallbackTasks) await updateDMTaskStatus(t.id, 'error', errMsg);
+      return;
+    }
+    if (!cookieResult.userId) {
+      const errMsg = 'DOM_NO_USERID: AMP cookieからuserIdが取得できません。DOMフォールバックを拒否。';
+      console.error('[LS-BG] ❌', errMsg);
+      for (const t of domFallbackTasks) await updateDMTaskStatus(t.id, 'error', errMsg);
+      return;
+    }
+
+    // タスクにcast_nameがあれば、DB照合
+    const sampleCastName = domFallbackTasks.find(t => t.cast_name)?.cast_name;
+    if (sampleCastName && accountId && accessToken) {
+      try {
+        const rcRes = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(sampleCastName)}&is_active=eq.true&select=stripchat_user_id&limit=1`,
+          { headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` } }
+        );
+        if (rcRes.ok) {
+          const rcRows = await rcRes.json();
+          const registeredId = rcRows?.[0]?.stripchat_user_id ? String(rcRows[0].stripchat_user_id) : null;
+          if (!registeredId) {
+            const errMsg = `DOM_CAST_ID_NOT_REGISTERED: cast=${sampleCastName}のstripchat_user_idが未登録。DOMフォールバックを拒否。`;
+            console.error('[LS-BG] ❌', errMsg);
+            for (const t of domFallbackTasks) await updateDMTaskStatus(t.id, 'error', errMsg);
+            return;
+          }
+          if (registeredId !== cookieResult.userId) {
+            const errMsg = `DOM_CAST_IDENTITY_MISMATCH: cast=${sampleCastName}(登録ID:${registeredId}) != cookie(${cookieResult.userId})。DOMフォールバックを拒否。`;
+            console.error('[LS-BG] ❌', errMsg);
+            for (const t of domFallbackTasks) await updateDMTaskStatus(t.id, 'error', errMsg);
+            return;
+          }
+          console.log('[LS-BG] ✓ DOMフォールバック身元検証OK: cast=', sampleCastName, '==', cookieResult.userId);
+        }
+      } catch (e) {
+        const errMsg = `DOM_VERIFY_EXCEPTION: 身元検証エラー: ${e.message}。DOMフォールバックを拒否。`;
+        console.error('[LS-BG] ❌', errMsg);
+        for (const t of domFallbackTasks) await updateDMTaskStatus(t.id, 'error', errMsg);
+        return;
+      }
+    }
+
     console.log('[LS-BG] DOMフォールバック開始:', domFallbackTasks.length, '件');
     const actualTabCount = Math.min(tabCount, domFallbackTasks.length, 3);
 
@@ -5968,11 +6039,12 @@ async function fetchViewerMembers(castName) {
         user_id_stripchat: m.id ? String(m.id) : (m.userId ? String(m.userId) : null),
         league: m.league || m.userLeague || null,
         level: m.level || m.userLevel || null,
-      is_fan_club: m.isFanClub || m.fanClub || false,
-      first_seen_at: now,
-      last_seen_at: now,
-      visit_count: 1,
-    }));
+        is_fan_club: m.isFanClub || m.fanClub || false,
+        first_seen_at: now,
+        last_seen_at: now,
+        visit_count: 1,
+      };
+    });
 
     // spy_viewers: 個別 UPSERT（session_id NULLのUNIQUE制約問題を回避）
     let savedCount = 0;
