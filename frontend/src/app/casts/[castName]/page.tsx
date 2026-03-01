@@ -93,7 +93,9 @@ interface DmCvrItem {
   campaign: string;
   dm_sent: number;
   paid_after: number;
+  visited_after: number;
   cvr_pct: number;
+  visit_cvr_pct: number;
   total_tokens: number;
   avg_tokens_per_payer: number;
   first_sent: string;
@@ -4749,19 +4751,24 @@ function CastDetailInner() {
                           <div className="space-y-2">
                             {/* Header */}
                             <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold px-2" style={{ color: 'var(--text-muted)' }}>
-                              <div className="col-span-4">Campaign</div>
-                              <div className="col-span-1 text-right">Sent</div>
-                              <div className="col-span-1 text-right">Paid</div>
-                              <div className="col-span-2 text-right">CVR</div>
-                              <div className="col-span-2 text-right">Tokens</div>
-                              <div className="col-span-2 text-right">Avg/人</div>
+                              <div className="col-span-3">Campaign</div>
+                              <div className="col-span-1 text-right">送信</div>
+                              <div className="col-span-1 text-right">来場</div>
+                              <div className="col-span-1 text-right">応援</div>
+                              <div className="col-span-2 text-right">来場率</div>
+                              <div className="col-span-2 text-right">応援率</div>
+                              <div className="col-span-2 text-right">収益tk</div>
                             </div>
                             {/* Rows */}
                             {dmCvr.map(row => {
-                              const cvrColor = row.cvr_pct >= 50 ? 'var(--accent-green)'
+                              const payCvrColor = row.cvr_pct >= 50 ? 'var(--accent-green)'
                                 : row.cvr_pct >= 20 ? 'var(--accent-amber)'
                                 : 'var(--accent-pink)';
-                              const barWidth = Math.min(row.cvr_pct, 100);
+                              const visitCvrColor = (row.visit_cvr_pct || 0) >= 30 ? 'var(--accent-green)'
+                                : (row.visit_cvr_pct || 0) >= 10 ? 'var(--accent-amber)'
+                                : 'var(--accent-pink)';
+                              const visitBarWidth = Math.min(row.visit_cvr_pct || 0, 100);
+                              const payBarWidth = Math.min(row.cvr_pct, 100);
                               return (
                                 <div key={row.campaign}>
                                   <div
@@ -4769,34 +4776,53 @@ function CastDetailInner() {
                                     onClick={() => setDmCvrExpanded(dmCvrExpanded === row.campaign ? null : row.campaign)}
                                   >
                                     <div className="grid grid-cols-12 gap-2 items-center text-[11px]">
-                                      <div className="col-span-4 truncate font-medium">{row.campaign}</div>
+                                      <div className="col-span-3 truncate font-medium">{row.campaign}</div>
                                       <div className="col-span-1 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
                                         {row.dm_sent.toLocaleString()}
                                       </div>
-                                      <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
+                                      <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: visitCvrColor }}>
+                                        {(row.visited_after || 0).toLocaleString()}
+                                      </div>
+                                      <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: payCvrColor }}>
                                         {row.paid_after.toLocaleString()}
                                       </div>
-                                      <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: cvrColor }}>
+                                      <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: visitCvrColor }}>
+                                        {Number(row.visit_cvr_pct || 0).toFixed(1)}%
+                                      </div>
+                                      <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: payCvrColor }}>
                                         {Number(row.cvr_pct).toFixed(1)}%
                                       </div>
                                       <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
                                         {row.total_tokens.toLocaleString()}
                                       </div>
-                                      <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                                        {(row.avg_tokens_per_payer || 0).toLocaleString()}
-                                      </div>
                                     </div>
-                                    {/* CVR Bar */}
-                                    <div className="mt-1.5 h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                                      <div
-                                        className="h-full rounded-full transition-all"
-                                        style={{ width: `${barWidth}%`, background: cvrColor }}
-                                      />
+                                    {/* Dual CVR Bars: 来場(上) + 応援(下) */}
+                                    <div className="mt-1.5 space-y-0.5">
+                                      <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                        <div
+                                          className="h-full rounded-full transition-all"
+                                          style={{ width: `${visitBarWidth}%`, background: visitCvrColor, opacity: 0.7 }}
+                                        />
+                                      </div>
+                                      <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                        <div
+                                          className="h-full rounded-full transition-all"
+                                          style={{ width: `${payBarWidth}%`, background: payCvrColor }}
+                                        />
+                                      </div>
                                     </div>
                                   </div>
                                   {/* Expanded detail */}
                                   {dmCvrExpanded === row.campaign && (
                                     <div className="mt-1 px-3 py-2 rounded-lg text-[10px] space-y-1" style={{ background: 'rgba(15,23,42,0.4)' }}>
+                                      <div className="flex justify-between">
+                                        <span style={{ color: 'var(--text-muted)' }}>来場率（チャット出現）</span>
+                                        <span style={{ color: visitCvrColor }}>{(row.visited_after || 0).toLocaleString()}/{row.dm_sent.toLocaleString()} = {Number(row.visit_cvr_pct || 0).toFixed(1)}%</span>
+                                      </div>
+                                      <div className="flex justify-between">
+                                        <span style={{ color: 'var(--text-muted)' }}>応援率（課金）</span>
+                                        <span style={{ color: payCvrColor }}>{row.paid_after.toLocaleString()}/{row.dm_sent.toLocaleString()} = {Number(row.cvr_pct).toFixed(1)}%</span>
+                                      </div>
                                       <div className="flex justify-between">
                                         <span style={{ color: 'var(--text-muted)' }}>初回送信</span>
                                         <span>{row.first_sent ? formatJST(row.first_sent) : '-'}</span>
