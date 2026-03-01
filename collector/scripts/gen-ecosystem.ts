@@ -103,6 +103,30 @@ async function main() {
     min_uptime: '60s',
   });
 
+  // dm-service: DM送信常駐プロセス（キューポーリング → Stripchat API送信）
+  apps.push({
+    name: 'dm-service',
+    script: 'src/dm-service/index.ts',
+    interpreter: 'node',
+    interpreter_args: '--import tsx',
+    cwd,
+    env: {
+      NODE_ENV: 'production',
+    },
+    autorestart: true,
+    watch: false,
+    max_memory_restart: '200M',
+    log_file: `${cwd}/logs/dm-service.log`,
+    error_file: `${cwd}/logs/dm-service-error.log`,
+    out_file: `${cwd}/logs/dm-service-out.log`,
+    log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    restart_delay: 10000,
+    max_restarts: 50,
+    min_uptime: '30s',
+    wait_ready: true,
+    listen_timeout: 10000,
+  });
+
   for (const cast of registered) {
     apps.push({
       name: `cast-${cast.cast_name}`,
@@ -175,8 +199,9 @@ module.exports = {
   console.log(`\nWritten: ${outPath}`);
   console.log(`\nProcess list (${apps.length} processes):`);
   for (const app of apps) {
-    const a = app as { name: string; env: { CAST_SOURCE: string } };
-    console.log(`  ${a.name} (${a.env.CAST_SOURCE})`);
+    const a = app as { name: string; env?: { CAST_SOURCE?: string } };
+    const source = a.env?.CAST_SOURCE || 'service';
+    console.log(`  ${a.name} (${source})`);
   }
   console.log('\nNext: pm2 start ecosystem.config.cjs');
 }

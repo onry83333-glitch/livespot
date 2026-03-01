@@ -89,7 +89,10 @@ function sleep(ms: number): Promise<void> {
 
 // ----- Cookie取得（DB only） -----
 
-async function getSessionFromDB(accountId: string): Promise<{
+async function getSessionFromDB(
+  accountId: string,
+  casts: RegisteredCast[],
+): Promise<{
   cookieHeader: string;
   userId: string;
   session: StripchatSession;
@@ -125,8 +128,24 @@ async function getSessionFromDB(accountId: string): Promise<{
     return null;
   }
 
-  // userId解決
-  let userId = sess.stripchat_user_id || sess.cookies_json['stripchat_com_userId'] || '';
+  // userId解決（3段フォールバック）
+  let userId = sess.stripchat_user_id
+    ? String(sess.stripchat_user_id)
+    : sess.cookies_json['stripchat_com_userId'] || '';
+
+  // フォールバック: registered_casts.stripchat_user_id
+  if (!userId) {
+    const fallbackId = casts[0]?.stripchat_user_id || casts[0]?.stripchat_model_id;
+    if (fallbackId) {
+      userId = String(fallbackId);
+      log.info(`[${accountId}] registered_castsからuserId取得: ${userId}`);
+      // DBにも保存
+      await sb.from('stripchat_sessions')
+        .update({ stripchat_user_id: userId })
+        .eq('account_id', accountId);
+    }
+  }
+
   if (!userId) {
     log.warn(`[${accountId}] userId解決不可`);
     return null;
