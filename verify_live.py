@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 
 # ── 設定 ──────────────────────────────────────────────
 SUPABASE_URL = "https://ujgbhkllfeacbgpdbjto.supabase.co"
-ANON_KEY = "sb_publishable_kt56F7VPKZyFIoja-UGHeQ_YVMEQdAZ"
+ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZ2Joa2xsZmVhY2JncGRianRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5NjQ5NzcsImV4cCI6MjA4NjU0MDk3N30._vllLuXCU34JMbh0HTM6vIlglGRBX2oP7KBz_5XfKeo"
 EMAIL = "admin@livespot.jp"
 PASSWORD = "livespot2024"
 ACCOUNT_ID = "940e7248-1d73-4259-a538-56fdaea9d740"
