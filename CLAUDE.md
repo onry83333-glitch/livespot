@@ -305,6 +305,7 @@ migrations/
   059_fix_dm_batch_cast_name.sql  # create_dm_batch RPC cast_name パラメータ追加
   064_dm_triggers.sql           # DMトリガーエンジン（dm_triggers + dm_trigger_logs + デフォルト7件）
   065_spy_analysis_rpcs.sql      # SPY集計・トレンド分析RPC 5関数（配信/課金パターン/成長曲線/ゴール/マーケットトレンド）
+  098_v2_schema.sql              # SLS v2 新テーブル（chat_logs + viewer_snapshots + user_profiles）+ sessions補強
 ```
 
 ---
@@ -349,6 +350,9 @@ migrations/
 | stripchat_sessions | id (UUID) | Stripchatセッション同期 |
 | dm_triggers | id (UUID) | DM自動トリガー定義（7種） |
 | dm_trigger_logs | id (BIGSERIAL) | トリガー発火ログ（クールダウン管理） |
+| chat_logs | id (BIGSERIAL) | v2チャットログ（session_id UUID FK、Realtime有効） |
+| viewer_snapshots | id (BIGSERIAL) | v2視聴者スナップショット（viewers JSONB） |
+| user_profiles | id (UUID) | v2ユーザープロフィール（UNIQUE(account_id, cast_name, username)） |
 
 ### spy_messages カラム
 ```

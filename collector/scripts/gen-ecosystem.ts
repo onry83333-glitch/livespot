@@ -57,6 +57,30 @@ async function main() {
   const __dirname = path.dirname(__filename);
   const cwd = path.resolve(__dirname, '..');
 
+  // auth-manager: 認証一元管理プロセス（最初に起動、他のプロセスが依存）
+  apps.push({
+    name: 'auth-manager',
+    script: 'src/auth-manager/index.ts',
+    interpreter: 'node',
+    interpreter_args: '--import tsx',
+    cwd,
+    env: {
+      NODE_ENV: 'production',
+    },
+    autorestart: true,
+    watch: false,
+    max_memory_restart: '300M',   // Playwright使用のため余裕を持つ
+    log_file: `${cwd}/logs/auth-manager.log`,
+    error_file: `${cwd}/logs/auth-manager-error.log`,
+    out_file: `${cwd}/logs/auth-manager-out.log`,
+    log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    restart_delay: 5000,
+    max_restarts: 100,
+    min_uptime: '10s',
+    wait_ready: true,             // pm2に準備完了を通知するまで待つ
+    listen_timeout: 30000,
+  });
+
   for (const cast of registered) {
     apps.push({
       name: `cast-${cast.cast_name}`,
