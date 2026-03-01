@@ -1011,13 +1011,16 @@ async function flushViewerStats() {
   persistViewerBuffer();
 
   try {
-    const data = await chrome.storage.local.get(['last_cast_name']);
-    const fallbackCastName = data.last_cast_name || 'unknown';
+    // cast_nameが空のレコードは除外（last_cast_nameフォールバックによるキャスト間混在を防止）
+    const validBatch = batch.filter(s => s.cast_name && s.cast_name !== '');
+    if (validBatch.length < batch.length) {
+      console.warn('[LS-BG] viewer_stats: cast_name空のレコードを除外:', batch.length - validBatch.length, '件');
+    }
+    if (validBatch.length === 0) return;
 
-    const rows = batch.map(s => ({
+    const rows = validBatch.map(s => ({
       account_id: accountId,
-      // バッファ記録時のcast_nameを優先（フォールバックはlast_cast_name）
-      cast_name: s.cast_name || fallbackCastName,
+      cast_name: s.cast_name,
       total: s.total,
       coin_users: s.coin_users,
       others: s.others,

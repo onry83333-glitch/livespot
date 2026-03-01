@@ -231,6 +231,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
   const [deletingCast, setDeletingCast] = useState<string | null>(null);
   const [registeredCastNames, setRegisteredCastNames] = useState<Set<string>>(new Set());
   const [spyCastNames, setSpyCastNames] = useState<Set<string>>(new Set());
+  const [castNamesLoaded, setCastNamesLoaded] = useState(false);
   const [castMonitorStatus, setCastMonitorStatus] = useState<Map<string, Date>>(new Map());
   const [castTagsMap, setCastTagsMap] = useState<Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }>>({});
   const { messages, allMessages, castNames, isConnected, insertDemoData, deleteCastMessages } = useRealtimeSpy({
@@ -244,7 +245,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
     whisperSbRef.current.from('accounts').select('id').limit(1).single().then(({ data }) => {
       if (data) {
         setAccountId(data.id);
-        whisperSbRef.current
+        const p1 = whisperSbRef.current
           .from('registered_casts')
           .select('cast_name, genre, benchmark, category')
           .eq('account_id', data.id)
@@ -258,7 +259,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
               setCastTagsMap(prev => ({ ...prev, ...tagsMap }));
             }
           });
-        whisperSbRef.current
+        const p2 = whisperSbRef.current
           .from('spy_casts')
           .select('cast_name, genre, benchmark, category')
           .eq('account_id', data.id)
@@ -272,6 +273,9 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
               setCastTagsMap(prev => ({ ...prev, ...tagsMap }));
             }
           });
+
+        // 両方のキャスト名ロード完了後にフラグを立てる
+        Promise.all([p1, p2]).then(() => setCastNamesLoaded(true));
 
         // Cast monitoring status: latest message per cast
         whisperSbRef.current
@@ -302,11 +306,12 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
   }, [castNames, registeredCastNames, spyCastNames, castFilter]);
 
   // Filter messages to only show casts from the relevant table
+  // castNamesLoaded前は空配列を返す（全件フォールバックによるキャスト間混在を防止）
   const scopedAllMessages = useMemo(() => {
+    if (!castNamesLoaded) return [];
     const relevantNames = castFilter === 'own' ? registeredCastNames : spyCastNames;
-    if (relevantNames.size === 0) return allMessages;
     return allMessages.filter(m => relevantNames.has(m.cast_name));
-  }, [allMessages, registeredCastNames, spyCastNames, castFilter]);
+  }, [allMessages, registeredCastNames, spyCastNames, castFilter, castNamesLoaded]);
 
   const scopedMessages = useMemo(() => {
     if (selectedCast) return scopedAllMessages.filter(m => m.cast_name === selectedCast);

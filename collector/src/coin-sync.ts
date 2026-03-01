@@ -4,15 +4,16 @@
  * Chrome拡張が停止していても、Stripchat Earnings APIを呼び出し
  * coin_transactionsを更新する。
  *
- * Cookie取得の優先順位（4層フォールバック）:
+ * Cookie取得の優先順位（5層フォールバック）:
  *   0a. .auth/stripchat-state.json（coin-auth保存済みセッション）
  *   0b. cookies.json / ss_cookies.json / cookie_header.txt（ファイル）
+ *   0c. Playwright headless CFリフレッシュ（セッションcookie有効 + CF token期限切れ時）
  *   1.  stripchat_sessions DB（Chrome拡張保存）
  *   2.  Login API直叩き（STRIPCHAT_USERNAME/PASSWORD設定時、ブラウザ不要）
  *
  * フロー:
  *   1. registered_casts から自社キャスト一覧取得
- *   2. 認証cookie取得（ファイル → DB → Playwrightフォールバック）
+ *   2. 認証cookie取得（ファイル → CFリフレッシュ → DB → Playwrightフォールバック）
  *   3. Stripchat /api/front/users/{uid}/transactions を呼び出し
  *   4. coin_transactions に UPSERT
  *   5. refresh_paying_users + refresh_segments RPC実行
@@ -209,6 +210,167 @@ function extractUserIdFromAmpCookie(ampValue: string): string | null {
 }
 
 /**
+ * Playwright headless でセッションcookieをブラウザに注入し、
+ * Stripchatにアクセスして新しいCloudflare token（__cf_bm等）を取得。
+ *
+ * ログイン不要 — 既存のセッションcookie（isLogged=1, sessionId）が
+ * サーバー側で有効な場合のみ動作する。
+ *
+ * __cf_bm は約30分で期限切れになるため、2時間間隔のcronでは
+ * Node.js fetch() だけでは常にCloudflareに403ブロックされる。
+ * Playwright がCFチャレンジを自動解決し、新しいtokenを取得する。
+ */
+async function refreshCfCookiesViaPlaywright(
+  existingCookies: Record<string, string>,
+  accountCasts: RegisteredCast[],
+): Promise<{ cookieHeader: string; userId: string; cookiesJson: Record<string, string> } | null> {
+  log.info('Playwright headlessでCloudflare tokenリフレッシュ開始...');
+
+  // Dynamic import — Playwright未インストールでもcollectorは起動可能
+  let chromium: typeof import('playwright').chromium;
+  try {
+    const pw = await import('playwright');
+    chromium = pw.chromium;
+  } catch {
+    log.warn('Playwright未インストール — CFリフレッシュ不可');
+    return null;
+  }
+
+  let browser: import('playwright').Browser | null = null;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+      ],
+    });
+
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      viewport: { width: 1920, height: 1080 },
+      locale: 'ja-JP',
+      timezoneId: 'Asia/Tokyo',
+    });
+
+    // Anti-detection: webdriver フラグ除去
+    await context.addInitScript(`Object.defineProperty(navigator, 'webdriver', { get: () => false });`);
+
+    // セッションcookieをブラウザにセット（__cf_* 系は除外 — Cloudflareが新規発行する）
+    const cookiesToSet = Object.entries(existingCookies)
+      .filter(([name]) => !name.startsWith('__cf') && name !== '_ga' && !name.startsWith('_ga_'))
+      .map(([name, value]) => ({ name, value, domain: '.stripchat.com', path: '/' }));
+    await context.addCookies(cookiesToSet);
+    log.info(`${cookiesToSet.length}個のセッションcookieをブラウザにセット`);
+
+    const page = await context.newPage();
+
+    // Stripchatにアクセス（Cloudflareチャレンジを通過させる）
+    try {
+      await page.goto('https://stripchat.com/', {
+        waitUntil: 'domcontentloaded',
+        timeout: 25_000,
+      });
+    } catch {
+      // タイムアウトでも続行（Cloudflare challenge中の可能性）
+    }
+
+    // Cloudflareチャレンジ待機
+    const isCf = await page.evaluate(`
+      document.title.includes('Just a moment') ||
+      document.querySelector('#challenge-running') !== null ||
+      document.querySelector('.cf-browser-verification') !== null
+    `);
+    if (isCf) {
+      log.info('Cloudflareチャレンジ検出、解決待機中...');
+      try {
+        await page.waitForFunction(`!document.title.includes('Just a moment')`, { timeout: 20_000 });
+        await page.waitForTimeout(2000);
+        log.info('Cloudflareチャレンジ解決');
+      } catch {
+        log.warn('Cloudflareチャレンジ解決タイムアウト');
+      }
+    }
+
+    // 年齢確認ゲート突破
+    try {
+      const clicked = await page.evaluate(`(() => {
+        var buttons = document.querySelectorAll('button, a[role="button"], [class*="btn"]');
+        for (var b of buttons) {
+          var text = (b.textContent || '').trim();
+          if (text.includes('18') && (text.includes('歳') || text.includes('older') || text.includes('above') || text.includes('enter'))) {
+            b.click();
+            return true;
+          }
+        }
+        return false;
+      })()`);
+      if (clicked) {
+        log.debug('年齢確認ゲート突破');
+        await page.waitForTimeout(2000);
+      }
+    } catch { /* ignore */ }
+
+    // 更新されたcookieを取得
+    const allCookies = await context.cookies('https://stripchat.com');
+    const cfBm = allCookies.find(c => c.name === '__cf_bm');
+    if (cfBm) {
+      log.info('Cloudflare __cf_bm 新規取得成功');
+    } else {
+      log.warn('__cf_bm cookie未取得 — Cloudflare bypass失敗の可能性');
+    }
+
+    // cookie辞書に変換
+    const cookiesJson: Record<string, string> = {};
+    for (const c of allCookies) cookiesJson[c.name] = c.value;
+
+    // userId解決
+    let userId = cookiesJson['stripchat_com_userId'] || '';
+    if (!userId) {
+      userId = extractUserIdFromAmpCookie(cookiesJson['AMP_19a23394ad'] || '') || '';
+    }
+    if (!userId) {
+      // registered_castsからフォールバック
+      const fallbackId = accountCasts[0]?.stripchat_user_id || accountCasts[0]?.stripchat_model_id;
+      if (fallbackId) userId = String(fallbackId);
+    }
+
+    if (!userId) {
+      log.warn('CFリフレッシュ成功だがuserId解決不可');
+      return null;
+    }
+
+    const cookieHeader = allCookies.map(c => `${c.name}=${c.value}`).join('; ');
+
+    // Earnings APIテスト（1件だけ取得して認証確認）
+    const testResp = await fetch(`${EARNINGS_API}/${userId}/transactions?page=1&limit=1`, {
+      headers: {
+        Cookie: cookieHeader,
+        Accept: 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      },
+    });
+
+    if (testResp.ok) {
+      log.info(`CFリフレッシュ成功 — Earnings API応答OK (userId=${userId})`);
+      return { cookieHeader, userId, cookiesJson };
+    }
+
+    log.warn(`CFリフレッシュ後もEarnings API ${testResp.status} — セッション自体が期限切れ`);
+    return null;
+
+  } catch (err) {
+    log.error('Playwright CFリフレッシュエラー', err);
+    return null;
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch { /* ignore */ }
+    }
+  }
+}
+
+/**
  * Stripchat Login APIで認証cookie取得（ブラウザ不要）
  * STRIPCHAT_USERNAME + STRIPCHAT_PASSWORD が .env に設定されている場合のみ動作
  *
@@ -344,7 +506,7 @@ export async function runCoinSync(): Promise<void> {
           failureReason = 'Login APIリトライ後も認証失敗';
         }
       } else {
-        failureReason = '認証cookie期限切れ — collector/.envにSTRIPCHAT_USERNAME/PASSWORDを設定してください';
+        failureReason = '認証cookie期限切れ — STRIPCHAT_USERNAME/PASSWORDを設定するか、npm run coin-auth でログインしてください';
         log.error(`[${accountId}] ${failureReason}`);
       }
     } else if (result === 'ok') {
@@ -409,7 +571,7 @@ async function syncAccount(
   // 認証方式の可用性ログ
   const savedSession = loadSavedSession();
   const cookieFileExists = fs.existsSync(SS_COOKIES_JSON_FILE) || fs.existsSync(COOKIES_JSON_FILE) || fs.existsSync(COOKIE_HEADER_FILE);
-  log.info(`[${accountId}] 認証チェーン: state.json=${savedSession ? 'あり' : 'なし'}, cookieファイル=${cookieFileExists ? 'あり' : 'なし'}, LoginAPI=${PLAYWRIGHT_CONFIG.username ? '可' : '不可'}`);
+  log.info(`[${accountId}] 認証チェーン: state.json=${savedSession ? 'あり' : 'なし'}, cookieファイル=${cookieFileExists ? 'あり' : 'なし'}, Playwright=あり, LoginAPI=${PLAYWRIGHT_CONFIG.username ? '可' : '不可'}`);
 
   // 方式0a: 保存済みセッション（npm run coin-auth で取得したもの）を最優先
   if (savedSession) {
@@ -448,6 +610,41 @@ async function syncAccount(
         updated_at: new Date().toISOString(),
       }, { onConflict: 'account_id' });
       return 'ok';
+    }
+    // 方式0c: Cloudflare tokenだけが期限切れの可能性 → Playwright headlessでリフレッシュ
+    if (fileUserId) {
+      log.info(`[${accountId}] Cloudflare tokenリフレッシュ(Playwright headless)を試行...`);
+      const refreshed = await refreshCfCookiesViaPlaywright(cookiesFromFile.cookiesJson, accountCasts);
+      if (refreshed) {
+        const retryResult = await syncAccountCasts(sb, accountId, accountCasts, refreshed.userId, refreshed.cookieHeader, true);
+        if (retryResult === 'ok') {
+          // 成功 → stripchat_sessions + state.json を更新
+          await sb.from('stripchat_sessions').upsert({
+            account_id: accountId,
+            cookies_json: refreshed.cookiesJson,
+            stripchat_user_id: refreshed.userId,
+            is_valid: true,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'account_id' });
+
+          // state.json にも保存（次回はPlaywrightなしで使える可能性）
+          try {
+            const { STATE_FILE } = await import('./coin-auth.js');
+            const authDir = path.dirname(STATE_FILE);
+            if (!fs.existsSync(authDir)) fs.mkdirSync(authDir, { recursive: true });
+            fs.writeFileSync(STATE_FILE, JSON.stringify({
+              cookies: Object.entries(refreshed.cookiesJson).map(([name, value]) => ({
+                name, value, domain: '.stripchat.com', path: '/',
+              })),
+              userId: refreshed.userId,
+            }, null, 2));
+            log.info('state.json 保存完了（次回のCF bypass用）');
+          } catch { /* ignore */ }
+
+          return 'ok';
+        }
+        log.warn(`[${accountId}] CFリフレッシュ後もAPI拒否 — セッション自体が期限切れ`);
+      }
     }
     log.warn(`[${accountId}] cookieファイルのcookieも期限切れ`);
   }
