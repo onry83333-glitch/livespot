@@ -52,24 +52,25 @@ async function fetchWeeklyCoinStats(
     // RPC未適用 — フォールバックへ
   }
 
-  // 2. フォールバック: ページネーションで全件取得（PostgREST 1000行制限回避）
+  // 2. フォールバック: keyset pagination で全件取得（PostgREST max_rows=1000 回避）
   const PAGE_SIZE = 1000;
-  let allRows: { cast_name: string; tokens: number; date: string }[] = [];
-  let from = 0;
+  let allRows: { id: number; cast_name: string; tokens: number; date: string }[] = [];
+  let lastId = 0;
   let hasMore = true;
   while (hasMore) {
     const { data } = await supabase
       .from('coin_transactions')
-      .select('cast_name, tokens, date')
+      .select('id, cast_name, tokens, date')
       .eq('account_id', accountId)
       .in('cast_name', castNames)
       .gte('date', lastWeekStart.toISOString())
+      .gt('id', lastId)
       .order('id', { ascending: true })
-      .range(from, from + PAGE_SIZE - 1);
+      .limit(PAGE_SIZE);
     if (data && data.length > 0) {
       allRows = allRows.concat(data);
+      lastId = data[data.length - 1].id;
       hasMore = data.length === PAGE_SIZE;
-      from += PAGE_SIZE;
     } else {
       hasMore = false;
     }
