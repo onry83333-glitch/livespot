@@ -195,4 +195,41 @@ describe('normalizeSession', () => {
       expect(typeof result.startedAt).toBe('string');
     });
   });
+
+  // ----------------------------------------------------------
+  // 追加エッジケース
+  // ----------------------------------------------------------
+  describe('追加エッジケース', () => {
+    it('sessionId が undefined の場合 null を返す', () => {
+      expect(normalizeSession({ ...validRaw, sessionId: undefined })).toBeNull();
+    });
+
+    it('accountId が undefined の場合 null を返す', () => {
+      expect(normalizeSession({ ...validRaw, accountId: undefined })).toBeNull();
+    });
+
+    it('castName が undefined の場合 null を返す', () => {
+      expect(normalizeSession({ ...validRaw, castName: undefined })).toBeNull();
+    });
+
+    it('startedAt が undefined の場合 null を返す', () => {
+      expect(normalizeSession({ ...validRaw, startedAt: undefined })).toBeNull();
+    });
+
+    it('endedAt が空文字の場合 null を返す', () => {
+      expect(normalizeSession({ ...validRaw, endedAt: '' })).toBeNull();
+    });
+
+    it('全フィールド未設定（空オブジェクト）の場合 null を返す', () => {
+      expect(normalizeSession({})).toBeNull();
+    });
+
+    it('sessionId が数値の場合 null を返す（UUID形式ではない）', () => {
+      expect(normalizeSession({ ...validRaw, sessionId: 12345 })).toBeNull();
+    });
+
+    it('accountId が数値の場合 null を返す（UUID形式ではない）', () => {
+      expect(normalizeSession({ ...validRaw, accountId: 12345 })).toBeNull();
+    });
+  });
 });

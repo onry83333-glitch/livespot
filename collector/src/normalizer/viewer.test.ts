@@ -217,6 +217,42 @@ describe('normalizeViewers', () => {
       const result = normalizeViewers(viewers);
       expect(result).toHaveLength(100);
     });
+
+    it('userIdStripchat が数値の場合は文字列に変換される', () => {
+      const result = normalizeViewers([{ ...validViewer, userIdStripchat: 12345 }]);
+      expect(result[0].userIdStripchat).toBe('12345');
+      expect(typeof result[0].userIdStripchat).toBe('string');
+    });
+
+    it('level が小数の場合は切り捨てされる', () => {
+      const result = normalizeViewers([{ ...validViewer, level: 15.7 }]);
+      expect(result[0].level).toBe(15);
+    });
+
+    it('league が undefined の場合は空文字になる', () => {
+      const result = normalizeViewers([{ ...validViewer, league: undefined }]);
+      expect(result[0].league).toBe('');
+    });
+
+    it('isFanClub が null の場合は false になる', () => {
+      const result = normalizeViewers([{ ...validViewer, isFanClub: null }]);
+      expect(result[0].isFanClub).toBe(false);
+    });
+
+    it('isFanClub が 1（数値）の場合は false になる', () => {
+      const result = normalizeViewers([{ ...validViewer, isFanClub: 1 }]);
+      expect(result[0].isFanClub).toBe(false);
+    });
+
+    it('userName が "UNKNOWN"（全大文字）の場合はスキップされる', () => {
+      const result = normalizeViewers([{ ...validViewer, userName: 'UNKNOWN' }]);
+      expect(result).toHaveLength(0);
+    });
+
+    it('level が undefined の場合は 0 になる', () => {
+      const result = normalizeViewers([{ ...validViewer, level: undefined }]);
+      expect(result[0].level).toBe(0);
+    });
   });
 
   // ----------------------------------------------------------

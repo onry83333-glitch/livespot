@@ -279,6 +279,51 @@ describe('normalizeMessage', () => {
       const result = normalizeMessage({ ...validRaw, user_level: 0 });
       expect(result!.user_level).toBe(0);
     });
+
+    it('message が null の場合は空文字列になる', () => {
+      const result = normalizeMessage({ ...validRaw, message: null });
+      expect(result!.message).toBe('');
+    });
+
+    it('message が数値の場合は文字列に変換される', () => {
+      const result = normalizeMessage({ ...validRaw, message: 42 });
+      expect(result!.message).toBe('42');
+    });
+
+    it('tokens が boolean true の場合は 0 になる', () => {
+      const result = normalizeMessage({ ...validRaw, tokens: true });
+      expect(result!.tokens).toBe(0);
+    });
+
+    it('tokens がオブジェクトの場合は 0 になる', () => {
+      const result = normalizeMessage({ ...validRaw, tokens: {} });
+      expect(result!.tokens).toBe(0);
+    });
+
+    it('metadata が文字列の場合は空オブジェクトになる', () => {
+      const result = normalizeMessage({ ...validRaw, metadata: 'text' });
+      expect(result!.metadata).toEqual({});
+    });
+
+    it('metadata が数値の場合は空オブジェクトになる', () => {
+      const result = normalizeMessage({ ...validRaw, metadata: 123 });
+      expect(result!.metadata).toEqual({});
+    });
+
+    it('session_id が数値の場合は文字列に変換される', () => {
+      const result = normalizeMessage({ ...validRaw, session_id: 999 });
+      expect(result!.session_id).toBe('999');
+    });
+
+    it('user_league が空文字の場合は null になる', () => {
+      const result = normalizeMessage({ ...validRaw, user_league: '' });
+      expect(result!.user_league).toBeNull();
+    });
+
+    it('user_level が undefined の場合は null になる', () => {
+      const result = normalizeMessage({ ...validRaw, user_level: undefined });
+      expect(result!.user_level).toBeNull();
+    });
   });
 
   // ----------------------------------------------------------
