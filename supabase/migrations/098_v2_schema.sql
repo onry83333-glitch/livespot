@@ -19,9 +19,17 @@ ALTER TABLE public.sessions ALTER COLUMN cast_name SET NOT NULL;
 
 -- UNIQUE(cast_name, account_id, started_at) 追加
 -- 同一キャスト・同一アカウント・同一開始時刻のセッション重複を防止
-ALTER TABLE public.sessions
-  ADD CONSTRAINT uq_sessions_cast_account_started
-  UNIQUE (cast_name, account_id, started_at);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'uq_sessions_cast_account_started'
+  ) THEN
+    ALTER TABLE public.sessions
+      ADD CONSTRAINT uq_sessions_cast_account_started
+      UNIQUE (cast_name, account_id, started_at);
+  END IF;
+END $$;
 
 -- ============================================================
 -- 1. chat_logs — spy_messages の v2 後継
@@ -30,24 +38,24 @@ CREATE TABLE IF NOT EXISTS public.chat_logs (
   id            BIGSERIAL PRIMARY KEY,
   cast_name     TEXT        NOT NULL,
   account_id    UUID        NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
-  session_id    UUID        REFERENCES public.sessions(session_id) ON DELETE SET NULL,
+  session_id    TEXT        REFERENCES public.sessions(session_id) ON DELETE SET NULL,
   username      TEXT        NOT NULL,
   message       TEXT        NOT NULL DEFAULT '',
   message_type  TEXT        NOT NULL DEFAULT 'chat',
-  tokens        INTEGER     NOT NULL DEFAULT 0,
+  tokens        BIGINT      NOT NULL DEFAULT 0,
   timestamp     TIMESTAMPTZ NOT NULL DEFAULT now(),
   metadata      JSONB       NOT NULL DEFAULT '{}',
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- インデックス
-CREATE INDEX idx_chat_logs_account_cast
+CREATE INDEX IF NOT EXISTS idx_chat_logs_account_cast
   ON public.chat_logs (account_id, cast_name, timestamp DESC);
-CREATE INDEX idx_chat_logs_session
+CREATE INDEX IF NOT EXISTS idx_chat_logs_session
   ON public.chat_logs (session_id, timestamp);
-CREATE INDEX idx_chat_logs_username
+CREATE INDEX IF NOT EXISTS idx_chat_logs_username
   ON public.chat_logs (account_id, username);
-CREATE INDEX idx_chat_logs_type
+CREATE INDEX IF NOT EXISTS idx_chat_logs_type
   ON public.chat_logs (account_id, message_type)
   WHERE message_type != 'chat';
 
@@ -73,7 +81,7 @@ CREATE TABLE IF NOT EXISTS public.viewer_snapshots (
   id            BIGSERIAL PRIMARY KEY,
   cast_name     TEXT        NOT NULL,
   account_id    UUID        NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
-  session_id    UUID        REFERENCES public.sessions(session_id) ON DELETE SET NULL,
+  session_id    TEXT        REFERENCES public.sessions(session_id) ON DELETE SET NULL,
   snapshot_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   viewer_count  INTEGER     NOT NULL DEFAULT 0,
   viewers       JSONB       NOT NULL DEFAULT '[]',
@@ -87,9 +95,9 @@ CREATE TABLE IF NOT EXISTS public.viewer_snapshots (
 -- ]
 
 -- インデックス
-CREATE INDEX idx_viewer_snapshots_account_cast
+CREATE INDEX IF NOT EXISTS idx_viewer_snapshots_account_cast
   ON public.viewer_snapshots (account_id, cast_name, snapshot_at DESC);
-CREATE INDEX idx_viewer_snapshots_session
+CREATE INDEX IF NOT EXISTS idx_viewer_snapshots_session
   ON public.viewer_snapshots (session_id, snapshot_at);
 
 -- RLS
@@ -131,12 +139,12 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
 );
 
 -- インデックス
-CREATE INDEX idx_user_profiles_cast
+CREATE INDEX IF NOT EXISTS idx_user_profiles_cast
   ON public.user_profiles (account_id, cast_name);
-CREATE INDEX idx_user_profiles_segment
+CREATE INDEX IF NOT EXISTS idx_user_profiles_segment
   ON public.user_profiles (account_id, cast_name, segment)
   WHERE segment IS NOT NULL;
-CREATE INDEX idx_user_profiles_tokens
+CREATE INDEX IF NOT EXISTS idx_user_profiles_tokens
   ON public.user_profiles (account_id, cast_name, total_tokens DESC);
 
 -- RLS
@@ -175,7 +183,15 @@ CREATE TRIGGER trg_user_profiles_updated_at
 -- ============================================================
 -- 5. Realtime 有効化（chat_logs のみ — リアルタイム表示用）
 -- ============================================================
-ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_logs;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND tablename = 'chat_logs'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.chat_logs;
+  END IF;
+END $$;
 
 -- ============================================================
 -- 完了通知

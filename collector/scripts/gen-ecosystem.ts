@@ -81,6 +81,28 @@ async function main() {
     listen_timeout: 30000,
   });
 
+  // coin-sync: サーバーサイドコイン同期サービス（1時間間隔）
+  apps.push({
+    name: 'coin-sync',
+    script: 'src/coin-sync-service.ts',
+    interpreter: 'node',
+    interpreter_args: '--import tsx',
+    cwd,
+    env: {
+      NODE_ENV: 'production',
+    },
+    autorestart: true,
+    watch: false,
+    max_memory_restart: '200M',
+    log_file: `${cwd}/logs/coin-sync.log`,
+    error_file: `${cwd}/logs/coin-sync-error.log`,
+    out_file: `${cwd}/logs/coin-sync-out.log`,
+    log_date_format: 'YYYY-MM-DD HH:mm:ss',
+    restart_delay: 30000,
+    max_restarts: 20,
+    min_uptime: '60s',
+  });
+
   for (const cast of registered) {
     apps.push({
       name: `cast-${cast.cast_name}`,

@@ -18,6 +18,8 @@
     "coin-refresh": "tsx src/refresh-cookies.ts",
     "start:cast": "tsx src/single-cast.ts",
     "start:auth": "tsx src/auth-manager/index.ts",
+    "start:dm": "tsx src/dm-service/index.ts",
+    "start:coin-sync": "tsx src/coin-sync-service.ts",
     "gen-ecosystem": "tsx scripts/gen-ecosystem.ts"
   },
   "dependencies": {
