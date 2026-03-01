@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
 
   // 3. targetUserId 解決
   const { userId: targetUserId, error: resolveError } =
-    await api.resolveUserId(target_username, supabase);
+    await api.resolveUserId(target_username, supabase, account.id, body.cast_name);
   if (!targetUserId) {
     return NextResponse.json(
       {

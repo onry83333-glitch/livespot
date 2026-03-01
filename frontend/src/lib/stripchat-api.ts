@@ -147,13 +147,18 @@ export class StripchatAPI {
   async resolveUserId(
     username: string,
     supabase: SupabaseClient,
+    accountId?: string,
+    castName?: string,
   ): Promise<{ userId: string | null; error?: string }> {
     // 1. paid_users キャッシュ確認
-    const { data: cached } = await supabase
+    let query = supabase
       .from('paid_users')
       .select('user_id_stripchat')
       .eq('user_name', username)
-      .not('user_id_stripchat', 'is', null)
+      .not('user_id_stripchat', 'is', null);
+    if (accountId) query = query.eq('account_id', accountId);
+    if (castName) query = query.eq('cast_name', castName);
+    const { data: cached } = await query
       .limit(1)
       .maybeSingle();
 
@@ -187,11 +192,13 @@ export class StripchatAPI {
       }
 
       // キャッシュ保存（ベストエフォート）
-      await supabase
+      let updateQuery = supabase
         .from('paid_users')
         .update({ user_id_stripchat: userId } as Record<string, unknown>)
-        .eq('user_name', username)
-        .then(() => {});
+        .eq('user_name', username);
+      if (accountId) updateQuery = updateQuery.eq('account_id', accountId);
+      if (castName) updateQuery = updateQuery.eq('cast_name', castName);
+      await updateQuery.then(() => {});
 
       return { userId };
     } catch (err) {

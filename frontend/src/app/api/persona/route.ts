@@ -874,11 +874,12 @@ export async function POST(req: NextRequest) {
 
     try {
       const sb = getAuthClient(auth.token);
-      const { data: persona } = await sb
+      let personaQuery = sb
         .from('cast_personas')
         .select('*')
-        .eq('cast_name', castName)
-        .single();
+        .eq('cast_name', castName);
+      if (reqAccountId) personaQuery = personaQuery.eq('account_id', reqAccountId);
+      const { data: persona } = await personaQuery.single();
 
       const activePersona: CastPersona = persona
         ? (persona as CastPersona)
@@ -1018,11 +1019,12 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
 
   try {
     const sb = getAuthClient(auth.token);
-    const { data: persona } = await sb
+    let personaQuery2 = sb
       .from('cast_personas')
       .select('*')
-      .eq('cast_name', cast_name)
-      .single();
+      .eq('cast_name', cast_name);
+    if (reqAccountId) personaQuery2 = personaQuery2.eq('account_id', reqAccountId);
+    const { data: persona } = await personaQuery2.single();
 
     const activePersona: CastPersona = persona
       ? (persona as CastPersona)

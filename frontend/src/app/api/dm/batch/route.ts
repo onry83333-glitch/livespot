@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
     try {
       // userId 解決
       const { userId: targetUserId, error: resolveError } =
-        await api.resolveUserId(task.user_name, supabase);
+        await api.resolveUserId(task.user_name, supabase, account_id, task.cast_name);
 
       if (!targetUserId) {
         errorCount++;
