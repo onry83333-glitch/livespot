@@ -25,6 +25,12 @@ const navSections: NavSection[] = [
       { href: '/alerts',  icon: '🔔', label: 'アラート' },
     ],
   },
+  {
+    title: '管理',
+    items: [
+      { href: '/admin/test-data', icon: '🧹', label: 'テストデータ' },
+    ],
+  },
 ];
 
 const castTabs = [

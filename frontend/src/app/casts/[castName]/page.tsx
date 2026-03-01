@@ -308,6 +308,7 @@ function CastDetailInner() {
   const [dmTargetsText, setDmTargetsText] = useState('');
   const [dmMessage, setDmMessage] = useState('');
   const [dmCampaign, setDmCampaign] = useState('');
+  const [dmIsTest, setDmIsTest] = useState(process.env.NODE_ENV === 'development');
   const [dmSendMode, setDmSendMode] = useState<'sequential' | 'pipeline'>('pipeline');
   const [dmTabs, setDmTabs] = useState(3);
   const [dmSending, setDmSending] = useState(false);
@@ -1182,9 +1183,10 @@ function CastDetailInner() {
         }
       }
 
-      // Step 3: キャンペーン名更新
-      const bid = `${modePrefix}_${tag}${originalBid}`;
-      console.log('[DM-Cast] Step3: campaign=', bid);
+      // Step 3: キャンペーン名更新（テストモード時は test_ プレフィックス自動付与）
+      const testPrefix = dmIsTest ? 'test_' : '';
+      const bid = `${testPrefix}${modePrefix}_${tag}${originalBid}`;
+      console.log('[DM-Cast] Step3: campaign=', bid, dmIsTest ? '(test mode)' : '');
       await sb.from('dm_send_log').update({ campaign: bid, cast_name: castName }).eq('campaign', originalBid);
 
       setDmBatchId(bid);
@@ -1209,7 +1211,7 @@ function CastDetailInner() {
       setDmError(errMsg);
     }
     setDmSending(false);
-  }, [dmTargets, dmMessage, dmCampaign, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview, dmDeliveryMode, dmSendOrder]);
+  }, [dmTargets, dmMessage, dmCampaign, dmIsTest, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview, dmDeliveryMode, dmSendOrder]);
 
   const toggleTarget = useCallback((un: string) => {
     setDmTargets(prev => { const n = new Set(prev); if (n.has(un)) n.delete(un); else n.add(un); return n; });
@@ -1281,7 +1283,8 @@ function CastDetailInner() {
     try {
       const scheduledAt = new Date(`${dmScheduleDate}T${dmScheduleTime}:00`).toISOString();
       const usernames = Array.from(dmTargets);
-      const campaignTag = dmCampaign.trim() || null;
+      const rawTag = dmCampaign.trim() || null;
+      const campaignTag = dmIsTest ? `test_${rawTag || 'scheduled'}` : rawTag;
 
       const { data, error } = await sb.from('dm_schedules').insert({
         account_id: accountId,
@@ -1313,7 +1316,7 @@ function CastDetailInner() {
       setDmError(e instanceof Error ? e.message : String(e));
     }
     setDmScheduleSaving(false);
-  }, [dmTargets, dmMessage, dmCampaign, dmSendMode, dmTabs, dmScheduleDate, dmScheduleTime, accountId, castName, sb]);
+  }, [dmTargets, dmMessage, dmCampaign, dmIsTest, dmSendMode, dmTabs, dmScheduleDate, dmScheduleTime, accountId, castName, sb]);
 
   // DM Schedule: キャンセル
   const handleCancelSchedule = useCallback(async (scheduleId: string) => {
@@ -2838,8 +2841,22 @@ function CastDetailInner() {
                       <div className="grid grid-cols-2 gap-3 mb-3">
                         <div>
                           <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>キャンペーンタグ</label>
-                          <input type="text" value={dmCampaign} onChange={e => setDmCampaign(e.target.value)}
-                            className="input-glass text-xs w-full" placeholder="例: バレンタイン復帰DM" />
+                          <div className="flex gap-2 items-center">
+                            <input type="text" value={dmCampaign} onChange={e => setDmCampaign(e.target.value)}
+                              className="input-glass text-xs flex-1" placeholder="例: バレンタイン復帰DM" />
+                            <button
+                              onClick={() => setDmIsTest(p => !p)}
+                              className={`shrink-0 text-[10px] px-2.5 py-1.5 rounded-lg font-medium transition-all ${dmIsTest ? 'bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/40' : 'btn-ghost opacity-60'}`}
+                              title="ONにするとcampaignにtest_プレフィックスが付き、テストデータ管理から一括削除可能"
+                            >
+                              {dmIsTest ? 'テスト ON' : 'テスト'}
+                            </button>
+                          </div>
+                          {dmIsTest && (
+                            <p className="text-[9px] mt-1" style={{ color: 'var(--accent-amber)' }}>
+                              test_ プレフィックスが自動付与されます（管理画面から一括削除可能）
+                            </p>
+                          )}
                         </div>
                         {dmDeliveryMode === 'image_pipeline' && (
                           <div>
@@ -6361,10 +6378,16 @@ function CastDetailInner() {
                 <p className="text-xs whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>{dmMessage}</p>
               </div>
 
-              {dmCampaign && (
-                <div className="glass-panel p-3 rounded-xl">
+              {(dmCampaign || dmIsTest) && (
+                <div className="glass-panel p-3 rounded-xl" style={dmIsTest ? { borderLeft: '2px solid var(--accent-amber)' } : undefined}>
                   <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>キャンペーン</p>
-                  <p className="text-xs">{dmCampaign}</p>
+                  <p className="text-xs">
+                    {dmIsTest && <span style={{ color: 'var(--accent-amber)' }}>test_ </span>}
+                    {dmCampaign || '(自動生成)'}
+                  </p>
+                  {dmIsTest && (
+                    <p className="text-[9px] mt-1" style={{ color: 'var(--accent-amber)' }}>テスト送信 — 管理画面から一括削除可能</p>
+                  )}
                 </div>
               )}
 
