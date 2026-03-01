@@ -10,6 +10,7 @@ import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
+import DmSegmentSender from '@/components/dm-segment-sender';
 
 
 /* ============================================================
@@ -348,7 +349,7 @@ function CastDetailInner() {
   const [dmUserHistoryLoading, setDmUserHistoryLoading] = useState(false);
 
   // DM Section toggle (A/B/C/D/E)
-  const [dmSection, setDmSection] = useState<'users' | 'send' | 'campaigns' | 'scenarios' | 'effectiveness'>('users');
+  const [dmSection, setDmSection] = useState<'users' | 'send' | 'segments' | 'campaigns' | 'scenarios' | 'effectiveness'>('users');
 
   // DM Effectiveness state
   const [dmEffectiveness, setDmEffectiveness] = useState<DmEffItem[]>([]);
@@ -2662,6 +2663,7 @@ function CastDetailInner() {
                 {([
                   { key: 'users' as const, icon: '👥', label: 'ユーザー別' },
                   { key: 'send' as const, icon: '✉️', label: 'DM送信' },
+                  { key: 'segments' as const, icon: '🎯', label: 'セグメント別' },
                   { key: 'campaigns' as const, icon: '📊', label: 'キャンペーン' },
                   { key: 'scenarios' as const, icon: '📋', label: 'シナリオ' },
                   { key: 'effectiveness' as const, icon: '📈', label: '効果測定' },
@@ -3207,6 +3209,23 @@ function CastDetailInner() {
                     </div>
                   </div>
                 </div>
+              )}
+
+              {/* Section: セグメント別DM送信 */}
+              {dmSection === 'segments' && accountId && (
+                <DmSegmentSender
+                  supabase={sb}
+                  accountId={accountId}
+                  castName={castName}
+                  onSendComplete={() => {
+                    // DM送信完了後にログ再取得
+                    sb.from('dm_send_log')
+                      .select('id, user_name, message, status, error, campaign, queued_at, sent_at')
+                      .eq('account_id', accountId).eq('cast_name', castName)
+                      .order('created_at', { ascending: false }).limit(200)
+                      .then(({ data }) => setDmLogs((data || []) as DMLogItem[]));
+                  }}
+                />
               )}
 
               {/* Section D: キャンペーン履歴 */}
