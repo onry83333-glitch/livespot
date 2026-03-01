@@ -126,6 +126,58 @@ function hideError() {
 }
 
 // ============================================================
+// Cast Identity Detection
+// ============================================================
+async function detectLoggedInCast() {
+  const section = $('castIdentitySection');
+  const icon = $('castIdentityIcon');
+  const text = $('castIdentityText');
+  const clearBtn = $('clearCookiesBtn');
+  if (!section) return;
+
+  section.style.display = 'flex';
+  section.className = 'cast-identity unknown';
+  text.textContent = '検出中...';
+  clearBtn.style.display = 'none';
+
+  chrome.runtime.sendMessage({ type: 'GET_LOGGED_IN_CAST' }, (response) => {
+    if (chrome.runtime.lastError || !response || !response.ok) {
+      section.className = 'cast-identity unknown';
+      icon.innerHTML = '&#9679;';
+      text.textContent = 'キャスト検出不可';
+      return;
+    }
+
+    if (!response.userId) {
+      section.className = 'cast-identity unknown';
+      icon.innerHTML = '&#9679;';
+      text.textContent = 'Stripchat未ログイン';
+      return;
+    }
+
+    if (response.castName) {
+      // 既知のキャストにログイン中
+      section.className = 'cast-identity ok';
+      icon.innerHTML = '&#9679;';
+      text.innerHTML = `ログイン中: <span class="cast-identity-name">${response.displayName || response.castName}</span>`;
+      clearBtn.style.display = 'block';
+    } else {
+      // ログインしているがキャストが不明（未登録のstripchat_user_id）
+      section.className = 'cast-identity warning';
+      icon.innerHTML = '&#9888;';
+      text.innerHTML = `不明なアカウント (ID: ${response.userId})`;
+      clearBtn.style.display = 'block';
+
+      // 登録済みキャストがある場合、誤送信の危険を表示
+      if (response.allCasts && response.allCasts.length > 0) {
+        const expected = response.allCasts.map(c => c.cast_name).join(', ');
+        text.innerHTML += `<br><span style="font-size:10px;">登録済み: ${expected}</span>`;
+      }
+    }
+  });
+}
+
+// ============================================================
 // Data Loading
 // ============================================================
 async function fetchAccountsFromSupabase() {
@@ -271,6 +323,7 @@ async function init() {
     showDashboard();
     loadAccounts();
     loadCastsForSync();
+    detectLoggedInCast();
 
     // Restore last coin sync status
     chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
@@ -327,6 +380,7 @@ loginBtn.addEventListener('click', async () => {
     showDashboard();
     await loadAccounts();
     loadCastsForSync();
+    detectLoggedInCast();
   } catch (err) {
     const msg = err.message === 'Invalid login credentials'
       ? 'メールアドレスまたはパスワードが正しくありません'
@@ -349,8 +403,38 @@ accountSelect.addEventListener('change', () => {
     chrome.storage.local.set({ account_id: id });
     chrome.runtime.sendMessage({ type: 'SET_ACCOUNT', account_id: id });
     loadCastsForSync();
+    // アカウント切り替え時にキャスト身元を再検出
+    setTimeout(detectLoggedInCast, 500);
   }
 });
+
+// --- Clear Cast Cookies ---
+$('clearCookiesBtn').addEventListener('click', () => {
+  const btn = $('clearCookiesBtn');
+  btn.disabled = true;
+  btn.textContent = '削除中...';
+
+  chrome.runtime.sendMessage({ type: 'CLEAR_CAST_COOKIES' }, (response) => {
+    btn.disabled = false;
+    btn.textContent = 'リセット';
+
+    if (chrome.runtime.lastError) {
+      console.error('[LSP] Cookie clear error:', chrome.runtime.lastError.message);
+      return;
+    }
+
+    if (response && response.ok) {
+      const section = $('castIdentitySection');
+      section.className = 'cast-identity unknown';
+      $('castIdentityIcon').innerHTML = '&#9679;';
+      $('castIdentityText').textContent = `Cookie削除完了 (${response.cleared}件)。ブラウザで再ログインしてください。`;
+      btn.style.display = 'none';
+    }
+  });
+});
+
+// --- Account Selection Change → Re-detect cast ---
+// (also triggers on page load if account was pre-selected)
 
 // --- Coin Sync Cast Selection ---
 coinSyncCastSelect.addEventListener('change', () => {

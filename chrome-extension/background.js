@@ -3027,6 +3027,26 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // --- Popup: ログイン中キャスト検出 ---
+  if (msg.type === 'GET_LOGGED_IN_CAST') {
+    getLoggedInCastFromCookies().then(result => {
+      sendResponse({ ok: true, ...result });
+    }).catch(e => {
+      sendResponse({ ok: false, error: e.message });
+    });
+    return true; // async sendResponse
+  }
+
+  // --- Popup: AMP cookie クリーンアップ ---
+  if (msg.type === 'CLEAR_CAST_COOKIES') {
+    clearStripchatIdentityCookies().then(cleared => {
+      sendResponse({ ok: true, cleared });
+    }).catch(e => {
+      sendResponse({ ok: false, error: e.message });
+    });
+    return true; // async sendResponse
+  }
+
   return false;
 });
 
@@ -3882,6 +3902,91 @@ async function waitForPageLoad(tabId, maxWait = 8000) {
   }
   console.warn('[LS-BG] ページ読み込みタイムアウト (' + maxWait + 'ms) → それでも送信試行');
   return false;
+}
+
+// ============================================================
+// AMP Cookie ヘルパー — キャスト身元検証・クリーンアップ
+// ============================================================
+
+/**
+ * AMP cookie / baseAmplからStripchat userIdを抽出
+ * @returns {string|null} userId文字列
+ */
+async function getMyUserIdFromCookies() {
+  try {
+    const allCookies = await chrome.cookies.getAll({ domain: 'stripchat.com' });
+    for (const c of allCookies) {
+      if (c.name.startsWith('AMP_')) {
+        try {
+          const decoded = decodeURIComponent(atob(c.value));
+          const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
+          if (match) return match[1];
+        } catch (e) { /* skip */ }
+      }
+    }
+    for (const c of allCookies) {
+      if (c.name === 'baseAmpl') {
+        try {
+          const decoded = decodeURIComponent(c.value);
+          const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
+          if (match) return match[1];
+        } catch (e) { /* skip */ }
+      }
+    }
+  } catch (e) { /* skip */ }
+  return null;
+}
+
+/**
+ * AMP cookie由来のuserIdからregistered_castsのキャスト名を逆引き
+ * @returns {{ castName: string|null, userId: string|null, allCasts: Array }}
+ */
+async function getLoggedInCastFromCookies() {
+  const myUserId = await getMyUserIdFromCookies();
+  if (!myUserId || !accountId || !accessToken) {
+    return { castName: null, userId: myUserId, allCasts: [] };
+  }
+
+  try {
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&stripchat_user_id=not.is.null&select=cast_name,stripchat_user_id,display_name`,
+      { headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) return { castName: null, userId: myUserId, allCasts: [] };
+    const casts = await res.json();
+    const matched = casts.find(c => String(c.stripchat_user_id) === myUserId);
+    return {
+      castName: matched ? matched.cast_name : null,
+      displayName: matched ? (matched.display_name || matched.cast_name) : null,
+      userId: myUserId,
+      allCasts: casts.map(c => ({ cast_name: c.cast_name, stripchat_user_id: String(c.stripchat_user_id) })),
+    };
+  } catch (e) {
+    return { castName: null, userId: myUserId, allCasts: [] };
+  }
+}
+
+/**
+ * Stripchat AMP cookie + baseAmpl を一括削除（キャスト切り替え時に使用）
+ * @returns {number} 削除したcookie数
+ */
+async function clearStripchatIdentityCookies() {
+  let cleared = 0;
+  try {
+    const allCookies = await chrome.cookies.getAll({ domain: 'stripchat.com' });
+    for (const c of allCookies) {
+      if (c.name.startsWith('AMP_') || c.name === 'baseAmpl') {
+        const cookieUrl = `https://${c.domain.replace(/^\./, '')}${c.path}`;
+        await chrome.cookies.remove({ url: cookieUrl, name: c.name });
+        cleared++;
+        console.log('[LS-BG] AMP cookie削除:', c.name);
+      }
+    }
+    console.log(`[LS-BG] AMP cookie クリーンアップ完了: ${cleared}件削除`);
+  } catch (e) {
+    console.warn('[LS-BG] AMP cookie クリーンアップエラー:', e.message);
+  }
+  return cleared;
 }
 
 /**
