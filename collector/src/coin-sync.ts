@@ -4,11 +4,11 @@
  * Chrome拡張が停止していても、Stripchat Earnings APIを呼び出し
  * coin_transactionsを更新する。
  *
- * Cookie取得の優先順位（7層フォールバック）:
+ * Cookie取得の優先順位（4層フォールバック）:
  *   0a. .auth/stripchat-state.json（coin-auth保存済みセッション）
  *   0b. cookies.json / ss_cookies.json / cookie_header.txt（ファイル）
  *   1.  stripchat_sessions DB（Chrome拡張保存）
- *   2.  Playwrightログイン（STRIPCHAT_USERNAME/PASSWORD設定時）
+ *   2.  Login API直叩き（STRIPCHAT_USERNAME/PASSWORD設定時、ブラウザ不要）
  *
  * フロー:
  *   1. registered_casts から自社キャスト一覧取得
@@ -209,150 +209,93 @@ function extractUserIdFromAmpCookie(ampValue: string): string | null {
 }
 
 /**
- * Playwrightでログインし認証cookieを取得 → stripchat_sessions更新
+ * Stripchat Login APIで認証cookie取得（ブラウザ不要）
  * STRIPCHAT_USERNAME + STRIPCHAT_PASSWORD が .env に設定されている場合のみ動作
+ *
+ * API: POST https://stripchat.com/api/front/auth/login
+ * Body: { loginOrEmail, password }
+ * Response: Set-Cookie ヘッダーに認証cookie
  */
-async function refreshCookiesViaPlaywright(
+async function refreshCookiesViaApi(
   accountId: string,
 ): Promise<{ cookieHeader: string; userId: string } | null> {
   const { username, password } = PLAYWRIGHT_CONFIG;
   if (!username || !password) {
-    log.warn('Playwrightログイン不可 — STRIPCHAT_USERNAME/PASSWORDが.envに未設定');
+    log.warn('APIログイン不可 — STRIPCHAT_USERNAME/PASSWORDがcollector/.envに未設定');
     return null;
   }
 
-  log.info(`[${accountId}] Playwrightで認証cookie取得開始...`);
+  log.info(`[${accountId}] Stripchat Login APIでcookie取得開始...`);
 
-  let chromium: typeof import('playwright').chromium;
   try {
-    const pw = await import('playwright');
-    chromium = pw.chromium;
-  } catch {
-    log.warn('Playwright未インストール — cookie自動取得不可');
-    return null;
-  }
-
-  let browser: import('playwright').Browser | null = null;
-  try {
-    browser = await chromium.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-      ],
+    const resp = await fetch('https://stripchat.com/api/front/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        Origin: 'https://stripchat.com',
+        Referer: 'https://stripchat.com/login',
+      },
+      body: JSON.stringify({ loginOrEmail: username, password }),
+      redirect: 'manual', // Set-Cookieヘッダーをキャプチャするため
     });
 
-    const context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      viewport: { width: 1920, height: 1080 },
-      locale: 'ja-JP',
-    });
-
-    await context.addInitScript(`
-      Object.defineProperty(navigator, 'webdriver', { get: () => false });
-      delete navigator.__proto__.webdriver;
-    `);
-
-    const page = await context.newPage();
-
-    // ログインページ（Cloudflare challenge対応で長めのタイムアウト）
-    await page.goto('https://stripchat.com/login', { waitUntil: 'networkidle', timeout: 45_000 });
-
-    // Cloudflare challenge待ち（自動で通過する場合5-15秒）
-    await page.waitForTimeout(3000);
-
-    // 年齢確認突破（複数パターン対応）
-    try {
-      for (const sel of [
-        'button:has-text("18")',
-        'button:has-text("I am 18")',
-        'button:has-text("Enter")',
-        '[data-testid="age-gate-confirm"]',
-        '.age-gate button',
-      ]) {
-        const ageBtn = await page.$(sel);
-        if (ageBtn && await ageBtn.isVisible()) {
-          await ageBtn.click();
-          log.info(`[${accountId}] 年齢確認突破 (${sel})`);
-          await page.waitForTimeout(2000);
-          break;
-        }
-      }
-    } catch { /* no gate */ }
-
-    // ログインフォームが表示されるまで待つ
-    try {
-      await page.waitForSelector('input[type="password"]', { timeout: 10_000 });
-    } catch {
-      log.warn(`[${accountId}] ログインフォームが見つからない — URL: ${page.url()}`);
-      try { await page.screenshot({ path: 'docs/playwright-coin-no-form.png' }); } catch { /* */ }
+    if (!resp.ok && resp.status !== 301 && resp.status !== 302) {
+      const body = await resp.text().catch(() => '');
+      log.warn(`[${accountId}] Login API ${resp.status}: ${body.substring(0, 200)}`);
+      return null;
     }
 
-    // ログインフォーム
-    for (const sel of ['input[name="login"]', 'input[name="username"]', 'input[type="text"]']) {
-      const el = await page.$(sel);
-      if (el && await el.isVisible()) { await el.fill(username); break; }
-    }
-    for (const sel of ['input[name="password"]', 'input[type="password"]']) {
-      const el = await page.$(sel);
-      if (el && await el.isVisible()) { await el.fill(password); break; }
-    }
-
-    // 送信
-    const submitBtn = await page.$('button[type="submit"]');
-    if (submitBtn) await submitBtn.click();
-
-    // ログイン完了待ち（ナビゲーション or cookie出現 で判定）
-    try {
-      await Promise.race([
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }),
-        page.waitForFunction(
-          'document.cookie.includes("stripchat_com_userId")',
-          { timeout: 20_000 },
-        ),
-      ]);
-    } catch {
-      // ナビゲーションもcookieも検出できなかった → 追加待ち
-      log.warn(`[${accountId}] ログイン応答遅延 — 追加5秒待機`);
-      await page.waitForTimeout(5000);
-    }
-
-    // Cookie取得（stripchat.comドメインのみ）
-    const cookies = await context.cookies('https://stripchat.com');
+    // Set-Cookieヘッダーからcookieを抽出
+    const setCookies = resp.headers.getSetCookie?.() || [];
     const cookiesJson: Record<string, string> = {};
-    for (const c of cookies) {
-      cookiesJson[c.name] = c.value;
+    for (const sc of setCookies) {
+      const nameVal = sc.split(';')[0];
+      const eqIdx = nameVal.indexOf('=');
+      if (eqIdx > 0) {
+        cookiesJson[nameVal.substring(0, eqIdx)] = nameVal.substring(eqIdx + 1);
+      }
     }
 
-    const userIdFromCookie = cookiesJson['stripchat_com_userId'];
-    if (!userIdFromCookie) {
-      log.warn(`[${accountId}] Playwrightログイン後もuserIdなし — URL: ${page.url()}`);
-      try { await page.screenshot({ path: 'docs/playwright-coin-login-fail.png' }); } catch { /* */ }
+    // レスポンスボディからもuserIdを取得
+    let userId = cookiesJson['stripchat_com_userId'] || '';
+    let bodyData: { user?: { id?: number }; data?: { user?: { id?: number } } } = {};
+    try {
+      bodyData = await resp.json() as typeof bodyData;
+      const bodyUserId = bodyData?.user?.id || bodyData?.data?.user?.id;
+      if (bodyUserId && !userId) {
+        userId = String(bodyUserId);
+      }
+    } catch { /* body parse optional */ }
+
+    if (!userId) {
+      // AMP cookieからフォールバック
+      userId = extractUserIdFromAmpCookie(cookiesJson['AMP_19a23394ad'] || '') || '';
+    }
+
+    if (!userId) {
+      log.warn(`[${accountId}] Login API成功だがuserId取得不可 — cookies: ${Object.keys(cookiesJson).join(', ')}`);
       return null;
     }
 
     const cookieHeader = Object.entries(cookiesJson).map(([k, v]) => `${k}=${v}`).join('; ');
-    log.info(`[${accountId}] Playwrightログイン成功 (userId=${userIdFromCookie})`);
+    log.info(`[${accountId}] Login API成功 (userId=${userId}, cookies=${Object.keys(cookiesJson).length}個)`);
 
     // stripchat_sessions更新
     const sb = getSupabase();
     await sb.from('stripchat_sessions').upsert({
       account_id: accountId,
       cookies_json: cookiesJson,
-      stripchat_user_id: userIdFromCookie,
+      stripchat_user_id: userId,
       is_valid: true,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'account_id' });
 
-    return { cookieHeader, userId: userIdFromCookie };
+    return { cookieHeader, userId };
   } catch (err) {
-    log.error(`[${accountId}] Playwrightログイン失敗`, err);
+    log.error(`[${accountId}] Login APIエラー`, err);
     return null;
-  } finally {
-    if (browser) {
-      try { await browser.close(); } catch { /* */ }
-    }
   }
 }
 
@@ -389,19 +332,19 @@ export async function runCoinSync(): Promise<void> {
   for (const [accountId, accountCasts] of byAccount) {
     const result = await syncAccount(sb, accountId, accountCasts);
 
-    // Earnings API 403 → Playwrightでcookieリフレッシュしてリトライ
+    // Earnings API 403 → Login APIでcookieリフレッシュしてリトライ
     if (result === 'auth_failed') {
-      log.info(`[${accountId}] Playwrightでcookie自動取得を試行...`);
-      const fresh = await refreshCookiesViaPlaywright(accountId);
+      log.info(`[${accountId}] Login APIでcookie自動取得を試行...`);
+      const fresh = await refreshCookiesViaApi(accountId);
       if (fresh) {
         const retryResult = await syncAccountCasts(sb, accountId, accountCasts, fresh.userId, fresh.cookieHeader, true);
         if (retryResult === 'ok') {
           overallSuccess = true;
         } else {
-          failureReason = 'Playwrightリトライ後も認証失敗';
+          failureReason = 'Login APIリトライ後も認証失敗';
         }
       } else {
-        failureReason = '認証cookie期限切れ — 以下のいずれかを実行してください:\n  1. npm run coin-auth（推奨: ブラウザでログインしてセッション保存）\n  2. npm run coin-import（DevToolsからcookie貼り付け）\n  3. collector/.envにSTRIPCHAT_USERNAME/PASSWORDを設定';
+        failureReason = '認証cookie期限切れ — collector/.envにSTRIPCHAT_USERNAME/PASSWORDを設定してください';
         log.error(`[${accountId}] ${failureReason}`);
       }
     } else if (result === 'ok') {
@@ -466,7 +409,7 @@ async function syncAccount(
   // 認証方式の可用性ログ
   const savedSession = loadSavedSession();
   const cookieFileExists = fs.existsSync(SS_COOKIES_JSON_FILE) || fs.existsSync(COOKIES_JSON_FILE) || fs.existsSync(COOKIE_HEADER_FILE);
-  log.info(`[${accountId}] 認証チェーン: state.json=${savedSession ? 'あり' : 'なし'}, cookieファイル=${cookieFileExists ? 'あり' : 'なし'}, Playwright=${PLAYWRIGHT_CONFIG.username ? '可' : '不可'}`);
+  log.info(`[${accountId}] 認証チェーン: state.json=${savedSession ? 'あり' : 'なし'}, cookieファイル=${cookieFileExists ? 'あり' : 'なし'}, LoginAPI=${PLAYWRIGHT_CONFIG.username ? '可' : '不可'}`);
 
   // 方式0a: 保存済みセッション（npm run coin-auth で取得したもの）を最優先
   if (savedSession) {
