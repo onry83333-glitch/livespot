@@ -400,7 +400,7 @@ async function syncAccount(
   casts: RegisteredCast[],
 ): Promise<'ok' | 'auth_failed' | 'no_session'> {
   // 1. Cookie取得（DBのみ）
-  const auth = await getSessionFromDB(accountId);
+  const auth = await getSessionFromDB(accountId, casts);
   if (!auth) return 'no_session';
 
   log.info(`[${accountId}] 認証OK (userId=${auth.userId})`);
