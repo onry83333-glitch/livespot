@@ -213,6 +213,22 @@ describe('normalizeMessage', () => {
     it('cast_name が null の場合 null を返す', () => {
       expect(normalizeMessage({ ...validRaw, cast_name: null })).toBeNull();
     });
+
+    it('account_id が undefined の場合 null を返す', () => {
+      expect(normalizeMessage({ ...validRaw, account_id: undefined })).toBeNull();
+    });
+
+    it('cast_name が undefined の場合 null を返す', () => {
+      expect(normalizeMessage({ ...validRaw, cast_name: undefined })).toBeNull();
+    });
+
+    it('user_name が空白のみの場合 null を返す', () => {
+      expect(normalizeMessage({ ...validRaw, user_name: '   ' })).toBeNull();
+    });
+
+    it('全フィールド未設定（空オブジェクト）の場合 null を返す', () => {
+      expect(normalizeMessage({})).toBeNull();
+    });
   });
 
   // ----------------------------------------------------------
