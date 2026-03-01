@@ -217,6 +217,28 @@ export function getStatus(): {
   }));
 }
 
+/** サムネイル取得用: オンラインキャストの情報を返す */
+export function getOnlineCasts(): {
+  castName: string;
+  modelId: string;
+  accountId: string;
+  sessionId: string | null;
+  source: 'registered_casts' | 'spy_casts';
+}[] {
+  return Array.from(castStates.values())
+    .filter((s) => {
+      const isOnline = s.status === 'public' || s.status === 'private' || s.status === 'p2p';
+      return isOnline && s.modelId;
+    })
+    .map((s) => ({
+      castName: s.target.castName,
+      modelId: s.modelId!,
+      accountId: s.target.accountId,
+      sessionId: s.sessionId,
+      source: s.target.source,
+    }));
+}
+
 // ----- Polling logic -----
 
 async function pollStatus(state: CastState): Promise<void> {

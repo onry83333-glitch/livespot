@@ -11,8 +11,9 @@
  */
 
 import { loadTargets, getSupabase, POLL_INTERVALS, BATCH_CONFIG } from './config.js';
-import { registerTarget, startCollector, stopCollector, closeAllActiveSessions, getRegisteredCount, getStatus } from './collector.js';
+import { registerTarget, startCollector, stopCollector, closeAllActiveSessions, getRegisteredCount, getStatus, getOnlineCasts } from './collector.js';
 import { startBatchFlush, stopBatchFlush, closeOrphanSessions } from './storage/supabase.js';
+import { startThumbnailCapture, stopThumbnailCapture } from './thumbnails.js';
 import { flushProfiles, getProfileCount } from './storage/spy-profiles.js';
 import { createLogger, setLogLevel } from './utils/logger.js';
 import { getAuth } from './auth/index.js';
