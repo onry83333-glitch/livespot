@@ -7,13 +7,14 @@ import type { SpyMessage } from '@/types';
 
 interface UseRealtimeSpyOptions {
   castName?: string;
+  accountId?: string;
   enabled?: boolean;
 }
 
 const MAX_MESSAGES = 2000;
 const INITIAL_LOAD_LIMIT = 1000;
 
-export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptions) {
+export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealtimeSpyOptions) {
   const [allMessages, setAllMessages] = useState<SpyMessage[]>([]);
   const [castNames, setCastNames] = useState<string[]>([]);
   const [isConnected, setIsConnected] = useState(false);
@@ -23,11 +24,14 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
 
   // キャスト一覧を取得（spy_messagesのdistinct cast_name — 直近のみ）
   const loadCastNames = useCallback(async () => {
-    const { data, error } = await supabaseRef.current
+    let query = supabaseRef.current
       .from('spy_messages')
       .select('cast_name')
       .order('created_at', { ascending: false })
       .limit(2000);
+    if (accountId) query = query.eq('account_id', accountId);
+
+    const { data, error } = await query;
 
     if (error) {
       return;
@@ -36,15 +40,18 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
       const unique = Array.from(new Set(data.map(r => r.cast_name)));
       setCastNames(unique);
     }
-  }, []);
+  }, [accountId]);
 
   // DBからメッセージを取得（既存データとマージ）
   const loadMessages = useCallback(async () => {
-    const { data, error } = await supabaseRef.current
+    let query = supabaseRef.current
       .from('spy_messages')
       .select('*')
       .order('message_time', { ascending: false })
       .limit(INITIAL_LOAD_LIMIT);
+    if (accountId) query = query.eq('account_id', accountId);
+
+    const { data, error } = await query;
 
     if (error) {
       return;
@@ -79,7 +86,7 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
         return result;
       });
     }
-  }, []);
+  }, [accountId]);
 
   // デモデータ挿入 — エラーメッセージを返す
   const insertDemoData = useCallback(async (accountId: string): Promise<string | null> => {
@@ -116,14 +123,16 @@ export function useRealtimeSpy({ castName, enabled = true }: UseRealtimeSpyOptio
     // 重複subscribe防止
     if (channelRef.current) return;
 
+    const channelName = accountId ? `spy-realtime-${accountId.slice(0, 8)}` : 'spy-realtime';
     const channel = supabaseRef.current
-      .channel('spy-realtime')
+      .channel(channelName)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'spy_messages',
+          ...(accountId ? { filter: `account_id=eq.${accountId}` } : {}),
         },
         (payload) => {
           const msg = payload.new as SpyMessage;

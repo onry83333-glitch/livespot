@@ -190,14 +190,16 @@ function generateDmFromTemplate(
 async function fetchCastPersonaDetail(
   token: string,
   castName: string,
+  accountId?: string | null,
 ): Promise<CastPersonaDetail | null> {
   try {
     const sb = getAuthClient(token);
-    const { data } = await sb
+    let query = sb
       .from('cast_persona')
       .select('speaking_style, personality_traits, ng_behaviors, greeting_patterns, dm_tone_examples')
-      .eq('cast_name', castName)
-      .single();
+      .eq('cast_name', castName);
+    if (accountId) query = query.eq('account_id', accountId);
+    const { data } = await query.single();
     return data as CastPersonaDetail | null;
   } catch {
     return null;
@@ -885,7 +887,7 @@ export async function POST(req: NextRequest) {
         ? (persona as CastPersona)
         : { ...DEFAULT_PERSONA, cast_name: castName };
 
-      const detail = await fetchCastPersonaDetail(auth.token, castName);
+      const detail = await fetchCastPersonaDetail(auth.token, castName, reqAccountId);
 
       const systemPrompt = [
         LAYER_A_ANDO_FOUNDATION,
@@ -1030,7 +1032,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
       ? (persona as CastPersona)
       : { ...DEFAULT_PERSONA, cast_name };
 
-    const detail = await fetchCastPersonaDetail(auth.token, cast_name);
+    const detail = await fetchCastPersonaDetail(auth.token, cast_name, reqAccountId);
 
     // Layer A: mode に応じて安藤式 or Princess Marketing を選択
     const layerA = selectLayerA(mode, activePersona.system_prompt_base);

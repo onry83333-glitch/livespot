@@ -1,5 +1,6 @@
 """SPY router - Message ingestion, VIP alerts, comment pickup, sessions"""
 from datetime import datetime, timedelta
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from config import get_supabase_admin
 from routers.auth import get_current_user
@@ -356,18 +357,21 @@ async def update_session(session_id: str, body: SessionUpdate, user=Depends(get_
 async def list_sessions(
     account_id: str,
     limit: int = Query(default=20, le=100),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """セッション一覧"""
     sb = get_supabase_admin()
     _verify_account(sb, account_id, user["user_id"])
 
-    result = (sb.table("sessions")
-              .select("*")
-              .eq("account_id", account_id)
-              .order("started_at", desc=True)
-              .limit(limit)
-              .execute())
+    q = (sb.table("sessions")
+         .select("*")
+         .eq("account_id", account_id)
+         .order("started_at", desc=True)
+         .limit(limit))
+    if cast_name:
+        q = q.eq("cast_name", cast_name)
+    result = q.execute()
     return result.data
 
 

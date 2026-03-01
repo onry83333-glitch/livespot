@@ -336,9 +336,7 @@ export async function pollViewers(
   const url = STRIPCHAT.viewerUrl(castName);
   const headers: Record<string, string> = { ...FETCH_HEADERS };
 
-  if (authToken) {
-    headers['Authorization'] = `Bearer ${authToken}`;
-  }
+  // v2 /members API is public (no auth needed), but add cookies for compatibility
   if (cfClearance) {
     headers['Cookie'] = `cf_clearance=${cfClearance}`;
   }
@@ -347,14 +345,16 @@ export async function pollViewers(
     const res = await fetch(url, { headers });
 
     if (!res.ok) {
-      log.warn(`${castName}: viewer list HTTP ${res.status}`);
+      log.warn(`${castName}: viewer list HTTP ${res.status} (${url})`);
       return { viewers: [], fetchedAt: new Date().toISOString() };
     }
 
     const data = await res.json();
     const viewers = parseViewerList(data);
 
-    log.debug(`${castName}: ${viewers.length} viewers`);
+    if (viewers.length > 0) {
+      log.debug(`${castName}: ${viewers.length} viewers fetched`);
+    }
     return { viewers, fetchedAt: new Date().toISOString() };
   } catch (err) {
     log.error(`${castName}: viewer poll failed`, err);

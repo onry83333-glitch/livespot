@@ -75,6 +75,7 @@ export default function ReportsPage() {
     if (sessionIds.length > 0) {
       const { data: sessData } = await sb.from('sessions')
         .select('session_id, title, started_at, ended_at, total_coins, unique_users')
+        .eq('account_id', selectedAccount)
         .in('session_id', sessionIds)
         .limit(30);
 

@@ -11,7 +11,7 @@
  */
 
 import { loadTargets, getSupabase, POLL_INTERVALS, BATCH_CONFIG } from './config.js';
-import { registerTarget, startCollector, stopCollector, closeAllActiveSessions, getRegisteredCount, getStatus, getOnlineCasts } from './collector.js';
+import { registerTarget, startCollector, stopCollector, closeAllActiveSessions, getRegisteredCount, getStatus, getOnlineCasts, resetViewerRetries } from './collector.js';
 import { startBatchFlush, stopBatchFlush, closeOrphanSessions } from './storage/supabase.js';
 import { startThumbnailCapture, stopThumbnailCapture } from './thumbnails.js';
 import { flushProfiles, getProfileCount } from './storage/spy-profiles.js';
@@ -248,6 +248,10 @@ async function main(): Promise<void> {
   // 10. Thumbnail capture (every 60s for online casts)
   startThumbnailCapture(getOnlineCasts);
   log.info('Thumbnail capture scheduled (60s interval)');
+
+  // 10.5. Reset viewer retry counters (every 10 minutes)
+  // This allows re-attempting viewer list fetch after temporary failures
+  setInterval(() => resetViewerRetries(), 10 * 60 * 1000);
 
   // 11. Start main polling loop
   log.info('Starting collector loop...');

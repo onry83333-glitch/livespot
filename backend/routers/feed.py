@@ -85,6 +85,7 @@ async def create_post(body: FeedPostCreate, user=Depends(get_current_user)):
 async def feed_analytics(
     account_id: str,
     days: int = Query(default=30, le=180),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user),
 ):
     """フィード分析: 週別投稿数、タイプ別内訳、セッション視聴者数との相関"""
@@ -94,13 +95,15 @@ async def feed_analytics(
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
     # 投稿データ取得
-    posts_result = (sb.table("feed_posts")
-                    .select("id, cast_name, post_type, content, media_url, likes_count, comments_count, posted_at")
-                    .eq("account_id", account_id)
-                    .gte("posted_at", since)
-                    .order("posted_at", desc=True)
-                    .limit(500)
-                    .execute())
+    posts_q = (sb.table("feed_posts")
+               .select("id, cast_name, post_type, content, media_url, likes_count, comments_count, posted_at")
+               .eq("account_id", account_id)
+               .gte("posted_at", since)
+               .order("posted_at", desc=True)
+               .limit(500))
+    if cast_name:
+        posts_q = posts_q.eq("cast_name", cast_name)
+    posts_result = posts_q.execute()
 
     posts = posts_result.data or []
 
@@ -130,13 +133,15 @@ async def feed_analytics(
 
     # --- セッション視聴者数との相関 ---
     # 各投稿日の翌セッションの視聴者数を取得
-    sessions_result = (sb.table("sessions")
-                       .select("session_id, started_at, unique_users, total_coins")
-                       .eq("account_id", account_id)
-                       .gte("started_at", since)
-                       .order("started_at")
-                       .limit(200)
-                       .execute())
+    sess_q = (sb.table("sessions")
+              .select("session_id, started_at, unique_users, total_coins")
+              .eq("account_id", account_id)
+              .gte("started_at", since)
+              .order("started_at")
+              .limit(200))
+    if cast_name:
+        sess_q = sess_q.eq("cast_name", cast_name)
+    sessions_result = sess_q.execute()
 
     sessions_list = sessions_result.data or []
 

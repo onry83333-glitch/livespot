@@ -43,7 +43,11 @@ def _extract_username(target: str) -> str:
 # DM Queue — Web UI 一斉送信
 # ============================================================
 @router.post("/queue", response_model=DMBatchResponse)
-async def create_dm_batch(body: DMBatchCreate, user=Depends(get_current_user)):
+async def create_dm_batch(
+    body: DMBatchCreate,
+    cast_name: Optional[str] = Query(default=None),
+    user=Depends(get_current_user),
+):
     """Web UIからの一斉送信キュー登録"""
     sb = get_supabase_admin()
     account_id = _get_first_account_id(sb, user["user_id"])
@@ -62,7 +66,7 @@ async def create_dm_batch(body: DMBatchCreate, user=Depends(get_current_user)):
     for t in targets:
         user_name = _extract_username(t)
         profile_url = t if t.startswith("http") else None
-        rows.append({
+        row = {
             "account_id": account_id,
             "user_name": user_name,
             "profile_url": profile_url,
@@ -72,7 +76,10 @@ async def create_dm_batch(body: DMBatchCreate, user=Depends(get_current_user)):
             "status": "queued",
             "campaign": batch_id,
             "template_name": "",
-        })
+        }
+        if cast_name:
+            row["cast_name"] = cast_name
+        rows.append(row)
 
     result = sb.table("dm_send_log").insert(rows).execute()
 
@@ -97,9 +104,11 @@ async def create_dm_batch(body: DMBatchCreate, user=Depends(get_current_user)):
 async def get_batch_status(batch_id: str, user=Depends(get_current_user)):
     """バッチの送信状況を取得"""
     sb = get_supabase_admin()
+    account_id = _get_first_account_id(sb, user["user_id"])
 
     result = (sb.table("dm_send_log")
               .select("*")
+              .eq("account_id", account_id)
               .eq("campaign", batch_id)
               .order("queued_at")
               .execute())
@@ -173,6 +182,7 @@ async def get_dm_queue(
 async def update_dm_status(dm_id: int, body: DMStatusUpdate, user=Depends(get_current_user)):
     """Chrome extension reports send result"""
     sb = get_supabase_admin()
+    account_id = _get_first_account_id(sb, user["user_id"])
 
     update_data = {"status": body.status}
     if body.error:
@@ -182,7 +192,7 @@ async def update_dm_status(dm_id: int, body: DMStatusUpdate, user=Depends(get_cu
     elif body.status == "success":
         update_data["sent_at"] = datetime.utcnow().isoformat()
 
-    result = sb.table("dm_send_log").update(update_data).eq("id", dm_id).execute()
+    result = sb.table("dm_send_log").update(update_data).eq("id", dm_id).eq("account_id", account_id).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="DM log not found")
     return result.data[0]

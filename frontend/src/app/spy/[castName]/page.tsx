@@ -385,6 +385,7 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
       const { data: sessionRows, error: sessErr } = await supabase
         .from('sessions')
         .select('*')
+        .eq('account_id', accountId)
         .eq('cast_name', castName)
         .filter('ended_at', 'not.is', null)
         .order('started_at', { ascending: false })
@@ -406,6 +407,7 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
       const { data: msgs } = await supabase
         .from('spy_messages')
         .select('session_id, msg_type, user_name')
+        .eq('account_id', accountId)
         .eq('cast_name', castName)
         .in('session_id', sessionIds)
         .limit(50000);

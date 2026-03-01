@@ -223,6 +223,7 @@ async def top_users_detail(
 async def funnel_segments(
     account_id: str,
     days: int = Query(default=30, le=90),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """ファネル分析: セグメント別ユーザー分布"""
@@ -230,10 +231,12 @@ async def funnel_segments(
     _verify_account(sb, account_id, user["user_id"])
 
     # 課金ユーザー取得
-    paying = (sb.table("paying_users")
+    paying_q = (sb.table("paying_users")
               .select("user_name, total_tokens, last_paid, first_paid, tx_count")
-              .eq("account_id", account_id)
-              .execute())
+              .eq("account_id", account_id))
+    if cast_name:
+        paying_q = paying_q.eq("cast_name", cast_name)
+    paying = paying_q.execute()
 
     whale, regular, light, free_seg = [], [], [], []
     paying_names = set()
@@ -251,13 +254,15 @@ async def funnel_segments(
 
     # チャットのみユーザー（Lead）
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-    msgs = (sb.table("spy_messages")
+    msgs_q = (sb.table("spy_messages")
             .select("user_name")
             .eq("account_id", account_id)
             .eq("msg_type", "chat")
             .gte("message_time", since)
-            .limit(2000)
-            .execute())
+            .limit(2000))
+    if cast_name:
+        msgs_q = msgs_q.eq("cast_name", cast_name)
+    msgs = msgs_q.execute()
 
     chat_users = set()
     for m in (msgs.data or []):
@@ -293,17 +298,20 @@ async def funnel_leads(
     segment: str = Query(default=None, regex="^(whale|regular|light|free|lead)$"),
     days: int = Query(default=30, le=90),
     limit: int = Query(default=50, le=200),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user)
 ):
     """リード一覧: セグメント別ユーザーリスト"""
     sb = get_supabase_admin()
     _verify_account(sb, account_id, user["user_id"])
 
-    paying = (sb.table("paying_users")
+    paying_q = (sb.table("paying_users")
               .select("user_name, total_tokens, last_paid, first_paid, tx_count")
               .eq("account_id", account_id)
-              .order("total_tokens", desc=True)
-              .execute())
+              .order("total_tokens", desc=True))
+    if cast_name:
+        paying_q = paying_q.eq("cast_name", cast_name)
+    paying = paying_q.execute()
 
     paying_map = {}
     for u in (paying.data or []):
@@ -320,13 +328,15 @@ async def funnel_leads(
 
     if segment in (None, "lead"):
         since = (datetime.utcnow() - timedelta(days=days)).isoformat()
-        msgs = (sb.table("spy_messages")
+        lead_msgs_q = (sb.table("spy_messages")
                 .select("user_name")
                 .eq("account_id", account_id)
                 .eq("msg_type", "chat")
                 .gte("message_time", since)
-                .limit(2000)
-                .execute())
+                .limit(2000))
+        if cast_name:
+            lead_msgs_q = lead_msgs_q.eq("cast_name", cast_name)
+        msgs = lead_msgs_q.execute()
 
         chat_users = set()
         for m in (msgs.data or []):
@@ -401,6 +411,7 @@ async def dm_effectiveness(
 async def dm_timeline(
     account_id: str,
     days: int = Query(default=30, le=90),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user),
 ):
     """日別DM送信・成功・エラー・再課金数"""
@@ -410,22 +421,26 @@ async def dm_timeline(
     since = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
     # DM送信ログを取得
-    dm_result = (
+    dm_q = (
         sb.table("dm_send_log")
         .select("status, queued_at, sent_at, user_name")
         .eq("account_id", account_id)
         .gte("queued_at", since)
-        .execute()
     )
+    if cast_name:
+        dm_q = dm_q.eq("cast_name", cast_name)
+    dm_result = dm_q.execute()
 
     # 再課金データ
-    coin_result = (
+    coin_q = (
         sb.table("coin_transactions")
         .select("user_name, date")
         .eq("account_id", account_id)
         .gte("date", since)
-        .execute()
     )
+    if cast_name:
+        coin_q = coin_q.eq("cast_name", cast_name)
+    coin_result = coin_q.execute()
 
     # 再課金ユーザーセット（日付別）
     coin_by_date: dict[str, set] = {}
@@ -480,6 +495,7 @@ class ThankDMRequest(BaseModel):
     user_names: list[str]
     template_id: Optional[str] = None
     custom_message: Optional[str] = None
+    cast_name: Optional[str] = None
 
 
 @router.get("/new-whales")
@@ -487,6 +503,7 @@ async def new_whales(
     account_id: str,
     since: str = Query(default=None),
     min_coins: int = Query(default=100, ge=1),
+    cast_name: Optional[str] = Query(default=None),
     user=Depends(get_current_user),
 ):
     """新規太客検出: since以降に初めて課金し、合計min_coins以上のユーザー"""
@@ -502,13 +519,15 @@ async def new_whales(
 
     # coin_transactionsから全ユーザーのmin(date)とsince以降の合計を取得
     # 全レコードを取得してPython側で集計（RPCなしで実現）
-    all_tx = (
+    all_tx_q = (
         sb.table("coin_transactions")
         .select("user_name, tokens, date")
         .eq("account_id", account_id)
         .order("date")
-        .execute()
     )
+    if cast_name:
+        all_tx_q = all_tx_q.eq("cast_name", cast_name)
+    all_tx = all_tx_q.execute()
 
     # ユーザーごとの最初の課金日と期間内合計を集計
     user_stats: dict[str, dict] = {}
@@ -594,7 +613,7 @@ async def thank_dm(
     for un in body.user_names:
         # {username}を実際のユーザー名に置換
         msg = message_template.replace("{username}", un)
-        rows.append({
+        row = {
             "account_id": body.account_id,
             "user_name": un,
             "message": msg,
@@ -602,7 +621,10 @@ async def thank_dm(
             "campaign": "auto_thank_you",
             "template_name": batch_id,
             "image_sent": False,
-        })
+        }
+        if body.cast_name:
+            row["cast_name"] = body.cast_name
+        rows.append(row)
 
     result = sb.table("dm_send_log").insert(rows).execute()
 

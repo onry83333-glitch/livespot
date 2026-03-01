@@ -62,7 +62,7 @@ export const STRIPCHAT = {
   statusUrl: (castName: string) =>
     `https://ja.stripchat.com/api/front/v2/models/username/${encodeURIComponent(castName)}/cam`,
   viewerUrl: (castName: string) =>
-    `https://stripchat.com/api/front/models/username/${encodeURIComponent(castName)}/groupShow/members`,
+    `https://stripchat.com/api/front/v2/models/username/${encodeURIComponent(castName)}/members`,
 };
 
 // ----- Target cast type -----

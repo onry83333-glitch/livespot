@@ -1,6 +1,26 @@
 /**
  * Viewer list parser
- * Parses Stripchat /groupShow/members API response
+ * Parses Stripchat /api/front/v2/models/username/{name}/members response
+ *
+ * v2 API response format:
+ * {
+ *   "members": [
+ *     {
+ *       "user": {
+ *         "id": 8445194,
+ *         "username": "you000128",
+ *         "userRanking": { "league": "silver", "level": 24 },
+ *         "isGreen": true,
+ *         "isUltimate": false
+ *       },
+ *       "fanClubTier": null,
+ *       "fanClubNumberMonthsOfSubscribed": 0
+ *     }
+ *   ]
+ * }
+ *
+ * Also supports legacy /groupShow/members format:
+ * { "members": [{ "username": "...", "id": ..., "league": "...", "level": ... }] }
  */
 
 export interface ViewerEntry {
@@ -26,15 +46,41 @@ export function parseViewerList(apiResponse: unknown): ViewerEntry[] {
     if (!m || typeof m !== 'object') continue;
     const obj = m as Record<string, unknown>;
 
-    const userName = String(obj.username || obj.userName || obj.user_name || '');
+    // v2 format: { user: { username, id, userRanking: { league, level } }, fanClubTier }
+    const nestedUser = obj.user as Record<string, unknown> | undefined;
+
+    let userName: string;
+    let idValue: string;
+    let league: string;
+    let level: number;
+    let isFanClub: boolean;
+
+    if (nestedUser && typeof nestedUser === 'object') {
+      // v2 API format
+      userName = String(nestedUser.username || nestedUser.userName || '');
+      idValue = String(nestedUser.id || '');
+
+      const ranking = nestedUser.userRanking as Record<string, unknown> | undefined;
+      league = String(ranking?.league || '');
+      level = Number(ranking?.level || 0);
+      isFanClub = obj.fanClubTier !== null && obj.fanClubTier !== undefined;
+    } else {
+      // Legacy flat format
+      userName = String(obj.username || obj.userName || obj.user_name || '');
+      idValue = String(obj.id || obj.userId || obj.user_id || '');
+      league = String(obj.league || obj.badge || '');
+      level = Number(obj.level || 0);
+      isFanClub = Boolean(obj.isFanClubMember || obj.fanClub || obj.is_fan_club);
+    }
+
     if (!userName || userName === 'unknown') continue;
 
     viewers.push({
       userName,
-      userIdStripchat: String(obj.id || obj.userId || obj.user_id || ''),
-      league: String(obj.league || obj.badge || ''),
-      level: Number(obj.level || 0),
-      isFanClub: Boolean(obj.isFanClubMember || obj.fanClub || obj.is_fan_club),
+      userIdStripchat: idValue,
+      league,
+      level,
+      isFanClub,
     });
   }
 

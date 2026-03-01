@@ -74,6 +74,10 @@ async function handleAuthError(state: CastState): Promise<void> {
   log.warn(`${state.target.castName}: Auth error — invalidating and retrying`);
   invalidateAuth();
   const token = await ensureAuth();
+
+  // Reset viewer retry counters so they can be re-attempted with new auth
+  retryTracker.resetByPrefix('viewers:');
+
   if (state.wsClient) {
     state.wsClient.setAuthToken(token);
     state.wsClient.setCfClearance(currentCfClearance);
@@ -413,17 +417,23 @@ async function pollViewerList(state: CastState): Promise<void> {
   if (now - state.lastViewerPoll < POLL_INTERVALS.viewerSec * 1000) return;
   state.lastViewerPoll = now;
 
-  const result = await pollViewers(target.castName, currentAuthToken, currentCfClearance);
-
-  if (result.viewers.length === 0) {
-    if (retryTracker.getFailureCount(`viewers:${target.castName}`) === 0) {
-      log.warn(`${target.castName}: viewer list empty (may require auth)`);
-    }
-    retryTracker.recordFailure(`viewers:${target.castName}`);
+  // Skip if too many failures (but reset every 10 minutes to allow retry)
+  const failKey = `viewers:${target.castName}`;
+  if (!retryTracker.shouldRetry(failKey)) {
     return;
   }
 
-  retryTracker.recordSuccess(`viewers:${target.castName}`);
+  const result = await pollViewers(target.castName, currentAuthToken, currentCfClearance);
+
+  if (result.viewers.length === 0) {
+    if (retryTracker.getFailureCount(failKey) === 0) {
+      log.warn(`${target.castName}: viewer list empty (may require auth)`);
+    }
+    retryTracker.recordFailure(failKey);
+    return;
+  }
+
+  retryTracker.recordSuccess(failKey);
 
   const upserted = await upsertViewers(
     target.accountId,
@@ -497,6 +507,12 @@ export async function startCollector(triggerEngine?: TriggerEngine): Promise<voi
 export function stopCollector(): void {
   mainLoopRunning = false;
   log.info('Collector stop requested');
+}
+
+/** Reset viewer retry counters (called periodically to allow re-attempts) */
+export function resetViewerRetries(): void {
+  retryTracker.resetByPrefix('viewers:');
+  log.debug('Viewer retry counters reset');
 }
 
 /** Graceful shutdown: 全アクティブセッションをDBでクローズ */

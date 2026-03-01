@@ -61,6 +61,20 @@ export class RetryTracker {
   getFailureCount(key: string): number {
     return this.failures.get(key) || 0;
   }
+
+  /** Reset failure count for a specific key (e.g. after auth refresh) */
+  reset(key: string): void {
+    this.failures.delete(key);
+  }
+
+  /** Reset all failure counts matching a prefix */
+  resetByPrefix(prefix: string): void {
+    for (const key of this.failures.keys()) {
+      if (key.startsWith(prefix)) {
+        this.failures.delete(key);
+      }
+    }
+  }
 }
 
 export function sleep(ms: number): Promise<void> {

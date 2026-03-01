@@ -64,9 +64,18 @@ export default function HealthPage() {
   const [lastRun, setLastRun] = useState<Date | null>(null);
   const [syncHealth, setSyncHealth] = useState<SyncHealthRow[]>([]);
   const [syncHealthLoading, setSyncHealthLoading] = useState(false);
+  const [accountId, setAccountId] = useState<string | null>(null);
+
+  // アカウントID取得（品質チェック・同期ヘルス共通）
+  useEffect(() => {
+    if (!user) return;
+    sb.from('accounts').select('id').limit(1).then(({ data }) => {
+      if (data?.[0]?.id) setAccountId(data[0].id);
+    });
+  }, [user, sb]);
 
   const runChecks = useCallback(async () => {
-    if (!user) return;
+    if (!user || !accountId) return;
     setRunning(true);
 
     const results: HealthCheck[] = [];
@@ -78,6 +87,7 @@ export default function HealthPage() {
       const { data: coinData, error } = await sb
         .from('coin_transactions')
         .select('cast_name, created_at')
+        .eq('account_id', accountId)
         .order('created_at', { ascending: false })
         .limit(5000);
 
@@ -132,7 +142,8 @@ export default function HealthPage() {
     try {
       const { count, error } = await sb
         .from('spy_messages')
-        .select('*', { count: 'exact', head: true });
+        .select('*', { count: 'exact', head: true })
+        .eq('account_id', accountId);
 
       if (error) throw error;
 
@@ -140,6 +151,7 @@ export default function HealthPage() {
       const { count: overflowCount, error: overflowErr } = await sb
         .from('spy_messages')
         .select('*', { count: 'exact', head: true })
+        .eq('account_id', accountId)
         .gt('tokens', 2147483647);
 
       if (overflowErr) throw overflowErr;
@@ -173,6 +185,7 @@ export default function HealthPage() {
       const { data: dmData, error } = await sb
         .from('dm_send_log')
         .select('sent_via, status, created_at')
+        .eq('account_id', accountId)
         .order('created_at', { ascending: false })
         .limit(5000);
 
@@ -221,6 +234,7 @@ export default function HealthPage() {
       const { data: viewerData, error } = await sb
         .from('spy_viewers')
         .select('cast_name, created_at')
+        .eq('account_id', accountId)
         .order('created_at', { ascending: false })
         .limit(2000);
 
@@ -275,6 +289,7 @@ export default function HealthPage() {
       const { data: segData, error } = await sb
         .from('paid_users')
         .select('cast_name, segment')
+        .eq('account_id', accountId)
         .limit(50000);
 
       if (error) throw error;
@@ -323,21 +338,13 @@ export default function HealthPage() {
     setChecks(results);
     setLastRun(new Date());
     setRunning(false);
-  }, [user, sb]);
+  }, [user, sb, accountId]);
 
   // 同期ヘルスを取得
   const fetchSyncHealth = useCallback(async () => {
-    if (!user) return;
+    if (!user || !accountId) return;
     setSyncHealthLoading(true);
     try {
-      // account_id を取得
-      const { data: accounts } = await sb
-        .from('accounts')
-        .select('id')
-        .limit(1);
-      const accountId = accounts?.[0]?.id;
-      if (!accountId) { setSyncHealthLoading(false); return; }
-
       const { data, error } = await sb.rpc('get_sync_health', { p_account_id: accountId });
       if (error) throw error;
       setSyncHealth((data as SyncHealthRow[]) || []);
@@ -345,7 +352,7 @@ export default function HealthPage() {
       setSyncHealth([]);
     }
     setSyncHealthLoading(false);
-  }, [user, sb]);
+  }, [user, sb, accountId]);
 
   // 初回実行
   useEffect(() => { runChecks(); fetchSyncHealth(); }, [runChecks, fetchSyncHealth]);
