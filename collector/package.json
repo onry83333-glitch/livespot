@@ -10,10 +10,14 @@
     "start": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "coin-sync": "tsx src/test-coin-sync.ts",
     "coin-auth": "tsx src/coin-auth.ts",
     "coin-import": "tsx src/coin-import.ts",
-    "coin-refresh": "tsx src/refresh-cookies.ts"
+    "coin-refresh": "tsx src/refresh-cookies.ts",
+    "start:cast": "tsx src/single-cast.ts",
+    "gen-ecosystem": "tsx scripts/gen-ecosystem.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
@@ -24,6 +28,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "vitest": "^4.0.18"
   }
 }
