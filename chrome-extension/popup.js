@@ -192,42 +192,72 @@ async function detectLoggedInCast() {
 // ============================================================
 // Data Loading
 // ============================================================
-async function fetchAccountsFromSupabase() {
-  const data = await chrome.storage.local.get(['access_token']);
-  if (!data.access_token) return null; // null = 認証切れ
 
-  // トークン期限切れなら先にリフレッシュ
+/**
+ * 最新のアクセストークンを取得（期限切れなら自動リフレッシュ）
+ * @returns {string|null} 有効なトークン、または null（認証切れ）
+ */
+async function getValidToken() {
+  const data = await chrome.storage.local.get(['access_token', 'refresh_token']);
+  if (!data.access_token && !data.refresh_token) return null;
+
   let token = data.access_token;
-  if (isTokenExpired(token)) {
+  if (!token || isTokenExpired(token)) {
+    if (!data.refresh_token) return null;
     const refreshed = await refreshSupabaseToken();
-    if (!refreshed) return null; // null = 認証切れ
+    if (!refreshed) return null;
     const d2 = await chrome.storage.local.get(['access_token']);
     token = d2.access_token;
   }
+  return token;
+}
 
-  try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/accounts?select=id,account_name`, {
+/**
+ * Supabase REST API に認証付きfetchを実行（401時は自動リフレッシュ+リトライ）
+ * @returns {Response|null} レスポンス、または null（認証切れ）
+ */
+async function supabaseFetch(url, token) {
+  const res = await fetch(url, {
+    headers: {
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+  if (res.ok) return res;
+
+  // 401: トークンリフレッシュ+リトライ
+  if (res.status === 401) {
+    const refreshed = await refreshSupabaseToken();
+    if (!refreshed) return null; // 認証切れ
+    const d2 = await chrome.storage.local.get(['access_token']);
+    const retry = await fetch(url, {
       headers: {
         'apikey': SUPABASE_ANON_KEY,
-        'Authorization': `Bearer ${token}`,
+        'Authorization': `Bearer ${d2.access_token}`,
       },
     });
+    if (retry.ok) return retry;
+    if (retry.status === 401) return null; // 認証切れ
+    console.warn('[LSP] API retry failed:', retry.status, url);
+    return retry; // 非認証エラー
+  }
+
+  console.warn('[LSP] API error:', res.status, url);
+  return res; // 非認証エラー（呼び元で判定）
+}
+
+async function fetchAccountsFromSupabase() {
+  const token = await getValidToken();
+  if (!token) return null; // null = 認証切れ
+
+  try {
+    const res = await supabaseFetch(
+      `${SUPABASE_URL}/rest/v1/accounts?select=id,account_name`,
+      token,
+    );
+    if (!res) return null; // 認証切れ
     if (!res.ok) {
-      if (res.status === 401) {
-        // リフレッシュ再試行
-        const refreshed = await refreshSupabaseToken();
-        if (refreshed) {
-          const d2 = await chrome.storage.local.get(['access_token']);
-          const retry = await fetch(`${SUPABASE_URL}/rest/v1/accounts?select=id,account_name`, {
-            headers: {
-              'apikey': SUPABASE_ANON_KEY,
-              'Authorization': `Bearer ${d2.access_token}`,
-            },
-          });
-          if (retry.ok) return retry.json();
-        }
-        return null; // null = 認証切れ
-      }
+      console.error('[LSP] Accounts HTTP error:', res.status);
       return [];
     }
     return res.json();
@@ -246,6 +276,26 @@ async function loadAccounts() {
     return;
   }
 
+  if (accounts.length === 0) {
+    // データが空の場合 — 認証トークンが無効な可能性が高い
+    // リフレッシュを再試行して1回だけリトライ
+    console.warn('[LSP] Accounts empty — retrying with fresh token...');
+    const refreshed = await refreshSupabaseToken();
+    if (refreshed) {
+      const retryAccounts = await fetchAccountsFromSupabase();
+      if (retryAccounts && retryAccounts.length > 0) {
+        await populateAccounts(retryAccounts);
+        return;
+      }
+    }
+    accountSelect.innerHTML = '<option value="">アカウントなし — 再ログインしてください</option>';
+    return;
+  }
+
+  await populateAccounts(accounts);
+}
+
+async function populateAccounts(accounts) {
   accountSelect.innerHTML = '<option value="">選択してください</option>';
   accounts.forEach((acc) => {
     const opt = document.createElement('option');
@@ -262,30 +312,35 @@ async function loadAccounts() {
     await chrome.storage.local.set({ account_id: accounts[0].id });
     chrome.runtime.sendMessage({ type: 'SET_ACCOUNT', account_id: accounts[0].id });
   }
-
-  if (accounts.length === 0) {
-    accountSelect.innerHTML = '<option value="">アカウントなし</option>';
-  }
 }
 
 async function loadCastsForSync() {
-  const data = await chrome.storage.local.get(['access_token', 'account_id']);
-  if (!data.access_token || !data.account_id) {
+  const data = await chrome.storage.local.get(['account_id']);
+  if (!data.account_id) {
     coinSyncCastSelect.innerHTML = '<option value="">アカウント未選択</option>';
     return;
   }
+
+  // getValidToken で最新トークンを取得（期限切れなら自動リフレッシュ）
+  const token = await getValidToken();
+  if (!token) {
+    coinSyncCastSelect.innerHTML = '<option value="">認証切れ — 再ログイン</option>';
+    return;
+  }
+
   try {
-    const res = await fetch(
+    const res = await supabaseFetch(
       `${SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${data.account_id}&is_active=eq.true&select=cast_name,display_name`,
-      {
-        headers: {
-          'apikey': SUPABASE_ANON_KEY,
-          'Authorization': `Bearer ${data.access_token}`,
-        },
-      }
+      token,
     );
+    if (!res) {
+      // 認証切れ → ログイン画面に戻す
+      await forceLogout();
+      return;
+    }
     if (!res.ok) {
-      coinSyncCastSelect.innerHTML = '<option value="">取得失敗</option>';
+      console.error('[LSP] Casts HTTP error:', res.status);
+      coinSyncCastSelect.innerHTML = `<option value="">取得失敗 (${res.status})</option>`;
       return;
     }
     const casts = await res.json();
@@ -319,21 +374,23 @@ async function init() {
   ]);
 
   if (data.access_token || data.logged_in) {
-    // トークンが無い or 期限切れ → リフレッシュ試行
-    const needsRefresh = !data.access_token || isTokenExpired(data.access_token);
-    if (needsRefresh && data.refresh_token) {
+    // 常にトークンリフレッシュを試行（サーバー側で無効化されたトークン対策）
+    if (data.refresh_token) {
       const refreshed = await refreshSupabaseToken();
-      if (!refreshed) {
+      if (!refreshed && !data.access_token) {
+        // リフレッシュ失敗 + アクセストークンもなし → ログイン画面
         await forceLogout();
         return;
       }
-    } else if (needsRefresh && !data.refresh_token) {
+      // リフレッシュ失敗でもアクセストークンがあれば試行続行
+    } else if (!data.access_token) {
       await forceLogout();
       return;
     }
 
     showDashboard();
-    loadAccounts();
+    // loadAccounts を先に完了 → account_id 確定後に loadCastsForSync
+    await loadAccounts();
     loadCastsForSync();
     detectLoggedInCast();
 
