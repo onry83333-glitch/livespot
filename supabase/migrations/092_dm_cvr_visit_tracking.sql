@@ -14,6 +14,10 @@
 --   -- 076_fix_cast_name_filters.sql の get_dm_campaign_cvr を再適用
 -- ============================================================
 
+-- visit_flags の EXISTS 高速化用インデックス
+CREATE INDEX IF NOT EXISTS idx_spy_msg_user
+  ON public.spy_messages(account_id, cast_name, user_name, message_time DESC);
+
 -- 戻り値型が変わるため DROP → CREATE
 DROP FUNCTION IF EXISTS get_dm_campaign_cvr(UUID, TEXT, DATE);
 

@@ -1632,16 +1632,41 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // ============================================================
-  // Sales: DM Campaign CVR
+  // Sales: DM Campaign CVR（クロスキャスト課金を反映）
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
-    sb.rpc('get_dm_campaign_cvr', {
+    const since = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
+    // 1) このキャストのキャンペーン一覧（dm_send_log.cast_name でフィルタ）
+    const strictP = sb.rpc('get_dm_campaign_cvr', {
       p_account_id: accountId,
       p_cast_name: castName,
-      p_since: new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0],
-    }).then(({ data }) => {
-      setDmCvr((data || []) as DmCvrItem[]);
+      p_since: since,
+    });
+    // 2) 全キャスト横断のCVR（coin_transactions.cast_nameフィルタなし → クロスキャスト課金を拾う）
+    const broadP = sb.rpc('get_dm_campaign_cvr', {
+      p_account_id: accountId,
+      p_since: since,
+    });
+    Promise.all([strictP, broadP]).then(([strictRes, broadRes]) => {
+      const strict = (strictRes.data || []) as DmCvrItem[];
+      const broad = (broadRes.data || []) as DmCvrItem[];
+      const broadMap = new Map(broad.map(r => [r.campaign, r]));
+      // strictのキャンペーン一覧を使い、CVR数値はbroadから取る（クロスキャスト課金反映）
+      const merged: DmCvrItem[] = strict.map(s => {
+        const b = broadMap.get(s.campaign);
+        if (!b) return s;
+        return {
+          ...s,
+          paid_after: b.paid_after,
+          cvr_pct: b.cvr_pct,
+          total_tokens: b.total_tokens,
+          avg_tokens_per_payer: b.avg_tokens_per_payer,
+          visited_after: b.visited_after ?? s.visited_after,
+          visit_cvr_pct: b.visit_cvr_pct ?? s.visit_cvr_pct,
+        };
+      });
+      setDmCvr(merged);
     });
   }, [accountId, castName, activeTab, sb]);
 
