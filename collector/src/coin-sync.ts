@@ -4,13 +4,15 @@
  * Chrome拡張が停止していても、Stripchat Earnings APIを呼び出し
  * coin_transactionsを更新する。
  *
- * Cookie取得の優先順位:
- *   1. stripchat_sessions（Chrome拡張が保存した認証cookie）
- *   2. Playwrightログイン（STRIPCHAT_USERNAME/PASSWORD設定時）
+ * Cookie取得の優先順位（7層フォールバック）:
+ *   0a. .auth/stripchat-state.json（coin-auth保存済みセッション）
+ *   0b. cookies.json / ss_cookies.json / cookie_header.txt（ファイル）
+ *   1.  stripchat_sessions DB（Chrome拡張保存）
+ *   2.  Playwrightログイン（STRIPCHAT_USERNAME/PASSWORD設定時）
  *
  * フロー:
  *   1. registered_casts から自社キャスト一覧取得
- *   2. 認証cookie取得（DB → Playwrightフォールバック）
+ *   2. 認証cookie取得（ファイル → DB → Playwrightフォールバック）
  *   3. Stripchat /api/front/users/{uid}/transactions を呼び出し
  *   4. coin_transactions に UPSERT
  *   5. refresh_paying_users + refresh_segments RPC実行
@@ -26,6 +28,8 @@ import { fileURLToPath } from 'url';
 const log = createLogger('coin-sync');
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const COOKIES_JSON_FILE = path.join(__dirname, '..', 'cookies.json');
+const SS_COOKIES_JSON_FILE = path.join(__dirname, '..', '..', 'ss_cookies.json');
+const COOKIE_HEADER_FILE = path.join(__dirname, '..', '..', 'cookie_header.txt');
 
 const EARNINGS_API = 'https://stripchat.com/api/front/users';
 const MAX_PAGES = 20;
@@ -70,38 +74,138 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * cookies.json（Chrome拡張がBackend API経由で保存）を読み込み
+ * cookies.json / ss_cookies.json / cookie_header.txt からcookieを読み込み
+ * 検索順: cookies.json → ss_cookies.json → cookie_header.txt
  */
 function loadCookiesJsonFile(accountId: string): {
   cookieHeader: string; userId: string; cookiesJson: Record<string, string>;
 } | null {
+  // 方式A: cookies.json（Chrome拡張保存フォーマット: {cookies: {...}}）
+  const resultA = tryLoadCookiesJson(COOKIES_JSON_FILE, accountId);
+  if (resultA) return resultA;
+
+  // 方式B: ss_cookies.json（プロジェクトルート: [{cookies_json: {...}}]）
+  const resultB = tryLoadSsCookiesJson(accountId);
+  if (resultB) return resultB;
+
+  // 方式C: cookie_header.txt（生Cookie文字列）
+  const resultC = tryLoadCookieHeaderTxt();
+  if (resultC) return resultC;
+
+  return null;
+}
+
+function tryLoadCookiesJson(filePath: string, accountId: string): {
+  cookieHeader: string; userId: string; cookiesJson: Record<string, string>;
+} | null {
   try {
-    if (!fs.existsSync(COOKIES_JSON_FILE)) return null;
-    const raw = JSON.parse(fs.readFileSync(COOKIES_JSON_FILE, 'utf-8'));
+    if (!fs.existsSync(filePath)) return null;
+    const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     const cookies: Record<string, string> = raw.cookies || {};
     if (Object.keys(cookies).length === 0) return null;
 
-    // account_id チェック（保存されていれば一致確認）
     if (raw.account_id && raw.account_id !== accountId) {
       log.debug('cookies.json account_id不一致');
       return null;
     }
 
-    const userId = cookies['stripchat_com_userId'];
-    const isLogged = cookies['isLogged'] === '1';
-    const hasSessionId = !!cookies['stripchat_com_sessionId'];
-
-    if (!userId && !(isLogged && hasSessionId)) {
-      log.debug('cookies.json に認証cookieなし');
-      return null;
-    }
-
-    const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
-    // userId が Cookie にない場合は空文字を返す（呼び出し元でregistered_castsから解決）
-    return { cookieHeader, userId: userId || '', cookiesJson: cookies };
+    return extractAuthFromCookies(cookies, 'cookies.json');
   } catch {
     return null;
   }
+}
+
+function tryLoadSsCookiesJson(accountId: string): {
+  cookieHeader: string; userId: string; cookiesJson: Record<string, string>;
+} | null {
+  try {
+    if (!fs.existsSync(SS_COOKIES_JSON_FILE)) return null;
+    const raw = JSON.parse(fs.readFileSync(SS_COOKIES_JSON_FILE, 'utf-8'));
+
+    // フォーマット: [{cookies_json: {...}}] or {cookies_json: {...}}
+    let cookies: Record<string, string> | null = null;
+    if (Array.isArray(raw) && raw.length > 0) {
+      cookies = raw[0].cookies_json || raw[0].cookies || null;
+    } else if (raw.cookies_json) {
+      cookies = raw.cookies_json;
+    } else if (raw.cookies) {
+      cookies = raw.cookies;
+    }
+
+    if (!cookies || Object.keys(cookies).length === 0) return null;
+    return extractAuthFromCookies(cookies, 'ss_cookies.json');
+  } catch {
+    return null;
+  }
+}
+
+function tryLoadCookieHeaderTxt(): {
+  cookieHeader: string; userId: string; cookiesJson: Record<string, string>;
+} | null {
+  try {
+    if (!fs.existsSync(COOKIE_HEADER_FILE)) return null;
+    const headerStr = fs.readFileSync(COOKIE_HEADER_FILE, 'utf-8').trim();
+    if (!headerStr) return null;
+
+    // Cookie文字列をパース
+    const cookies: Record<string, string> = {};
+    for (const pair of headerStr.split('; ')) {
+      const idx = pair.indexOf('=');
+      if (idx > 0) {
+        cookies[pair.substring(0, idx)] = pair.substring(idx + 1);
+      }
+    }
+    if (Object.keys(cookies).length === 0) return null;
+    return extractAuthFromCookies(cookies, 'cookie_header.txt');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cookie辞書から認証情報を抽出（共通処理）
+ * userId: stripchat_com_userId Cookie → AMP cookie内のuserId → 空文字
+ */
+function extractAuthFromCookies(
+  cookies: Record<string, string>,
+  source: string,
+): { cookieHeader: string; userId: string; cookiesJson: Record<string, string> } | null {
+  const userId = cookies['stripchat_com_userId'] || '';
+  const isLogged = cookies['isLogged'] === '1';
+  const hasSessionId = !!cookies['stripchat_com_sessionId'];
+
+  if (!userId && !(isLogged && hasSessionId)) {
+    log.debug(`${source} に認証cookieなし`);
+    return null;
+  }
+
+  // AMP cookieからuserIdを抽出（stripchat_com_userId がない場合のフォールバック）
+  let resolvedUserId = userId;
+  if (!resolvedUserId) {
+    resolvedUserId = extractUserIdFromAmpCookie(cookies['AMP_19a23394ad'] || '') || '';
+  }
+
+  const cookieHeader = Object.entries(cookies).map(([k, v]) => `${k}=${v}`).join('; ');
+  log.info(`${source} から認証cookie検出 (isLogged=${isLogged}, userId=${resolvedUserId || '(未解決)'})`);
+  return { cookieHeader, userId: resolvedUserId, cookiesJson: cookies };
+}
+
+/**
+ * AMP cookie (base64エンコードJSON) から userId を抽出
+ */
+function extractUserIdFromAmpCookie(ampValue: string): string | null {
+  if (!ampValue) return null;
+  try {
+    const decoded = Buffer.from(ampValue, 'base64').toString('utf-8');
+    // AMP cookieはbase64(URLエンコードJSON)形式のため、decodeURIComponent必要
+    let jsonStr = decoded;
+    if (decoded.includes('%7B') || decoded.includes('%22')) {
+      jsonStr = decodeURIComponent(decoded);
+    }
+    const json = JSON.parse(jsonStr);
+    if (json.userId) return String(json.userId);
+  } catch { /* ignore */ }
+  return null;
 }
 
 /**
@@ -359,8 +463,12 @@ async function syncAccount(
   accountId: string,
   accountCasts: RegisteredCast[],
 ): Promise<'ok' | 'auth_failed' | 'skipped'> {
-  // 方式0a: 保存済みセッション（npm run coin-auth で取得したもの）を最優先
+  // 認証方式の可用性ログ
   const savedSession = loadSavedSession();
+  const cookieFileExists = fs.existsSync(SS_COOKIES_JSON_FILE) || fs.existsSync(COOKIES_JSON_FILE) || fs.existsSync(COOKIE_HEADER_FILE);
+  log.info(`[${accountId}] 認証チェーン: state.json=${savedSession ? 'あり' : 'なし'}, cookieファイル=${cookieFileExists ? 'あり' : 'なし'}, Playwright=${PLAYWRIGHT_CONFIG.username ? '可' : '不可'}`);
+
+  // 方式0a: 保存済みセッション（npm run coin-auth で取得したもの）を最優先
   if (savedSession) {
     log.info(`[${accountId}] 保存済みセッションを検出 (userId=${savedSession.userId})`);
     const result = await syncAccountCasts(
@@ -370,7 +478,7 @@ async function syncAccount(
     log.warn(`[${accountId}] 保存済みセッションが期限切れ — DBフォールバック`);
   }
 
-  // 方式0b: cookies.json（Chrome拡張がBackend API経由で保存したファイル）
+  // 方式0b: ファイルからcookie読み込み（cookies.json / ss_cookies.json / cookie_header.txt）
   const cookiesFromFile = loadCookiesJsonFile(accountId);
   if (cookiesFromFile) {
     // userId が空の場合はregistered_castsからフォールバック
@@ -380,9 +488,9 @@ async function syncAccount(
       if (fallbackId) fileUserId = String(fallbackId);
     }
     if (!fileUserId) {
-      log.warn(`[${accountId}] cookies.json: userId解決不可`);
+      log.warn(`[${accountId}] cookieファイル: userId解決不可`);
     } else {
-      log.info(`[${accountId}] cookies.jsonから認証情報を検出 (userId=${fileUserId})`);
+      log.info(`[${accountId}] cookieファイルから認証情報を検出 (userId=${fileUserId})`);
     }
     const result = fileUserId
       ? await syncAccountCasts(sb, accountId, accountCasts, fileUserId, cookiesFromFile.cookieHeader, true)
@@ -392,13 +500,13 @@ async function syncAccount(
       await sb.from('stripchat_sessions').upsert({
         account_id: accountId,
         cookies_json: cookiesFromFile.cookiesJson,
-        stripchat_user_id: cookiesFromFile.userId,
+        stripchat_user_id: fileUserId,
         is_valid: true,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'account_id' });
       return 'ok';
     }
-    log.warn(`[${accountId}] cookies.jsonのcookieも期限切れ`);
+    log.warn(`[${accountId}] cookieファイルのcookieも期限切れ`);
   }
 
   // 方式1: stripchat_sessions から有効なcookieを取得（is_valid=falseも試行）
