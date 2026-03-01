@@ -212,7 +212,7 @@ async function generateSessionReport(token: string, sessionId: string) {
   const { data: pastSessions } = await supabase
     .from('sessions')
     .select('session_id, started_at, ended_at, total_messages, total_tokens, peak_viewers')
-    .eq('title', session.title) // cast_name の代わり
+    .eq('cast_name', session.cast_name)
     .eq('account_id', session.account_id)
     .neq('session_id', sessionId)
     .not('ended_at', 'is', null)

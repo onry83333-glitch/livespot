@@ -239,7 +239,7 @@ export default function CastsPage() {
             let more = true;
             while (more) {
               const { data } = await supabase.from('coin_transactions').select('tokens')
-                .eq('account_id', selectedAccount).gte('date', since30d)
+                .eq('account_id', selectedAccount).in('cast_name', castNames).gte('date', since30d)
                 .order('id', { ascending: true }).range(from, from + PS - 1);
               if (data && data.length > 0) {
                 total += data.reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
