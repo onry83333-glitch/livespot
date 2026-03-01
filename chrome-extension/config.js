@@ -26,8 +26,6 @@ const CONFIG = (() => {
     // --- 共通 ---
     SUPABASE_URL,
     SUPABASE_ANON_KEY,
-    POLL_INTERVAL: 3000,
-    DM_SEND_TIMEOUT: 45000,
     SPY_BATCH_INTERVAL: 1000,
 
     // STT

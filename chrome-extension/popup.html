@@ -115,13 +115,6 @@
     .btn-primary {
       background: linear-gradient(135deg, #38bdf8, #0ea5e9);
     }
-    .btn-sync {
-      background: linear-gradient(135deg, #f59e0b, #d97706);
-      padding: 8px 16px;
-      width: auto;
-      font-size: 12px;
-      border-radius: 8px;
-    }
     .error {
       color: #f43f5e;
       font-size: 12px;
@@ -253,24 +246,6 @@
         <span id="castIdentityText">検出中...</span>
       </div>
       <button class="btn-clear-cookies" id="clearCookiesBtn" style="display:none;" title="AMP cookieを削除してキャスト切り替え">リセット</button>
-    </div>
-
-    <!-- Coin Sync -->
-    <div class="card">
-      <div class="spy-row">
-        <div class="spy-info">
-          <h3>名簿同期</h3>
-          <p>Stripchatのコイン履歴を取得</p>
-        </div>
-        <button class="btn btn-sync" id="coinSyncBtn">同期</button>
-      </div>
-      <div style="margin-top: 8px;">
-        <div class="label">同期先キャスト</div>
-        <select id="coinSyncCastSelect">
-          <option value="">読み込み中...</option>
-        </select>
-      </div>
-      <div id="coinSyncStatus" class="hidden" style="margin-top:8px; font-size:12px; line-height:1.6; color:#94a3b8;"></div>
     </div>
 
     <!-- Logout -->

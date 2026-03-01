@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Strip Live Spot - Stripchat Manager",
-  "version": "2.13.0",
-  "description": "Stripchat配信管理ツール - チャット監視・DM送信・売上分析",
+  "name": "Strip Live Spot - Auth Exporter",
+  "version": "3.0.0",
+  "description": "Stripchat認証Cookie取得＋SPY監視（コイン同期・DM送信はサーバーサイドに移行済み）",
   "permissions": [
     "storage",
     "tabs",
@@ -24,7 +24,7 @@
   "content_scripts": [
     {
       "matches": ["*://stripchat.com/*", "*://*.stripchat.com/*"],
-      "js": ["content_spy.js", "content_whisper.js", "dm_executor.js", "dm_api_sender.js", "content_stt_relay.js"],
+      "js": ["content_spy.js", "content_whisper.js", "content_stt_relay.js"],
       "run_at": "document_idle"
     },
     {
