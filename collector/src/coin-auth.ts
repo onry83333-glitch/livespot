@@ -94,22 +94,23 @@ async function main() {
     fs.mkdirSync(AUTH_DIR, { recursive: true });
   }
 
-  // 既存のセッションがあれば読み込んで再利用
-  const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+  // standalone browser起動（persistent contextは不安定なため廃止）
+  console.log('ブラウザを起動中...');
+  const browser = await chromium.launch({
     headless: false,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+    ],
+  });
+  const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     locale: 'ja-JP',
-  };
-
-  // 保存済みストレージがあればコンテキストに適用
-  if (fs.existsSync(STATE_FILE)) {
-    console.log('既存の保存済みセッションを検出 → 再利用を試行\n');
-    (launchOptions as Record<string, unknown>).storageState = STATE_FILE;
-  }
-
-  const userDataDir = path.join(AUTH_DIR, 'browser-data');
-  const context = await chromium.launchPersistentContext(userDataDir, launchOptions);
+  });
+  console.log('ブラウザ起動完了');
 
   const page = context.pages()[0] || await context.newPage();
 
@@ -145,30 +146,37 @@ async function main() {
   const MAX_WAIT_MS = 10 * 60 * 1000; // 最大10分
   const startTime = Date.now();
   let authenticated = false;
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
   while (Date.now() - startTime < MAX_WAIT_MS) {
-    const cookies = await context.cookies('https://stripchat.com');
-    const userIdCookie = cookies.find(c => c.name === 'stripchat_com_userId');
-    const isLoggedCookie = cookies.find(c => c.name === 'isLogged');
-    const sessionIdCookie = cookies.find(c => c.name === 'stripchat_com_sessionId');
+    try {
+      const cookies = await context.cookies('https://stripchat.com');
+      const userIdCookie = cookies.find(c => c.name === 'stripchat_com_userId');
+      const isLoggedCookie = cookies.find(c => c.name === 'isLogged');
+      const sessionIdCookie = cookies.find(c => c.name === 'stripchat_com_sessionId');
 
-    if (userIdCookie && userIdCookie.value) {
-      console.log(`\n✓ ログイン検出! userId=${userIdCookie.value}`);
-      authenticated = true;
-      break;
+      if (userIdCookie && userIdCookie.value) {
+        console.log(`\n✓ ログイン検出! userId=${userIdCookie.value}`);
+        authenticated = true;
+        break;
+      }
+      // Stripchat API仕様変更: isLogged=1 + sessionId で認証済み判定
+      if (isLoggedCookie?.value === '1' && sessionIdCookie?.value) {
+        console.log('\n✓ ログイン検出! (isLogged=1 + sessionId)');
+        authenticated = true;
+        break;
+      }
+    } catch (err) {
+      // ブラウザが閉じられた場合
+      console.error('\n✗ ブラウザが閉じられました。再度 npm run coin-auth を実行してください。');
+      process.exit(1);
     }
-    // Stripchat API仕様変更: isLogged=1 + sessionId で認証済み判定
-    if (isLoggedCookie?.value === '1' && sessionIdCookie?.value) {
-      console.log('\n✓ ログイン検出! (isLogged=1 + sessionId)');
-      authenticated = true;
-      break;
-    }
-    await page.waitForTimeout(2000);
+    await sleep(2000);
   }
 
   if (!authenticated) {
     console.error('\n✗ タイムアウト — 10分以内にログインしてください');
-    await context.close();
+    await browser.close();
     process.exit(1);
   }
 
@@ -275,7 +283,7 @@ async function main() {
   console.log(`保存先: ${STATE_FILE}`);
   console.log('次回のcoin-syncから自動的にこのセッションが使用されます。\n');
 
-  await context.close();
+  await browser.close();
 }
 
 // 直接実行時のみmain()を起動（import時はスキップ）
