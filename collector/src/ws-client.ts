@@ -48,6 +48,7 @@ export interface StatusResult {
 export interface ViewerResult {
   viewers: ViewerEntry[];
   fetchedAt: string;
+  httpStatus?: number; // HTTP status code (200 = success, 401/403 = auth error)
 }
 
 export interface WsMessage {
@@ -346,7 +347,7 @@ export async function pollViewers(
 
     if (!res.ok) {
       log.warn(`${castName}: viewer list HTTP ${res.status} (${url})`);
-      return { viewers: [], fetchedAt: new Date().toISOString() };
+      return { viewers: [], fetchedAt: new Date().toISOString(), httpStatus: res.status };
     }
 
     const data = await res.json();
@@ -355,9 +356,9 @@ export async function pollViewers(
     if (viewers.length > 0) {
       log.debug(`${castName}: ${viewers.length} viewers fetched`);
     }
-    return { viewers, fetchedAt: new Date().toISOString() };
+    return { viewers, fetchedAt: new Date().toISOString(), httpStatus: 200 };
   } catch (err) {
     log.error(`${castName}: viewer poll failed`, err);
-    return { viewers: [], fetchedAt: new Date().toISOString() };
+    return { viewers: [], fetchedAt: new Date().toISOString(), httpStatus: 0 };
   }
 }

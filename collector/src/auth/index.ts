@@ -31,6 +31,9 @@ function isCacheValid(): boolean {
   return cachedAuth.expiresAt - EXPIRY_MARGIN_SEC > now;
 }
 
+// ----- Mutex: 同時auth取得を防止 -----
+let authInFlight: Promise<StripchatAuth> | null = null;
+
 // ----- Public API -----
 
 export async function getAuth(modelName?: string): Promise<StripchatAuth> {
@@ -40,7 +43,23 @@ export async function getAuth(modelName?: string): Promise<StripchatAuth> {
     return cachedAuth!;
   }
 
-  // 2. Auto-refresh chain
+  // 2. 既にauth取得中なら、その結果を待つ（Playwright多重起動防止）
+  if (authInFlight) {
+    log.debug('Auth refresh already in flight — waiting...');
+    return authInFlight;
+  }
+
+  // 3. auth取得開始 — ロック獲得
+  authInFlight = doGetAuth(modelName);
+  try {
+    return await authInFlight;
+  } finally {
+    authInFlight = null;
+  }
+}
+
+async function doGetAuth(modelName?: string): Promise<StripchatAuth> {
+  // Auto-refresh chain
   if (AUTH_CONFIG.autoRefresh) {
     // 方式C: ページHTML
     const pageAuth = await fetchAuthFromPage(modelName || 'Risa_06');
@@ -73,7 +92,7 @@ export async function getAuth(modelName?: string): Promise<StripchatAuth> {
     }
   }
 
-  // 3. .env fallback
+  // .env fallback
   if (AUTH_CONFIG.jwt) {
     log.info('Using .env fallback JWT');
     const envAuth: StripchatAuth = {
@@ -88,7 +107,7 @@ export async function getAuth(modelName?: string): Promise<StripchatAuth> {
     return envAuth;
   }
 
-  // 4. All failed
+  // All failed
   log.error('All auth methods failed. WS connection will likely fail.');
   return {
     jwt: '',

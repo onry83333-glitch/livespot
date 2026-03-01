@@ -69,17 +69,48 @@ async function ensureAuth(): Promise<string> {
   return auth.jwt;
 }
 
-/** Handle auth error from WS — invalidate cache and re-fetch */
+/** Handle auth error from WS — invalidate cache and re-fetch (debounced) */
+let authRefreshPending: Promise<string> | null = null;
+let lastAuthRefreshAt = 0;
+const AUTH_DEBOUNCE_MS = 10_000; // 10秒以内の再auth要求は無視
+
 async function handleAuthError(state: CastState): Promise<void> {
+  const now = Date.now();
+
+  // デバウンス: 直近10秒以内に再認証済みならスキップ（WS再接続だけ試行）
+  if (now - lastAuthRefreshAt < AUTH_DEBOUNCE_MS) {
+    log.debug(`${state.target.castName}: Auth error — skipping (debounced, ${Math.round((now - lastAuthRefreshAt) / 1000)}s ago)`);
+    if (state.wsClient) {
+      state.wsClient.setAuthToken(currentAuthToken);
+      state.wsClient.setCfClearance(currentCfClearance);
+      state.wsClient.disconnect();
+      state.wsClient.connect();
+    }
+    return;
+  }
+
   log.warn(`${state.target.castName}: Auth error — invalidating and retrying`);
   invalidateAuth();
-  const token = await ensureAuth();
+
+  // 同時リフレッシュ防止: 既にリフレッシュ中なら待つ
+  if (authRefreshPending) {
+    log.debug(`${state.target.castName}: Auth refresh already pending — waiting`);
+    await authRefreshPending;
+  } else {
+    authRefreshPending = ensureAuth();
+    try {
+      await authRefreshPending;
+    } finally {
+      authRefreshPending = null;
+      lastAuthRefreshAt = Date.now();
+    }
+  }
 
   // Reset viewer retry counters so they can be re-attempted with new auth
   retryTracker.resetByPrefix('viewers:');
 
   if (state.wsClient) {
-    state.wsClient.setAuthToken(token);
+    state.wsClient.setAuthToken(currentAuthToken);
     state.wsClient.setCfClearance(currentCfClearance);
     state.wsClient.disconnect();
     state.wsClient.connect();
@@ -425,15 +456,19 @@ async function pollViewerList(state: CastState): Promise<void> {
 
   const result = await pollViewers(target.castName, currentAuthToken, currentCfClearance);
 
-  if (result.viewers.length === 0) {
+  // HTTP error (401/403/0) = real failure → track retries
+  // HTTP 200 with empty list = legitimate (cast may have no viewers)
+  if (result.httpStatus !== 200) {
     if (retryTracker.getFailureCount(failKey) === 0) {
-      log.warn(`${target.castName}: viewer list empty (may require auth)`);
+      log.warn(`${target.castName}: viewer list failed (HTTP ${result.httpStatus})`);
     }
     retryTracker.recordFailure(failKey);
     return;
   }
 
   retryTracker.recordSuccess(failKey);
+
+  if (result.viewers.length === 0) return;
 
   const upserted = await upsertViewers(
     target.accountId,
