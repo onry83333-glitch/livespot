@@ -40,11 +40,13 @@ async function fetchWeeklyCoinStats(
       p_today_start: todayStart.toISOString(),
     });
     if (!error && data) {
-      const weekly = (data as { cast_name: string; this_week: number; last_week: number; today: number }[])
-        .map(r => ({ cast_name: r.cast_name, this_week: r.this_week, last_week: r.last_week }));
+      // RPC returns BIGINT — PostgREST serializes as string. Number() で変換必須
+      const weekly = (data as { cast_name: string; this_week: string | number; last_week: string | number; today: string | number }[])
+        .map(r => ({ cast_name: r.cast_name, this_week: Number(r.this_week) || 0, last_week: Number(r.last_week) || 0 }));
       const todayMap: Record<string, number> = {};
-      for (const r of data as { cast_name: string; today: number }[]) {
-        if (r.today > 0) todayMap[r.cast_name] = r.today;
+      for (const r of data as { cast_name: string; today: string | number }[]) {
+        const todayVal = Number(r.today) || 0;
+        if (todayVal > 0) todayMap[r.cast_name] = todayVal;
       }
       return { weekly, todayMap };
     }

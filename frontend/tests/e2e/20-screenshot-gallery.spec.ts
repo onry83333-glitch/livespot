@@ -9,12 +9,9 @@
  * 出力: tests/screenshots/YYYY-MM-DD/gallery-*.png
  */
 import { test, Page } from '@playwright/test';
-import { saveScreenshot, TEST_EMAIL, TEST_PASSWORD } from './helpers';
+import { login, saveScreenshot } from './helpers';
 
 // ========== 設定 ==========
-
-const SUPABASE_URL = 'https://ujgbhkllfeacbgpdbjto.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZ2Joa2xsZmVhY2JncGRianRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5NjQ5NzcsImV4cCI6MjA4NjU0MDk3N30._vllLuXCU34JMbh0HTM6vIlglGRBX2oP7KBz_5XfKeo';
 
 /** 各ページの待機時間（Supabase RPCの応答待ち） */
 const PAGE_WAIT = 3_000;
@@ -22,17 +19,29 @@ const PAGE_WAIT = 3_000;
 /** スクショ連番カウンター */
 let shotIndex = 0;
 
+/** ファイル名に使えない文字を除去 */
+function sanitize(name: string): string {
+  return name.replace(/[?<>:*|"\\\/]/g, '_').replace(/_+/g, '_');
+}
+
 /** 連番付きスクショ保存 */
 async function shot(page: Page, name: string): Promise<void> {
   shotIndex++;
   const prefix = String(shotIndex).padStart(2, '0');
-  await saveScreenshot(page, `gallery-${prefix}-${name}`);
+  await saveScreenshot(page, `gallery-${prefix}-${sanitize(name)}`);
 }
 
-/** ページ遷移 + 安定待機 */
+/** ページ遷移 + 安定待機 + 読み込み完了待ち */
 async function visitPage(page: Page, path: string): Promise<void> {
   await page.goto(path);
   await page.waitForLoadState('networkidle').catch(() => {});
+  // 「読み込み中...」が消えるまで待つ（最大10秒）
+  try {
+    await page.waitForFunction(
+      () => !document.body.innerText.includes('読み込み中'),
+      { timeout: 10_000 },
+    );
+  } catch { /* timeout OK */ }
   await page.waitForTimeout(PAGE_WAIT);
 }
 
@@ -51,68 +60,16 @@ async function clickTab(page: Page, tabText: string): Promise<boolean> {
   return false;
 }
 
-/** ページからリンクを抽出（動的ルート用） */
+/** ページからリンクを抽出（動的ルート用、クエリパラメータ除去） */
 async function extractFirstLink(page: Page, pattern: RegExp): Promise<string | null> {
   const links = await page.locator('a').evaluateAll(
     (els, pat) => els
       .map(el => el.getAttribute('href'))
-      .filter((href): href is string => href !== null && new RegExp(pat).test(href)),
+      .filter((href): href is string => href !== null && new RegExp(pat).test(href.split('?')[0])),
     pattern.source
   );
-  return links[0] || null;
-}
-
-/**
- * Supabase REST APIで直接ログイン → localStorage にトークン設定
- * AppShellの「読み込み中...」スピナーをバイパスする
- */
-async function apiLogin(page: Page): Promise<void> {
-  // 1. Supabase Auth REST API で認証
-  const res = await page.request.post(
-    `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
-    {
-      headers: {
-        'apikey': SUPABASE_ANON_KEY,
-        'Content-Type': 'application/json',
-      },
-      data: {
-        email: TEST_EMAIL,
-        password: TEST_PASSWORD,
-      },
-    },
-  );
-
-  if (!res.ok()) {
-    throw new Error(`Supabase login failed: ${res.status()} ${await res.text()}`);
-  }
-
-  const session = await res.json();
-
-  // 2. localStorageにセッション情報を設定（Supabase SSRが読み取る形式）
-  // まずblankページに行ってlocalStorageにアクセス可能にする
-  await page.goto('/login');
-  await page.waitForTimeout(500);
-
-  // Supabase @supabase/ssr の storage key
-  const storageKey = `sb-ujgbhkllfeacbgpdbjto-auth-token`;
-  const storageValue = JSON.stringify({
-    access_token: session.access_token,
-    refresh_token: session.refresh_token,
-    expires_at: Math.floor(Date.now() / 1000) + session.expires_in,
-    expires_in: session.expires_in,
-    token_type: 'bearer',
-    user: session.user,
-  });
-
-  await page.evaluate(
-    ([key, value]) => { localStorage.setItem(key, value); },
-    [storageKey, storageValue],
-  );
-
-  // 3. ダッシュボードに遷移してログイン完了を確認
-  await page.goto('/');
-  await page.waitForLoadState('networkidle').catch(() => {});
-  await page.waitForTimeout(3_000);
+  // クエリパラメータを除去して返す
+  return links[0]?.split('?')[0] || null;
 }
 
 // ========== テスト ==========
@@ -121,13 +78,20 @@ test.describe('全画面スクリーンショット撮影', () => {
   test.setTimeout(300_000); // 5分（全画面巡回）
 
   test('全ページ巡回 + スクリーンショット保存', async ({ page }) => {
-    // ---------- 0. ログイン画面（未認証状態） ----------
+    // ---------- 0. ログイン画面 ----------
     await page.goto('/login');
-    await page.waitForTimeout(5_000); // AuthProvider初期化待ち
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(3_000);
     await shot(page, 'login');
 
-    // ---------- 1. APIログイン ----------
-    await apiLogin(page);
+    // ---------- 1. ログイン実行 ----------
+    await login(page);
+    await page.waitForTimeout(2_000);
+
+    // ---------- 2. ダッシュボード ----------
+    // login() 後は / にリダイレクト済み（→ /casts にさらにリダイレクトの可能性）
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForTimeout(PAGE_WAIT);
     await shot(page, 'dashboard');
 
     // ---------- 3. キャスト一覧 ----------

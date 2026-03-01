@@ -11,6 +11,9 @@
 --   DROP FUNCTION IF EXISTS get_weekly_coin_stats(UUID, TEXT[], TIMESTAMPTZ, TIMESTAMPTZ, TIMESTAMPTZ);
 -- ============================================================
 
+-- 旧BIGINT版が存在する場合は先にDROP（戻り値型変更にはDROP必須）
+DROP FUNCTION IF EXISTS get_weekly_coin_stats(UUID, TEXT[], TIMESTAMPTZ, TIMESTAMPTZ, TIMESTAMPTZ);
+
 CREATE OR REPLACE FUNCTION get_weekly_coin_stats(
   p_account_id UUID,
   p_cast_names TEXT[],
@@ -20,17 +23,17 @@ CREATE OR REPLACE FUNCTION get_weekly_coin_stats(
 )
 RETURNS TABLE(
   cast_name TEXT,
-  this_week BIGINT,
-  last_week BIGINT,
-  today BIGINT
+  this_week INTEGER,
+  last_week INTEGER,
+  today INTEGER
 ) AS $$
 BEGIN
   RETURN QUERY
   SELECT
     ct.cast_name,
-    COALESCE(SUM(ct.tokens) FILTER (WHERE ct.date >= p_this_week_start), 0)::BIGINT AS this_week,
-    COALESCE(SUM(ct.tokens) FILTER (WHERE ct.date >= p_last_week_start AND ct.date < p_this_week_start), 0)::BIGINT AS last_week,
-    COALESCE(SUM(ct.tokens) FILTER (WHERE ct.date >= p_today_start), 0)::BIGINT AS today
+    COALESCE(SUM(ct.tokens) FILTER (WHERE ct.date >= p_this_week_start), 0)::INTEGER AS this_week,
+    COALESCE(SUM(ct.tokens) FILTER (WHERE ct.date >= p_last_week_start AND ct.date < p_this_week_start), 0)::INTEGER AS last_week,
+    COALESCE(SUM(ct.tokens) FILTER (WHERE ct.date >= p_today_start), 0)::INTEGER AS today
   FROM coin_transactions ct
   WHERE ct.account_id = p_account_id
     AND ct.cast_name = ANY(p_cast_names)
