@@ -62,7 +62,7 @@ async function fetchThumbnailFromCdn(modelId: string): Promise<{ buffer: Buffer;
 
     return { buffer, cdnUrl };
   } catch (err) {
-    log.error(`CDN fetch error for model ${modelId}:`, err);
+    log.error(`CDN fetch error for model ${modelId}: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }

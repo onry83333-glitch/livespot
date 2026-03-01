@@ -245,7 +245,11 @@ async function main(): Promise<void> {
   setInterval(() => runCoinSyncSafe(), 2 * 60 * 60 * 1000);
   log.info('Coin sync scheduled (2h interval)');
 
-  // 10. Start main polling loop
+  // 10. Thumbnail capture (every 60s for online casts)
+  startThumbnailCapture(getOnlineCasts);
+  log.info('Thumbnail capture scheduled (60s interval)');
+
+  // 11. Start main polling loop
   log.info('Starting collector loop...');
   startCollector(triggerEngine);
 }
@@ -263,6 +267,7 @@ async function shutdown(signal: string): Promise<void> {
     log.error('Shutdown: failed to close active sessions', err);
   }
 
+  stopThumbnailCapture();
   stopBatchFlush();
   log.info('Collector stopped. Goodbye.');
   process.exit(0);
