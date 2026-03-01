@@ -8,10 +8,13 @@
  * 実行: npm run test:screenshots
  * 出力: tests/screenshots/YYYY-MM-DD/gallery-*.png
  */
-import { test, expect, Page } from '@playwright/test';
-import { login, saveScreenshot } from './helpers';
+import { test, Page } from '@playwright/test';
+import { saveScreenshot, TEST_EMAIL, TEST_PASSWORD } from './helpers';
 
 // ========== 設定 ==========
+
+const SUPABASE_URL = 'https://ujgbhkllfeacbgpdbjto.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZ2Joa2xsZmVhY2JncGRianRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA5NjQ5NzcsImV4cCI6MjA4NjU0MDk3N30._vllLuXCU34JMbh0HTM6vIlglGRBX2oP7KBz_5XfKeo';
 
 /** 各ページの待機時間（Supabase RPCの応答待ち） */
 const PAGE_WAIT = 3_000;
@@ -59,23 +62,72 @@ async function extractFirstLink(page: Page, pattern: RegExp): Promise<string | n
   return links[0] || null;
 }
 
+/**
+ * Supabase REST APIで直接ログイン → localStorage にトークン設定
+ * AppShellの「読み込み中...」スピナーをバイパスする
+ */
+async function apiLogin(page: Page): Promise<void> {
+  // 1. Supabase Auth REST API で認証
+  const res = await page.request.post(
+    `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
+    {
+      headers: {
+        'apikey': SUPABASE_ANON_KEY,
+        'Content-Type': 'application/json',
+      },
+      data: {
+        email: TEST_EMAIL,
+        password: TEST_PASSWORD,
+      },
+    },
+  );
+
+  if (!res.ok()) {
+    throw new Error(`Supabase login failed: ${res.status()} ${await res.text()}`);
+  }
+
+  const session = await res.json();
+
+  // 2. localStorageにセッション情報を設定（Supabase SSRが読み取る形式）
+  // まずblankページに行ってlocalStorageにアクセス可能にする
+  await page.goto('/login');
+  await page.waitForTimeout(500);
+
+  // Supabase @supabase/ssr の storage key
+  const storageKey = `sb-ujgbhkllfeacbgpdbjto-auth-token`;
+  const storageValue = JSON.stringify({
+    access_token: session.access_token,
+    refresh_token: session.refresh_token,
+    expires_at: Math.floor(Date.now() / 1000) + session.expires_in,
+    expires_in: session.expires_in,
+    token_type: 'bearer',
+    user: session.user,
+  });
+
+  await page.evaluate(
+    ([key, value]) => { localStorage.setItem(key, value); },
+    [storageKey, storageValue],
+  );
+
+  // 3. ダッシュボードに遷移してログイン完了を確認
+  await page.goto('/');
+  await page.waitForLoadState('networkidle').catch(() => {});
+  await page.waitForTimeout(3_000);
+}
+
 // ========== テスト ==========
 
 test.describe('全画面スクリーンショット撮影', () => {
   test.setTimeout(300_000); // 5分（全画面巡回）
 
   test('全ページ巡回 + スクリーンショット保存', async ({ page }) => {
-    // ---------- 0. ログイン画面 ----------
+    // ---------- 0. ログイン画面（未認証状態） ----------
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(5_000); // AuthProvider初期化待ち
     await shot(page, 'login');
 
-    // ---------- 1. ログイン実行 ----------
-    await login(page);
-    await page.waitForTimeout(2_000);
-
-    // ---------- 2. ダッシュボード ----------
-    await visitPage(page, '/');
+    // ---------- 1. APIログイン ----------
+    await apiLogin(page);
     await shot(page, 'dashboard');
 
     // ---------- 3. キャスト一覧 ----------
@@ -83,8 +135,7 @@ test.describe('全画面スクリーンショット撮影', () => {
     await shot(page, 'casts');
 
     // ---------- 4. キャスト詳細（6タブ） ----------
-    // 実データからキャスト名を取得
-    let castName = 'hanshakun'; // デフォルト
+    let castName = 'hanshakun';
     const castLink = await extractFirstLink(page, /\/casts\/[^/]+$/);
     if (castLink) {
       castName = castLink.replace('/casts/', '');
@@ -93,7 +144,6 @@ test.describe('全画面スクリーンショット撮影', () => {
     await visitPage(page, `/casts/${castName}`);
     await shot(page, `cast-${castName}-overview`);
 
-    // タブ巡回
     const castTabs = ['配信', 'DM', '分析', '売上', 'リアルタイム'];
     for (const tabName of castTabs) {
       const clicked = await clickTab(page, tabName);
@@ -120,7 +170,6 @@ test.describe('全画面スクリーンショット撮影', () => {
     await visitPage(page, '/spy');
     await shot(page, 'spy-main');
 
-    // SPY 自社/他社タブ
     if (await clickTab(page, '他社')) {
       await shot(page, 'spy-competitor');
     }
@@ -128,7 +177,7 @@ test.describe('全画面スクリーンショット撮影', () => {
       await shot(page, 'spy-own');
     }
 
-    // ---------- 8. SPYキャスト別（あれば） ----------
+    // ---------- 8. SPYキャスト別 ----------
     await visitPage(page, `/spy/${castName}`);
     await shot(page, `spy-cast-${castName}`);
 
@@ -148,7 +197,6 @@ test.describe('全画面スクリーンショット撮影', () => {
     await visitPage(page, '/analytics');
     await shot(page, 'analytics');
 
-    // アナリティクス内タブ
     const analyticsTabs = ['売上', 'ユーザー', 'ARPU', 'リテンション', '収入源'];
     for (const tabName of analyticsTabs) {
       const clicked = await clickTab(page, tabName);
@@ -185,7 +233,6 @@ test.describe('全画面スクリーンショット撮影', () => {
     await visitPage(page, '/settings');
     await shot(page, 'settings');
 
-    // 設定内タブ
     const settingsTabs = ['DMトリガー', 'セキュリティ'];
     for (const tabName of settingsTabs) {
       const clicked = await clickTab(page, tabName);
