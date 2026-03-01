@@ -11,6 +11,7 @@ import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE } from '@/lib/
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 import DmSegmentSender from '@/components/dm-segment-sender';
+import DataSyncPanel from '@/components/data-sync-panel';
 
 
 /* ============================================================
@@ -2064,24 +2065,7 @@ function CastDetailInner() {
         </div>
       </div>
 
-      {/* Coin sync alert */}
-      {daysSinceSync !== null && daysSinceSync >= 3 && (
-        <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs mb-2 ${
-          daysSinceSync >= 7 ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-          daysSinceSync >= 5 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
-          'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-        }`}>
-          <span>{daysSinceSync >= 7 ? '🔴' : daysSinceSync >= 5 ? '🟡' : '🔵'}</span>
-          <span>
-            コイン履歴が <strong>{daysSinceSync}日間</strong> 更新されていません。
-            → Chrome拡張のコイン同期を実行してください
-            <a href="https://ja.stripchat.com/earnings/tokens-history"
-               target="_blank" rel="noopener" className="underline ml-1">
-              Earningsページを開いて同期 →
-            </a>
-          </span>
-        </div>
-      )}
+{/* Coin sync alert — replaced by DataSyncPanel in overview tab */}
 
       {loading && activeTab !== 'sessions' ? (
         <div className="space-y-3">
@@ -2229,6 +2213,11 @@ function CastDetailInner() {
                   )}
                 </div>
               </div>
+
+              {/* Data sync panel */}
+              {accountId && (
+                <DataSyncPanel supabase={sb} accountId={accountId} castName={castName} />
+              )}
 
               {/* Top fans */}
               <div className="glass-card p-4">
