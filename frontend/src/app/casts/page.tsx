@@ -30,8 +30,10 @@ async function fetchWeeklyCoinStats(
   lastWeekStart: Date,
   todayStart: Date,
 ): Promise<{ weekly: WeeklyCoinStats[]; todayMap: Record<string, number> }> {
-  // 1. RPC を試行（get_weekly_coin_stats が適用済みなら高速）
+  const empty = { weekly: [] as WeeklyCoinStats[], todayMap: {} as Record<string, number> };
+
   try {
+    // 1. RPC を試行（get_weekly_coin_stats が適用済みなら高速）
     const { data, error } = await supabase.rpc('get_weekly_coin_stats', {
       p_account_id: accountId,
       p_cast_names: castNames,
@@ -39,66 +41,75 @@ async function fetchWeeklyCoinStats(
       p_last_week_start: lastWeekStart.toISOString(),
       p_today_start: todayStart.toISOString(),
     });
-    if (!error && data) {
-      // RPC returns BIGINT — PostgREST serializes as string. Number() で変換必須
-      const weekly = (data as { cast_name: string; this_week: string | number; last_week: string | number; today: string | number }[])
-        .map(r => ({ cast_name: r.cast_name, this_week: Number(r.this_week) || 0, last_week: Number(r.last_week) || 0 }));
+    if (!error && Array.isArray(data) && data.length > 0) {
+      const weekly = data.map((r: { cast_name: string; this_week: string | number; last_week: string | number }) => ({
+        cast_name: r.cast_name, this_week: Number(r.this_week) || 0, last_week: Number(r.last_week) || 0,
+      }));
       const todayMap: Record<string, number> = {};
       for (const r of data as { cast_name: string; today: string | number }[]) {
-        const todayVal = Number(r.today) || 0;
-        if (todayVal > 0) todayMap[r.cast_name] = todayVal;
+        const v = Number(r.today) || 0;
+        if (v > 0) todayMap[r.cast_name] = v;
       }
       return { weekly, todayMap };
     }
+    // RPC未適用(PGRST202)または空結果 → フォールバックへ
   } catch {
-    // RPC未適用 — フォールバックへ（ネットワークエラー等）
+    // ネットワークエラー等 → フォールバックへ
   }
-  // RPC が未適用または空結果の場合ここに到達
-  console.warn('[fetchWeeklyCoinStats] RPC未適用 — フォールバック(keyset pagination)で集計');
 
   // 2. フォールバック: keyset pagination で全件取得
-  // PAGE_SIZE は PostgREST max_rows（デフォルト1000）未満にする。
-  // max_rows と同値だと「丁度1000件返却→もう無いと判定」で打ち切りの可能性あり。
-  const PAGE_SIZE = 500;
-  const MAX_PAGES = 20; // 安全弁: 最大10,000行
-  let allRows: { id: number | string; cast_name: string; tokens: number; date: string }[] = [];
-  let lastId: number | string = 0;
-  let pages = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { data, error: fbErr } = await supabase
-      .from('coin_transactions')
-      .select('id, cast_name, tokens, date')
-      .eq('account_id', accountId)
-      .in('cast_name', castNames)
-      .gte('date', lastWeekStart.toISOString())
-      .gt('id', lastId)
-      .order('id', { ascending: true })
-      .limit(PAGE_SIZE);
-    if (fbErr || !data || data.length === 0) break;
-    allRows = allRows.concat(data);
-    lastId = data[data.length - 1].id;
-    pages++;
-    if (data.length < PAGE_SIZE || pages >= MAX_PAGES) break;
-  }
+  // PAGE_SIZE は PostgREST max_rows（1000）未満にする
+  try {
+    const PAGE_SIZE = 500;
+    const MAX_PAGES = 20;
+    let allRows: { id: number; cast_name: string; tokens: number; date: string }[] = [];
+    let lastId = 0;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const { data, error: fbErr } = await supabase
+        .from('coin_transactions')
+        .select('id, cast_name, tokens, date')
+        .eq('account_id', accountId)
+        .in('cast_name', castNames)
+        .gte('date', lastWeekStart.toISOString())
+        .gt('id', lastId)
+        .gt('tokens', 0)
+        .order('id', { ascending: true })
+        .limit(PAGE_SIZE);
+      if (fbErr) {
+        console.error('[fetchWeeklyCoinStats] フォールバックエラー:', fbErr.message);
+        break;
+      }
+      if (!data || data.length === 0) break;
+      allRows = allRows.concat(data);
+      lastId = data[data.length - 1].id;
+      if (data.length < PAGE_SIZE) break;
+    }
 
-  const weeklyMap = new Map<string, { this_week: number; last_week: number }>();
-  const todayMap: Record<string, number> = {};
-  for (const row of allRows) {
-    const prev = weeklyMap.get(row.cast_name) || { this_week: 0, last_week: 0 };
-    const rowDate = new Date(row.date);
-    if (rowDate >= thisWeekStart) {
-      prev.this_week += row.tokens || 0;
-    } else {
-      prev.last_week += row.tokens || 0;
+    if (allRows.length === 0) return empty;
+
+    const weeklyMap = new Map<string, { this_week: number; last_week: number }>();
+    const todayMap: Record<string, number> = {};
+    for (const row of allRows) {
+      const prev = weeklyMap.get(row.cast_name) || { this_week: 0, last_week: 0 };
+      const rowDate = new Date(row.date);
+      if (rowDate >= thisWeekStart) {
+        prev.this_week += row.tokens || 0;
+      } else {
+        prev.last_week += row.tokens || 0;
+      }
+      weeklyMap.set(row.cast_name, prev);
+      if (rowDate >= todayStart) {
+        todayMap[row.cast_name] = (todayMap[row.cast_name] || 0) + (row.tokens || 0);
+      }
     }
-    weeklyMap.set(row.cast_name, prev);
-    if (rowDate >= todayStart) {
-      todayMap[row.cast_name] = (todayMap[row.cast_name] || 0) + (row.tokens || 0);
-    }
+    return {
+      weekly: Array.from(weeklyMap.entries()).map(([cast_name, v]) => ({ cast_name, ...v })),
+      todayMap,
+    };
+  } catch (e) {
+    console.error('[fetchWeeklyCoinStats] フォールバック例外:', e);
+    return empty;
   }
-  const weekly = Array.from(weeklyMap.entries()).map(([cast_name, v]) => ({ cast_name, ...v }));
-  return { weekly, todayMap };
 }
 
 interface CastStats {
@@ -181,15 +192,17 @@ export default function CastsPage() {
     if (!selectedAccount) return;
     setLoading(true);
 
-    const supabase = createClient();
-    supabase
-      .from('registered_casts')
-      .select('*')
-      .eq('account_id', selectedAccount)
-      .eq('is_active', true)
-      .order('created_at', { ascending: true })
-      .limit(100)
-      .then(async (castsRes) => {
+    const load = async () => {
+      const supabase = createClient();
+      try {
+        const castsRes = await supabase
+          .from('registered_casts')
+          .select('*')
+          .eq('account_id', selectedAccount)
+          .eq('is_active', true)
+          .order('created_at', { ascending: true })
+          .limit(100);
+
         const casts = castsRes.data || [];
         setRegisteredCasts(casts);
 
@@ -260,9 +273,13 @@ export default function CastsPage() {
         // Dashboard KPIs
         const rev30d = typeof rev30dRes.data === 'number' ? rev30dRes.data : 0;
         setDashKpi({ revenue30d: rev30d, alertsToday: alertsRes.count ?? 0, dmSent7d: dmRes.count ?? 0 });
-
+      } catch (err) {
+        console.error('[casts] データ取得失敗:', err);
+      } finally {
         setLoading(false);
-      });
+      }
+    };
+    load();
   }, [selectedAccount]);
 
   // registered_casts + SPY stats + weekly coin stats を結合
