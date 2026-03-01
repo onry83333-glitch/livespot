@@ -9,7 +9,11 @@
     "lint": "next lint",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report",
+    "test:patrol": "playwright test 20-visual-patrol --workers=1",
+    "test:patrol:headed": "playwright test 20-visual-patrol --workers=1 --headed",
+    "test:screenshots": "playwright test 20-screenshot-gallery --workers=1",
+    "test:screenshots:headed": "playwright test 20-screenshot-gallery --workers=1 --headed"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.0",
