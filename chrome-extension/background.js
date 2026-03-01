@@ -2271,7 +2271,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         userName: payload.user_name,
         joinedAt: Date.now(),
         ratePerMinute: rate,
-        sessionId: perCastSessionId || currentSessionId || null,
+        sessionId: perCastSessionId || null, // currentSessionIdフォールバック禁止 = 他キャスト混在防止
       });
       console.log('[LS-BG] GC参加:', gcKey, 'rate=', rate, '/分, active=', activeGroupChats.size);
     }
@@ -5663,7 +5663,7 @@ async function captureAllThumbnailsCDN() {
     // メタデータをscreenshotsテーブルに保存（CDN URLのみ、Storageアップロード不要）
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${castName}_cdn_${timestamp}.webp`;
-    const sessionId = castSessions.get(castName) || currentSessionId || null;
+    const sessionId = castSessions.get(castName) || null; // currentSessionIdフォールバック禁止 = 他キャスト混在防止
 
     try {
       const metaRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/screenshots`, {
@@ -5870,7 +5870,7 @@ async function uploadScreenshot(castName, dataUrl) {
   }
 
   // screenshots テーブルにメタデータ保存
-  const sessionId = castSessions.get(castName) || currentSessionId || null;
+  const sessionId = castSessions.get(castName) || null; // currentSessionIdフォールバック禁止 = 他キャスト混在防止
   try {
     const metaRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/screenshots`, {
       method: 'POST',
