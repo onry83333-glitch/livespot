@@ -2313,6 +2313,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     // accountId不在でもバッファ（flush時に付与）
+    // cast_nameをバッファ時点で確定（flush時のlast_cast_nameフォールバックによる混在を防止）
+    const bufferCastName = msg.cast_name || '';
     viewerStatsBuffer.push({
       total: msg.total,
       coin_users: msg.coin_users,
@@ -2321,6 +2323,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       coin_holders: msg.coin_holders ?? null,
       others_count: msg.others_count ?? null,
       recorded_at: msg.timestamp || new Date().toISOString(),
+      cast_name: bufferCastName,
     });
     persistViewerBuffer();
 
@@ -5807,14 +5810,20 @@ async function fetchViewerMembers(castName) {
 
     // 3. spy_viewers に UPSERT（バッチ）
     const now = new Date().toISOString();
-    const rows = members.map(m => ({
-      account_id: accountId,
-      cast_name: castName,
-      session_id: castSessions.get(castName) || currentSessionId || null,
-      user_name: m.username || m.userName || m.name || 'unknown',
-      user_id_stripchat: m.id ? String(m.id) : (m.userId ? String(m.userId) : null),
-      league: m.league || m.userLeague || null,
-      level: m.level || m.userLevel || null,
+    // session_idはキャスト別キャッシュのみ使用（currentSessionIdフォールバック禁止 = 他キャスト混在防止）
+    const perCastSessionId = castSessions.get(castName) || null;
+    const rows = members.map(m => {
+      // user_name: 複数フィールドを優先順に取得。空文字やnullは除外
+      const rawName = m.username || m.userName || m.name || '';
+      const userName = typeof rawName === 'string' ? rawName.trim() : String(rawName);
+      return {
+        account_id: accountId,
+        cast_name: castName,
+        session_id: perCastSessionId,
+        user_name: userName || `anon_${m.id || 'unknown'}`,
+        user_id_stripchat: m.id ? String(m.id) : (m.userId ? String(m.userId) : null),
+        league: m.league || m.userLeague || null,
+        level: m.level || m.userLevel || null,
       is_fan_club: m.isFanClub || m.fanClub || false,
       first_seen_at: now,
       last_seen_at: now,
