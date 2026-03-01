@@ -544,6 +544,7 @@ function CastDetailInner() {
   }
   const [sessionPL, setSessionPL] = useState<SessionPL[]>([]);
   const [sessionPLLoading, setSessionPLLoading] = useState(false);
+  const [sessionPLError, setSessionPLError] = useState(false);
 
   // Monthly P/L
   interface MonthlyPL {
@@ -554,6 +555,7 @@ function CastDetailInner() {
   }
   const [monthlyPL, setMonthlyPL] = useState<MonthlyPL[]>([]);
   const [monthlyPLLoading, setMonthlyPLLoading] = useState(false);
+  const [monthlyPLError, setMonthlyPLError] = useState(false);
 
   // Revenue Share
   interface RevenueShareRow {
@@ -700,9 +702,13 @@ function CastDetailInner() {
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
     setSessionPLLoading(true);
+    setSessionPLError(false);
     sb.rpc('get_session_pl', { p_account_id: accountId, p_cast_name: castName, p_days: 90 })
       .then(({ data, error }) => {
-        if (!error && data) {
+        if (error) {
+          console.warn('[SessionPL] RPC error:', error.message);
+          setSessionPLError(true);
+        } else if (data) {
           // total_coins → total_tokens マッピング（旧RPC互換）
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           setSessionPL((data as SessionPL[]).map((r: any) => ({
@@ -719,6 +725,7 @@ function CastDetailInner() {
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
     setMonthlyPLLoading(true);
+    setMonthlyPLError(false);
     sb.rpc('get_monthly_pl', { p_account_id: accountId, p_cast_name: castName, p_months: 6 })
       .then(({ data, error }) => {
         if (error?.code === 'PGRST202') {
@@ -728,7 +735,10 @@ function CastDetailInner() {
         return { data, error };
       })
       .then(({ data, error }) => {
-        if (!error && data) {
+        if (error) {
+          console.warn('[MonthlyPL] RPC error:', error.message);
+          setMonthlyPLError(true);
+        } else if (data) {
           // cast_nameでフィルタ（2引数版は全キャスト返す）
           const filtered = (data as MonthlyPL[]).filter(
             r => r.cast_name === castName
@@ -1803,24 +1813,20 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, sb]);
 
   // ─── Overlap (競合分析) データロード ───
+  // NOTE: get_user_overlap_matrix, get_spy_top_users, spy_user_profiles は未実装RPC/テーブル
+  // PGRST202エラーを安全にスキップし、実装時に有効化する
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
     setOverlapLoading(true);
     (async () => {
       try {
-        const [matrixRes, topRes, tsRes] = await Promise.all([
-          sb.rpc('get_user_overlap_matrix', { p_account_id: accountId }),
-          sb.rpc('get_spy_top_users', { p_account_id: accountId, p_limit: 50 }),
-          sb.from('spy_user_profiles')
-            .select('updated_at')
-            .eq('account_id', accountId)
-            .order('updated_at', { ascending: false })
-            .limit(1),
-        ]);
-        if (matrixRes.data) setOverlapMatrix(matrixRes.data);
-        if (topRes.data) setSpyTopUsers(topRes.data);
-        if (tsRes.data?.[0]?.updated_at) setLastProfileUpdate(tsRes.data[0].updated_at);
-      } catch { /* ignore */ }
+        const matrixRes = await sb.rpc('get_user_overlap_matrix', { p_account_id: accountId });
+        if (matrixRes.error?.code !== 'PGRST202' && matrixRes.data) setOverlapMatrix(matrixRes.data);
+        const topRes = await sb.rpc('get_spy_top_users', { p_account_id: accountId, p_limit: 50 });
+        if (topRes.error?.code !== 'PGRST202' && topRes.data) setSpyTopUsers(topRes.data);
+      } catch (e) {
+        console.warn('[Overlap] RPC not available:', e);
+      }
       setOverlapLoading(false);
     })();
   }, [accountId, activeTab, sb]);
@@ -1831,14 +1837,19 @@ function CastDetailInner() {
     setOverlapRefreshing(true);
     try {
       const { data, error } = await sb.rpc('refresh_spy_user_profiles', { p_account_id: accountId });
-      if (error) throw error;
+      if (error) {
+        if (error.code === 'PGRST202') {
+          alert('この機能は準備中です');
+        } else {
+          alert(`集計エラー: ${error.message || '不明'}`);
+        }
+        setOverlapRefreshing(false);
+        return;
+      }
       alert(`プロフィール集計完了: ${data}件更新`);
-      // データ再ロード
-      const [matrixRes, topRes] = await Promise.all([
-        sb.rpc('get_user_overlap_matrix', { p_account_id: accountId }),
-        sb.rpc('get_spy_top_users', { p_account_id: accountId, p_limit: 50 }),
-      ]);
+      const matrixRes = await sb.rpc('get_user_overlap_matrix', { p_account_id: accountId });
       if (matrixRes.data) setOverlapMatrix(matrixRes.data);
+      const topRes = await sb.rpc('get_spy_top_users', { p_account_id: accountId, p_limit: 50 });
       if (topRes.data) setSpyTopUsers(topRes.data);
       setLastProfileUpdate(new Date().toISOString());
     } catch (e: any) {
@@ -4941,6 +4952,10 @@ function CastDetailInner() {
                     </h3>
                     {sessionPLLoading ? (
                       <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    ) : sessionPLError ? (
+                      <p className="text-xs text-center py-6" style={{ color: 'var(--accent-pink)' }}>
+                        P/Lデータの取得に失敗しました — ページを再読み込みしてください
+                      </p>
                     ) : sessionPL.length === 0 ? (
                       <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
                         コスト未設定 — 設定タブの「コスト設定」で時給・手数料を入力してください
@@ -5012,6 +5027,10 @@ function CastDetailInner() {
                     </h3>
                     {monthlyPLLoading ? (
                       <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    ) : monthlyPLError ? (
+                      <p className="text-xs text-center py-6" style={{ color: 'var(--accent-pink)' }}>
+                        月次P/Lの取得に失敗しました — ページを再読み込みしてください
+                      </p>
                     ) : monthlyPL.length === 0 ? (
                       <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
                         コスト未設定 — 設定タブの「コスト設定」で時給・手数料を入力してください

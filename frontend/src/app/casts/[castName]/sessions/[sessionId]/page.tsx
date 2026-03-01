@@ -521,6 +521,7 @@ export default function SessionDetailPage() {
     sb.rpc('get_session_pl', {
       p_account_id: accountId,
       p_session_id: sessionId,
+      p_cast_name: castName,
     }).then(({ data, error }) => {
       if (!error && data && (data as SessionPL[]).length > 0) {
         setSessionPL((data as SessionPL[])[0]);
