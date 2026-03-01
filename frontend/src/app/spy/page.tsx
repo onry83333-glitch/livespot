@@ -249,6 +249,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
           .select('cast_name, genre, benchmark, category')
           .eq('account_id', data.id)
           .eq('is_active', true)
+          .limit(100)
           .then(({ data: casts }) => {
             if (casts) {
               setRegisteredCastNames(new Set(casts.map(c => c.cast_name)));
@@ -262,6 +263,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
           .select('cast_name, genre, benchmark, category')
           .eq('account_id', data.id)
           .eq('is_active', true)
+          .limit(100)
           .then(({ data: casts }) => {
             if (casts) {
               setSpyCastNames(new Set(casts.map(c => c.cast_name)));
@@ -277,7 +279,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
           .select('cast_name, created_at')
           .eq('account_id', data.id)
           .order('created_at', { ascending: false })
-          .limit(200)
+          .limit(10000)
           .then(({ data: monitorData }) => {
             const statusMap = new Map<string, Date>();
             (monitorData || []).forEach((m: { cast_name: string; created_at: string }) => {
@@ -858,7 +860,8 @@ function OwnCastListTab() {
         .from('registered_casts')
         .select('*')
         .eq('account_id', data.id)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(100);
 
       if (castData) setCasts(castData as RegisteredCast[]);
       setLoading(false);
@@ -1024,7 +1027,7 @@ function FBReportsTab() {
         .eq('account_id', data.id)
         .eq('report_type', 'session_analysis')
         .order('created_at', { ascending: false })
-        .limit(20);
+        .limit(100);
 
       if (reportData) setReports(reportData);
       setLoading(false);
@@ -1168,7 +1171,8 @@ function SpyListTab() {
         .from('spy_casts')
         .select('*')
         .eq('account_id', data.id)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(100);
 
       if (casts) {
         setSpyCasts(casts as SpyCast[]);
@@ -1535,7 +1539,8 @@ function SimpleAnalysisTab() {
         .select('cast_name')
         .eq('account_id', data.id)
         .eq('is_active', true)
-        .order('cast_name');
+        .order('cast_name')
+        .limit(100);
 
       if (casts && casts.length > 0) {
         setSpyCasts(casts);
@@ -1560,7 +1565,7 @@ function SimpleAnalysisTab() {
       .eq('account_id', accountId)
       .eq('cast_name', selectedCast)
       .order('started_at', { ascending: false })
-      .limit(20)
+      .limit(500)
       .then(({ data }) => {
         setSessions(data || []);
         setSelectedSessionId('all');
@@ -1596,7 +1601,7 @@ function SimpleAnalysisTab() {
     if (until) summaryQuery = summaryQuery.lte('message_time', until);
     summaryQuery
       .order('message_time', { ascending: true })
-      .limit(50000)
+      .limit(10000)
       .then(({ data }) => {
         if (data && data.length > 0) {
           const firstMsg = new Date(data[0].message_time);
@@ -1644,7 +1649,7 @@ function SimpleAnalysisTab() {
     if (until) tippersQuery = tippersQuery.lte('message_time', until);
     tippersQuery
       .order('tokens', { ascending: false })
-      .limit(200)
+      .limit(10000)
       .then(({ data }) => {
         if (data) {
           const tipMap = new Map<string, number>();
@@ -1670,7 +1675,7 @@ function SimpleAnalysisTab() {
     if (until) timelineQuery = timelineQuery.lte('message_time', until);
     timelineQuery
       .order('message_time', { ascending: false })
-      .limit(20)
+      .limit(10000)
       .then(({ data }) => {
         if (data) setTipTimeline(data as { message_time: string; user_name: string; tokens: number }[]);
         else setTipTimeline([]);
@@ -1709,7 +1714,7 @@ function SimpleAnalysisTab() {
     if (ticketUntil) ticketQuery = ticketQuery.lte('message_time', ticketUntil);
     ticketQuery
       .order('message_time', { ascending: true })
-      .limit(2000)
+      .limit(10000)
       .then(async ({ data: tipData }) => {
         if (!tipData || tipData.length === 0) {
           setTicketShows([]);
@@ -2082,7 +2087,8 @@ function AdvancedAnalysisTab() {
         .select('cast_name')
         .eq('account_id', data.id)
         .eq('is_active', true)
-        .order('cast_name');
+        .order('cast_name')
+        .limit(100);
 
       if (casts && casts.length > 0) {
         setSpyCasts(casts);
@@ -2502,7 +2508,8 @@ function TypeCatalogTab() {
         .select('*')
         .eq('account_id', data.id)
         .eq('is_active', true)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(50);
 
       if (typesData) setTypes(typesData as CastType[]);
 
@@ -2510,13 +2517,15 @@ function TypeCatalogTab() {
         .from('spy_casts')
         .select('cast_name, cast_type_id')
         .eq('account_id', data.id)
-        .filter('cast_type_id', 'not.is', null);
+        .filter('cast_type_id', 'not.is', null)
+        .limit(100);
 
       const { data: regCasts } = await supabase
         .from('registered_casts')
         .select('cast_name, cast_type_id')
         .eq('account_id', data.id)
-        .filter('cast_type_id', 'not.is', null);
+        .filter('cast_type_id', 'not.is', null)
+        .limit(100);
 
       const counts: Record<string, { count: number; names: string[] }> = {};
       [...(spyCasts || []), ...(regCasts || [])].forEach((c: { cast_name: string; cast_type_id: string | null }) => {
@@ -2723,6 +2732,7 @@ function TypeForm({ accountId, existingType, onSave, onCancel }: {
       .eq('account_id', accountId)
       .eq('is_active', true)
       .order('cast_name')
+      .limit(100)
       .then(({ data }) => {
         if (data) setAvailableCasts(data.map((c: { cast_name: string }) => c.cast_name));
       });
@@ -2741,7 +2751,7 @@ function TypeForm({ accountId, existingType, onSave, onCancel }: {
         .eq('cast_name', benchmarkCast)
         .filter('ended_at', 'not.is', null)
         .order('started_at', { ascending: false })
-        .limit(20);
+        .limit(500);
 
       const { data: tips } = await supabase
         .from('spy_messages')
@@ -2751,7 +2761,7 @@ function TypeForm({ accountId, existingType, onSave, onCancel }: {
         .in('msg_type', ['tip', 'gift'])
         .gt('tokens', 0)
         .order('message_time', { ascending: false })
-        .limit(2000);
+        .limit(10000);
 
       if (sessions && sessions.length > 0 && tips) {
         const sessionRevenues: number[] = [];

@@ -88,7 +88,7 @@ export default function CastsPage() {
   useEffect(() => {
     if (!user) return;
     const supabase = createClient();
-    supabase.from('accounts').select('*').then(({ data }) => {
+    supabase.from('accounts').select('*').limit(100).then(({ data }) => {
       if (data && data.length > 0) {
         setAccounts(data);
         setSelectedAccount(data[0].id);
@@ -108,6 +108,7 @@ export default function CastsPage() {
       .eq('account_id', selectedAccount)
       .eq('is_active', true)
       .order('created_at', { ascending: true })
+      .limit(100)
       .then(async (castsRes) => {
         const casts = castsRes.data || [];
         setRegisteredCasts(casts);
