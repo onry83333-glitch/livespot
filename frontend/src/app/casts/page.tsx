@@ -21,6 +21,79 @@ function getWeekStartJST(offset = 0): Date {
   return new Date(monday.getTime() - 9 * 60 * 60 * 1000);
 }
 
+/** coin_transactions の週次集計を取得。RPC優先、未適用時はページネーションフォールバック */
+async function fetchWeeklyCoinStats(
+  supabase: ReturnType<typeof createClient>,
+  accountId: string,
+  castNames: string[],
+  thisWeekStart: Date,
+  lastWeekStart: Date,
+  todayStart: Date,
+): Promise<{ weekly: WeeklyCoinStats[]; todayMap: Record<string, number> }> {
+  // 1. RPC を試行（get_weekly_coin_stats が適用済みなら高速）
+  try {
+    const { data, error } = await supabase.rpc('get_weekly_coin_stats', {
+      p_account_id: accountId,
+      p_cast_names: castNames,
+      p_this_week_start: thisWeekStart.toISOString(),
+      p_last_week_start: lastWeekStart.toISOString(),
+      p_today_start: todayStart.toISOString(),
+    });
+    if (!error && data) {
+      const weekly = (data as { cast_name: string; this_week: number; last_week: number; today: number }[])
+        .map(r => ({ cast_name: r.cast_name, this_week: r.this_week, last_week: r.last_week }));
+      const todayMap: Record<string, number> = {};
+      for (const r of data as { cast_name: string; today: number }[]) {
+        if (r.today > 0) todayMap[r.cast_name] = r.today;
+      }
+      return { weekly, todayMap };
+    }
+  } catch {
+    // RPC未適用 — フォールバックへ
+  }
+
+  // 2. フォールバック: ページネーションで全件取得（PostgREST 1000行制限回避）
+  const PAGE_SIZE = 1000;
+  let allRows: { cast_name: string; tokens: number; date: string }[] = [];
+  let from = 0;
+  let hasMore = true;
+  while (hasMore) {
+    const { data } = await supabase
+      .from('coin_transactions')
+      .select('cast_name, tokens, date')
+      .eq('account_id', accountId)
+      .in('cast_name', castNames)
+      .gte('date', lastWeekStart.toISOString())
+      .order('id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (data && data.length > 0) {
+      allRows = allRows.concat(data);
+      hasMore = data.length === PAGE_SIZE;
+      from += PAGE_SIZE;
+    } else {
+      hasMore = false;
+    }
+  }
+
+  const weeklyMap = new Map<string, { this_week: number; last_week: number }>();
+  const todayMap: Record<string, number> = {};
+  for (const row of allRows) {
+    const prev = weeklyMap.get(row.cast_name) || { this_week: 0, last_week: 0 };
+    const rowDate = new Date(row.date);
+    if (rowDate >= thisWeekStart) {
+      prev.this_week += row.tokens || 0;
+    } else {
+      prev.last_week += row.tokens || 0;
+    }
+    weeklyMap.set(row.cast_name, prev);
+    if (rowDate >= todayStart) {
+      todayMap[row.cast_name] = (todayMap[row.cast_name] || 0) + (row.tokens || 0);
+    }
+  }
+  const weekly = Array.from(weeklyMap.entries()).map(([cast_name, v]) => ({ cast_name, ...v }));
+  return { weekly, todayMap };
+}
+
 interface CastStats {
   cast_name: string;
   total_messages: number;
@@ -132,17 +205,30 @@ export default function CastsPage() {
           Date.UTC(jstNow.getUTCFullYear(), jstNow.getUTCMonth(), jstNow.getUTCDate()) - 9 * 3600000
         );
 
-        // 全クエリを並列実行
-        const [statsRes, coinRes, spyLiveRes, rev30dRes, alertsRes, dmRes] = await Promise.all([
+        // 全クエリを並列実行（週次コイン集計はRPC優先+ページネーションフォールバック）
+        const [statsRes, coinStatsResult, spyLiveRes, rev30dRes, alertsRes, dmRes] = await Promise.all([
           supabase.rpc('get_cast_stats', { p_account_id: selectedAccount, p_cast_names: castNames }),
-          supabase.from('coin_transactions').select('cast_name, tokens, date')
-            .eq('account_id', selectedAccount).in('cast_name', castNames)
-            .gte('date', lastWeekStart.toISOString()).limit(10000),
+          fetchWeeklyCoinStats(supabase, selectedAccount, castNames, thisWeekStart, lastWeekStart, todayStartUTC),
           supabase.from('spy_messages').select('cast_name, created_at')
             .eq('account_id', selectedAccount).order('created_at', { ascending: false }).limit(200),
-          // Dashboard KPIs
-          supabase.from('coin_transactions').select('tokens')
-            .eq('account_id', selectedAccount).gte('date', since30d).limit(50000),
+          // Dashboard KPI: 30日売上（ページネーション）
+          (async () => {
+            let total = 0;
+            let from = 0;
+            const PS = 1000;
+            let more = true;
+            while (more) {
+              const { data } = await supabase.from('coin_transactions').select('tokens')
+                .eq('account_id', selectedAccount).gte('date', since30d)
+                .order('id', { ascending: true }).range(from, from + PS - 1);
+              if (data && data.length > 0) {
+                total += data.reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
+                more = data.length === PS;
+                from += PS;
+              } else { more = false; }
+            }
+            return { data: total };
+          })(),
           supabase.from('spy_messages').select('id', { count: 'exact', head: true })
             .eq('account_id', selectedAccount).eq('is_vip', true)
             .gte('message_time', todayStartUTC.toISOString()),
@@ -151,25 +237,8 @@ export default function CastsPage() {
         ]);
 
         setCastStats((statsRes.data || []) as CastStats[]);
-
-        // 週別コイン集計 + 今日のコイン
-        const weeklyMap = new Map<string, { this_week: number; last_week: number }>();
-        const todayMap: Record<string, number> = {};
-        (coinRes.data || []).forEach((row: { cast_name: string; tokens: number; date: string }) => {
-          const prev = weeklyMap.get(row.cast_name) || { this_week: 0, last_week: 0 };
-          const rowDate = new Date(row.date);
-          if (rowDate >= thisWeekStart) {
-            prev.this_week += row.tokens || 0;
-          } else {
-            prev.last_week += row.tokens || 0;
-          }
-          weeklyMap.set(row.cast_name, prev);
-          if (rowDate >= todayStartUTC) {
-            todayMap[row.cast_name] = (todayMap[row.cast_name] || 0) + (row.tokens || 0);
-          }
-        });
-        setWeeklyStats(Array.from(weeklyMap.entries()).map(([cast_name, v]) => ({ cast_name, ...v })));
-        setTodayCoinsByCast(todayMap);
+        setWeeklyStats(coinStatsResult.weekly);
+        setTodayCoinsByCast(coinStatsResult.todayMap);
 
         // Live status
         const liveSet = new Set<string>();
@@ -182,7 +251,7 @@ export default function CastsPage() {
         setLiveCastSet(liveSet);
 
         // Dashboard KPIs
-        const rev30d = (rev30dRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);
+        const rev30d = typeof rev30dRes.data === 'number' ? rev30dRes.data : 0;
         setDashKpi({ revenue30d: rev30d, alertsToday: alertsRes.count ?? 0, dmSent7d: dmRes.count ?? 0 });
 
         setLoading(false);
