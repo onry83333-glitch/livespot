@@ -51,16 +51,22 @@ async function fetchWeeklyCoinStats(
       return { weekly, todayMap };
     }
   } catch {
-    // RPC未適用 — フォールバックへ
+    // RPC未適用 — フォールバックへ（ネットワークエラー等）
   }
+  // RPC が未適用または空結果の場合ここに到達
+  console.warn('[fetchWeeklyCoinStats] RPC未適用 — フォールバック(keyset pagination)で集計');
 
-  // 2. フォールバック: keyset pagination で全件取得（PostgREST max_rows=1000 回避）
-  const PAGE_SIZE = 1000;
-  let allRows: { id: number; cast_name: string; tokens: number; date: string }[] = [];
-  let lastId = 0;
-  let hasMore = true;
-  while (hasMore) {
-    const { data } = await supabase
+  // 2. フォールバック: keyset pagination で全件取得
+  // PAGE_SIZE は PostgREST max_rows（デフォルト1000）未満にする。
+  // max_rows と同値だと「丁度1000件返却→もう無いと判定」で打ち切りの可能性あり。
+  const PAGE_SIZE = 500;
+  const MAX_PAGES = 20; // 安全弁: 最大10,000行
+  let allRows: { id: number | string; cast_name: string; tokens: number; date: string }[] = [];
+  let lastId: number | string = 0;
+  let pages = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { data, error: fbErr } = await supabase
       .from('coin_transactions')
       .select('id, cast_name, tokens, date')
       .eq('account_id', accountId)
@@ -69,13 +75,11 @@ async function fetchWeeklyCoinStats(
       .gt('id', lastId)
       .order('id', { ascending: true })
       .limit(PAGE_SIZE);
-    if (data && data.length > 0) {
-      allRows = allRows.concat(data);
-      lastId = data[data.length - 1].id;
-      hasMore = data.length === PAGE_SIZE;
-    } else {
-      hasMore = false;
-    }
+    if (fbErr || !data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    lastId = data[data.length - 1].id;
+    pages++;
+    if (data.length < PAGE_SIZE || pages >= MAX_PAGES) break;
   }
 
   const weeklyMap = new Map<string, { this_week: number; last_week: number }>();
