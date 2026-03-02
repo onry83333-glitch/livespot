@@ -333,12 +333,20 @@ export async function pollViewers(
   castName: string,
   authToken?: string,
   cfClearance?: string,
+  sessionCookies?: string,
 ): Promise<ViewerResult> {
   const url = STRIPCHAT.viewerUrl(castName);
   const headers: Record<string, string> = { ...FETCH_HEADERS };
 
-  // v2 /members API is public (no auth needed), but add cookies for compatibility
-  if (cfClearance) {
+  // /members API requires authenticated session cookies for reliable access
+  if (sessionCookies) {
+    let cookieStr = sessionCookies;
+    // Merge cf_clearance from Playwright if not already present
+    if (cfClearance && !cookieStr.includes('cf_clearance=')) {
+      cookieStr += `; cf_clearance=${cfClearance}`;
+    }
+    headers['Cookie'] = cookieStr;
+  } else if (cfClearance) {
     headers['Cookie'] = `cf_clearance=${cfClearance}`;
   }
 

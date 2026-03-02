@@ -72,6 +72,11 @@ let currentCfClearance = '';
 let lastAuthRefreshAt = 0;
 const AUTH_DEBOUNCE_MS = 10_000;
 
+// Session cookies — stripchat_sessions テーブルから取得（viewer list認証用）
+let cachedSessionCookies: string | null = null;
+let lastSessionCookieFetch = 0;
+const SESSION_COOKIE_CACHE_MS = 5 * 60 * 1000; // 5分キャッシュ
+
 const retryTracker = new RetryTracker();
 
 // ----- Helpers -----
@@ -117,6 +122,52 @@ async function handleAuthError(): Promise<void> {
     wsClient.setCfClearance(currentCfClearance);
     wsClient.disconnect();
     wsClient.connect();
+  }
+}
+
+// ----- Session cookies for viewer list (registered_casts only) -----
+
+async function getSessionCookies(): Promise<string | null> {
+  if (CAST_SOURCE !== 'registered_casts') return null;
+
+  const now = Date.now();
+  if (cachedSessionCookies && now - lastSessionCookieFetch < SESSION_COOKIE_CACHE_MS) {
+    return cachedSessionCookies;
+  }
+
+  try {
+    const sb = getSupabase();
+    const { data } = await sb
+      .from('stripchat_sessions')
+      .select('cookies_json, session_cookie')
+      .eq('account_id', ACCOUNT_ID)
+      .eq('is_valid', true)
+      .maybeSingle();
+
+    if (!data) {
+      log.debug('No valid stripchat_session for viewer list auth');
+      lastSessionCookieFetch = now;
+      cachedSessionCookies = null;
+      return null;
+    }
+
+    const cj = data.cookies_json as Record<string, string> | null;
+    if (cj && Object.keys(cj).length > 0) {
+      cachedSessionCookies = Object.entries(cj).map(([k, v]) => `${k}=${v}`).join('; ');
+    } else if (data.session_cookie) {
+      cachedSessionCookies = `stripchat_com_sessionId=${data.session_cookie}`;
+    } else {
+      cachedSessionCookies = null;
+    }
+
+    lastSessionCookieFetch = now;
+    if (cachedSessionCookies) {
+      log.info('Session cookies acquired for viewer list auth');
+    }
+    return cachedSessionCookies;
+  } catch (err) {
+    log.warn(`Session cookie fetch failed: ${err}`);
+    return null;
   }
 }
 
@@ -319,11 +370,18 @@ async function doPollViewerList(): Promise<void> {
   const failKey = `viewers:${CAST_NAME}`;
   if (!retryTracker.shouldRetry(failKey)) return;
 
-  const result = await pollViewers(CAST_NAME, currentAuthToken, currentCfClearance);
+  const sessionCookies = await getSessionCookies();
+  const result = await pollViewers(CAST_NAME, currentAuthToken, currentCfClearance, sessionCookies);
 
   if (result.httpStatus !== 200) {
     if (retryTracker.getFailureCount(failKey) === 0) {
-      log.warn(`Viewer list failed (HTTP ${result.httpStatus})`);
+      log.warn(`Viewer list failed (HTTP ${result.httpStatus})${sessionCookies ? ' with session cookies' : ' without auth'}`);
+    }
+    // 401 with session cookies → invalidate cookie cache
+    if (result.httpStatus === 401 && sessionCookies) {
+      cachedSessionCookies = null;
+      lastSessionCookieFetch = 0;
+      log.warn('Session cookies expired — will re-fetch next cycle');
     }
     retryTracker.recordFailure(failKey);
     return;
