@@ -11,6 +11,7 @@ import type { TicketShow } from '@/lib/ticket-show-detector';
 import type { TicketShowCVR, ViewerSnapshot } from '@/lib/cvr-calculator';
 import Link from 'next/link';
 import type { SpyCast, SpyMessage } from '@/types';
+import { mapChatLog } from '@/lib/table-mappers';
 
 type SpyDetailTab = 'overview' | 'sessions' | 'users' | 'ticket' | 'profile' | 'screenshots' | 'format';
 
@@ -148,12 +149,12 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
         if (data && data.length > 0) setStats(data[0]);
       });
 
-    // Top tippers from spy_messages
-    supabase.from('spy_messages')
-      .select('user_name, tokens')
+    // Top tippers from chat_logs
+    supabase.from('chat_logs')
+      .select('username, tokens')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .in('msg_type', ['tip', 'gift'])
+      .in('message_type', ['tip', 'gift'])
       .gt('tokens', 0)
       .order('tokens', { ascending: false })
       .limit(50000)
@@ -161,7 +162,7 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
         if (data) {
           const tipMap = new Map<string, number>();
           data.forEach(r => {
-            if (r.user_name) tipMap.set(r.user_name, (tipMap.get(r.user_name) || 0) + (r.tokens || 0));
+            if (r.username) tipMap.set(r.username, (tipMap.get(r.username) || 0) + (r.tokens || 0));
           });
           const sorted = Array.from(tipMap.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([user_name, total_tokens]) => ({ user_name, total_tokens }));
           setTopTippers(sorted);
@@ -169,14 +170,14 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
       });
 
     // Recent messages
-    supabase.from('spy_messages')
+    supabase.from('chat_logs')
       .select('*')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .order('message_time', { ascending: false })
+      .order('timestamp', { ascending: false })
       .limit(20)
       .then(({ data }) => {
-        if (data) setRecentMessages(data.reverse() as SpyMessage[]);
+        if (data) setRecentMessages(data.map(mapChatLog).reverse() as SpyMessage[]);
       });
 
     // Load cast type if assigned
@@ -405,8 +406,8 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
       // 2. spy_messagesからセッション別TIP件数・ユニークユーザー数を集計
       const sessionIds = sessionRows.map(s => s.session_id);
       const { data: msgs } = await supabase
-        .from('spy_messages')
-        .select('session_id, msg_type, user_name')
+        .from('chat_logs')
+        .select('session_id, message_type, username')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
         .in('session_id', sessionIds)
@@ -420,8 +421,8 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
           aggMap.set(m.session_id, { tip_count: 0, unique_users: new Set() });
         }
         const agg = aggMap.get(m.session_id)!;
-        if (m.msg_type === 'tip' || m.msg_type === 'gift') agg.tip_count++;
-        if (m.user_name) agg.unique_users.add(m.user_name);
+        if (m.message_type === 'tip' || m.message_type === 'gift') agg.tip_count++;
+        if (m.username) agg.unique_users.add(m.username);
       }
 
       // 4. マージ
@@ -609,23 +610,23 @@ function TicketTab({ castName, accountId }: { castName: string; accountId: strin
       since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     }
 
-    let query = supabase.from('spy_messages')
-      .select('message_time, user_name, tokens')
+    let query = supabase.from('chat_logs')
+      .select('timestamp, username, tokens')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .in('msg_type', ['tip', 'gift'])
+      .in('message_type', ['tip', 'gift'])
       .gt('tokens', 0)
-      .gte('message_time', since)
-      .order('message_time', { ascending: true })
+      .gte('timestamp', since)
+      .order('timestamp', { ascending: true })
       .limit(50000);
 
-    if (until) query = query.lte('message_time', until);
+    if (until) query = query.lte('timestamp', until);
 
     query.then(async ({ data: tipData }) => {
       if (!tipData || tipData.length === 0) {
         setTicketShows([]); setTicketCVRs([]); setLoading(false); return;
       }
-      const detected = detectTicketShows(tipData.map(t => ({ tokens: t.tokens, message_time: t.message_time, user_name: t.user_name || '' })));
+      const detected = detectTicketShows(tipData.map(t => ({ tokens: t.tokens, message_time: t.timestamp, user_name: t.username || '' })));
       setTicketShows(detected);
 
       const cvrResults: TicketShowCVR[] = [];

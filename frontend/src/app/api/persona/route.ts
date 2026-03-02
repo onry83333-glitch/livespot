@@ -413,13 +413,14 @@ async function buildUserPrompt(
       const scenarioType = context.scenario_type as string || 'thankyou_regular';
       const stepNumber = context.step_number as number || 1;
 
-      const { data: spyMsgs } = await supabase
-        .from('spy_messages')
-        .select('message, message_time, msg_type, tokens')
-        .eq('user_name', userName)
+      const { data: rawSpyMsgs } = await supabase
+        .from('chat_logs')
+        .select('message, timestamp, message_type, tokens')
+        .eq('username', userName)
         .eq('cast_name', castName)
-        .order('message_time', { ascending: false })
+        .order('timestamp', { ascending: false })
         .limit(10);
+      const spyMsgs = (rawSpyMsgs || []).map(r => ({ message: r.message, message_time: r.timestamp, msg_type: r.message_type, tokens: r.tokens }));
 
       const { data: coinTx } = await supabase
         .from('coin_transactions')
@@ -434,14 +435,14 @@ async function buildUserPrompt(
       const lastTxDate = coinTx?.[0]?.date || '不明';
 
       const { data: paidUser } = await supabase
-        .from('paid_users')
-        .select('total_coins, last_seen')
-        .eq('user_name', userName)
+        .from('user_profiles')
+        .select('total_tokens, last_seen')
+        .eq('username', userName)
         .eq('cast_name', castName)
         .single();
 
       const segment = paidUser
-        ? getSegmentLabel(paidUser.total_coins, paidUser.last_seen)
+        ? getSegmentLabel(paidUser.total_tokens, paidUser.last_seen)
         : 'S10:単発';
 
       const { data: lastDms } = await supabase
@@ -480,12 +481,13 @@ ${spyLog}
     case 'fb_report': {
       const sessionId = context.session_id as string;
 
-      const { data: messages } = await supabase
-        .from('spy_messages')
-        .select('user_name, message, msg_type, tokens, message_time')
+      const { data: rawMessages } = await supabase
+        .from('chat_logs')
+        .select('username, message, message_type, tokens, timestamp')
         .eq('session_id', sessionId)
-        .order('message_time', { ascending: true })
+        .order('timestamp', { ascending: true })
         .limit(50000);
+      const messages = (rawMessages || []).map(r => ({ user_name: r.username, message: r.message, msg_type: r.message_type, tokens: r.tokens, message_time: r.timestamp }));
 
       const msgs = messages || [];
       const uniqueUsers = new Set(msgs.map(m => m.user_name).filter(Boolean)).size;

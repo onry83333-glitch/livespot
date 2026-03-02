@@ -101,6 +101,34 @@ export async function markError(sb: SupabaseClient, taskId: number, errorMsg: st
 }
 
 /**
+ * テストモードでブロックされた送信を記録
+ */
+export async function markBlockedTestMode(sb: SupabaseClient, taskId: number, username: string): Promise<void> {
+  await sb
+    .from('dm_send_log')
+    .update({
+      status: 'blocked_test_mode',
+      sent_via: 'api',
+      error: `TEST MODE: blocked send to ${username} — ホワイトリスト外`,
+    })
+    .eq('id', taskId);
+}
+
+/**
+ * キャンペーン未設定でブロックされた送信を記録
+ */
+export async function markBlockedNoCampaign(sb: SupabaseClient, taskId: number): Promise<void> {
+  await sb
+    .from('dm_send_log')
+    .update({
+      status: 'blocked_no_campaign',
+      sent_via: 'api',
+      error: 'campaign_idが未設定のため送信拒否',
+    })
+    .eq('id', taskId);
+}
+
+/**
  * タスクをキューに戻す（セッション切れ時）
  */
 export async function requeue(sb: SupabaseClient, taskId: number): Promise<void> {

@@ -142,7 +142,7 @@ export class StripchatAPI {
 
   // ----------------------------------------------------------
   // resolveUserId — username → Stripchat userId 解決
-  //   paid_users キャッシュ → Stripchat API フォールバック
+  //   user_profiles キャッシュ → Stripchat API フォールバック
   // ----------------------------------------------------------
   async resolveUserId(
     username: string,
@@ -150,11 +150,11 @@ export class StripchatAPI {
     accountId?: string,
     castName?: string,
   ): Promise<{ userId: string | null; error?: string }> {
-    // 1. paid_users キャッシュ確認
+    // 1. user_profiles キャッシュ確認
     let query = supabase
-      .from('paid_users')
+      .from('user_profiles')
       .select('user_id_stripchat')
-      .eq('user_name', username)
+      .eq('username', username)
       .not('user_id_stripchat', 'is', null);
     if (accountId) query = query.eq('account_id', accountId);
     if (castName) query = query.eq('cast_name', castName);
@@ -193,9 +193,9 @@ export class StripchatAPI {
 
       // キャッシュ保存（ベストエフォート）
       let updateQuery = supabase
-        .from('paid_users')
+        .from('user_profiles')
         .update({ user_id_stripchat: userId } as Record<string, unknown>)
-        .eq('user_name', username);
+        .eq('username', username);
       if (accountId) updateQuery = updateQuery.eq('account_id', accountId);
       if (castName) updateQuery = updateQuery.eq('cast_name', castName);
       await updateQuery.then(() => {});

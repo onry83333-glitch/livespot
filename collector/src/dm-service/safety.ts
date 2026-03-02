@@ -4,9 +4,37 @@
  * P0-5: キャスト身元検証ゲート
  * - ログイン中のStripchatセッションと送信先キャストの照合
  * - 別キャストのアカウントでDMを送信しないようブロック
+ *
+ * テストモード:
+ * - DM_TEST_MODE=true (デフォルト) でホワイトリスト外への送信をブロック
+ * - 本番送信時のみ DM_TEST_MODE=false に明示設定する
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { SessionData } from './stripchat-api.js';
+
+// ============================================================
+// Test mode (DM_TEST_MODE)
+// ============================================================
+
+/** テストモードがONか（デフォルト: true） */
+export const DM_TEST_MODE = (process.env.DM_TEST_MODE ?? 'true').toLowerCase() !== 'false';
+
+/** テスト送信を許可するSAKURAアカウントのホワイトリスト */
+export const TEST_WHITELIST: ReadonlySet<string> = new Set([
+  'pojipojipoji',
+  'kantou1234',
+  'Nekomeem34',
+]);
+
+/**
+ * テストモード時にホワイトリスト外ユーザーへの送信をブロック
+ * @returns ブロックすべき場合はエラーメッセージ、許可する場合はnull
+ */
+export function checkTestModeBlock(username: string): string | null {
+  if (!DM_TEST_MODE) return null;
+  if (TEST_WHITELIST.has(username)) return null;
+  return `TEST MODE: blocked send to ${username} — ホワイトリスト外`;
+}
 
 // ============================================================
 // Types
@@ -109,15 +137,25 @@ export function verifyCastIdentity(
 
 /**
  * campaign文字列が正規UIフローから発行されたものか検証
+ * 'TEST' は E2Eテスト用として明示的に許可
  */
 export function isValidCampaign(campaign: string): boolean {
   if (!campaign) return false;
   return (
+    campaign === 'TEST' ||
     campaign.startsWith('pipe') ||
     campaign.startsWith('seq') ||
     campaign.startsWith('bulk') ||
     campaign.includes('_sched_')
   );
+}
+
+/**
+ * campaign_idがNULL/空文字のDMを送信拒否するチェック
+ * @returns ブロックすべき場合はtrue
+ */
+export function isMissingCampaign(campaign: string | null | undefined): boolean {
+  return !campaign || campaign.trim() === '';
 }
 
 // ============================================================

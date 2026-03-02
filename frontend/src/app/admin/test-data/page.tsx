@@ -38,10 +38,10 @@ const TARGET_TABLES: TableInfo[] = [
     icon: '📨',
   },
   {
-    id: 'spy_messages',
-    table: 'spy_messages',
+    id: 'chat_logs',
+    table: 'chat_logs',
     label: 'SPYメッセージ',
-    description: 'msg_type = demo のデモ挿入データ',
+    description: 'message_type = demo のデモ挿入データ',
     icon: '💬',
   },
   {
@@ -314,8 +314,8 @@ export default function TestDataPage() {
             {' '}<span className="font-mono">20250217_test_*</span>, <span className="font-mono">test_*</span>
           </li>
           <li>
-            <span className="font-mono" style={{ color: 'var(--accent-primary)' }}>spy_messages</span>
-            {' — msg_type = demo（デモ挿入データ）'}
+            <span className="font-mono" style={{ color: 'var(--accent-primary)' }}>chat_logs</span>
+            {' — message_type = demo（デモ挿入データ）'}
           </li>
           <li>
             <span className="font-mono" style={{ color: 'var(--accent-primary)' }}>dm_trigger_logs</span>

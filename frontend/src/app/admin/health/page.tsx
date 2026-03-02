@@ -139,10 +139,10 @@ export default function HealthPage() {
       });
     }
 
-    // --- 2. spy_messages overflow 検出 ---
+    // --- 2. chat_logs overflow 検出 ---
     try {
       const { count, error } = await sb
-        .from('spy_messages')
+        .from('chat_logs')
         .select('*', { count: 'exact', head: true })
         .eq('account_id', accountId);
 
@@ -150,7 +150,7 @@ export default function HealthPage() {
 
       // tokens > 2147483647 でオーバーフロー検出
       const { count: overflowCount, error: overflowErr } = await sb
-        .from('spy_messages')
+        .from('chat_logs')
         .select('*', { count: 'exact', head: true })
         .eq('account_id', accountId)
         .gt('tokens', 2147483647);
@@ -160,20 +160,20 @@ export default function HealthPage() {
       const hasOverflow = (overflowCount || 0) > 0;
       results.push({
         id: 'overflow',
-        label: 'spy_messages オーバーフロー検出',
+        label: 'chat_logs オーバーフロー検出',
         icon: '🔢',
         status: hasOverflow ? 'error' : 'ok',
         summary: hasOverflow
           ? `${overflowCount}件のオーバーフロー検出`
           : `正常（合計 ${(count || 0).toLocaleString()}件）`,
         details: hasOverflow
-          ? [`tokens > 2,147,483,647 のレコード: ${overflowCount}件`, '修正: UPDATE spy_messages SET tokens = 0 WHERE tokens > 2147483647;']
+          ? [`tokens > 2,147,483,647 のレコード: ${overflowCount}件`, '修正: UPDATE chat_logs SET tokens = 0 WHERE tokens > 2147483647;']
           : [`総レコード数: ${(count || 0).toLocaleString()}`],
       });
     } catch (e: unknown) {
       results.push({
         id: 'overflow',
-        label: 'spy_messages オーバーフロー検出',
+        label: 'chat_logs オーバーフロー検出',
         icon: '🔢',
         status: 'error',
         summary: `エラー: ${getErrorMessage(e)}`,
@@ -285,10 +285,10 @@ export default function HealthPage() {
       });
     }
 
-    // --- 5. paid_users セグメント分布 ---
+    // --- 5. user_profiles セグメント分布 ---
     try {
       const { data: segData, error } = await sb
-        .from('paid_users')
+        .from('user_profiles')
         .select('cast_name, segment')
         .eq('account_id', accountId)
         .limit(50000);

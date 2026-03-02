@@ -20,11 +20,12 @@
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { StripchatDMApi, type SessionData } from './stripchat-api.js';
-import { fetchQueuedTasks, markSending, markSuccess, markError, requeue, getQueueCount } from './queue.js';
+import { fetchQueuedTasks, markSending, markSuccess, markError, markBlockedTestMode, markBlockedNoCampaign, requeue, getQueueCount } from './queue.js';
 import { waitForSlot, checkDailyLimit, isUserOnCooldown, SEND_INTERVAL_MS, DAILY_LIMIT } from './rate-limiter.js';
 import {
   getActiveSession, invalidateSession,
-  buildCastIdentityMap, verifyCastIdentity, isValidCampaign,
+  buildCastIdentityMap, verifyCastIdentity, isValidCampaign, isMissingCampaign,
+  checkTestModeBlock, DM_TEST_MODE, TEST_WHITELIST,
   resolveUserIdCached,
 } from './safety.js';
 
@@ -123,9 +124,26 @@ async function processBatch(accountId: string): Promise<{ sent: number; errors: 
 
   // 6. 1件ずつ処理
   for (const task of tasks) {
-    // 6a. キャンペーンフォーマット検証
+    // 6a-0. キャンペーン必須ゲート（campaign_id NULL → ブロック）
+    if (isMissingCampaign(task.campaign)) {
+      log('warn', `campaign_id未設定 — ブロック: ${task.user_name}`, { taskId: task.id });
+      await markBlockedNoCampaign(sb, task.id);
+      skipped++;
+      continue;
+    }
+
+    // 6a-1. キャンペーンフォーマット検証
     if (!isValidCampaign(task.campaign)) {
       log('warn', `不正なcampaign形式: "${task.campaign}" — スキップ`, { taskId: task.id });
+      skipped++;
+      continue;
+    }
+
+    // 6a-2. テストモードチェック（ホワイトリスト外 → ブロック）
+    const testBlock = checkTestModeBlock(task.user_name);
+    if (testBlock) {
+      log('warn', testBlock, { taskId: task.id, campaign: task.campaign });
+      await markBlockedTestMode(sb, task.id, task.user_name);
       skipped++;
       continue;
     }
@@ -172,6 +190,10 @@ async function processBatch(accountId: string): Promise<{ sent: number; errors: 
 
     // 6f. レート制限待機
     await waitForSlot();
+
+    // 6f-2. 送信前ログ（本番モードはWARN）
+    const sendLogLevel = DM_TEST_MODE ? 'info' : 'warn';
+    log(sendLogLevel, `SENDING DM: from=${task.cast_name} to=${task.user_name} campaign=${task.campaign} test_mode=${DM_TEST_MODE}`, { taskId: task.id });
 
     // 6g. DM送信
     try {
@@ -273,6 +295,8 @@ async function pollLoop(): Promise<void> {
     batchSize: BATCH_SIZE,
     accountId: ACCOUNT_ID || '(全アカウント)',
     castName: CAST_NAME || '(全キャスト)',
+    testMode: DM_TEST_MODE,
+    whitelist: DM_TEST_MODE ? [...TEST_WHITELIST] : '(無効)',
   });
 
   // PM2 ready signal

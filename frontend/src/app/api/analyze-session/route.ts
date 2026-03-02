@@ -53,36 +53,37 @@ export async function POST(request: NextRequest) {
 
   // --- 1. セッションの時間範囲を特定 ---
   const { data: sessionMsgs } = await supabase
-    .from('spy_messages')
-    .select('message_time')
+    .from('chat_logs')
+    .select('timestamp')
     .eq('account_id', account_id)
     .eq('session_id', session_id)
-    .order('message_time', { ascending: true })
+    .order('timestamp', { ascending: true })
     .limit(1);
 
   const { data: sessionMsgsEnd } = await supabase
-    .from('spy_messages')
-    .select('message_time')
+    .from('chat_logs')
+    .select('timestamp')
     .eq('account_id', account_id)
     .eq('session_id', session_id)
-    .order('message_time', { ascending: false })
+    .order('timestamp', { ascending: false })
     .limit(1);
 
   if (!sessionMsgs?.length || !sessionMsgsEnd?.length) {
     return NextResponse.json({ error: 'セッションデータがありません' }, { status: 404 });
   }
 
-  const sessionStart = sessionMsgs[0].message_time;
-  const sessionEnd = sessionMsgsEnd[0].message_time;
+  const sessionStart = sessionMsgs[0].timestamp;
+  const sessionEnd = sessionMsgsEnd[0].timestamp;
 
-  // --- 2. spy_messages 取得（チャット・チップ・入退室） ---
-  const { data: spyMessages } = await supabase
-    .from('spy_messages')
-    .select('message_time, msg_type, user_name, message, tokens, is_vip, metadata')
+  // --- 2. chat_logs 取得（チャット・チップ・入退室） ---
+  const { data: rawSpyMessages } = await supabase
+    .from('chat_logs')
+    .select('timestamp, message_type, username, message, tokens, is_vip, metadata')
     .eq('account_id', account_id)
     .eq('session_id', session_id)
-    .order('message_time', { ascending: true })
+    .order('timestamp', { ascending: true })
     .limit(10000);
+  const spyMessages = (rawSpyMessages || []).map(r => ({ message_time: r.timestamp, msg_type: r.message_type, user_name: r.username, message: r.message, tokens: r.tokens, is_vip: r.is_vip, metadata: r.metadata }));
 
   // --- 3. cast_transcripts 取得（文字起こし） ---
   const { data: transcripts } = await supabase

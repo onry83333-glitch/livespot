@@ -9,6 +9,7 @@ import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
 import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
+import { mapChatLog } from '@/lib/table-mappers';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 import DmSegmentSender from '@/components/dm-segment-sender';
 import DataSyncPanel from '@/components/data-sync-panel';
@@ -836,16 +837,16 @@ function CastDetailInner() {
   // ============================================================
   useEffect(() => {
     if (activeTab !== 'sessions' || !accountId) return;
-    sb.from('paid_users')
-      .select('user_name, total_coins')
+    sb.from('user_profiles')
+      .select('username, total_tokens')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .order('total_coins', { ascending: false })
+      .order('total_tokens', { ascending: false })
       .limit(500)
       .then(({ data }) => {
         const map = new Map<string, number>();
-        (data || []).forEach((u: { user_name: string; total_coins: number }) => {
-          map.set(u.user_name, u.total_coins);
+        (data || []).forEach((u: { username: string; total_tokens: number }) => {
+          map.set(u.username, u.total_tokens);
         });
         setPaidUserCoins(map);
       });
@@ -938,15 +939,15 @@ function CastDetailInner() {
     if (expandedSession === sessionKey) { setExpandedSession(null); return; }
     setExpandedSession(sessionKey);
     setSessionLogsLoading(true);
-    const { data } = await sb.from('spy_messages')
+    const { data } = await sb.from('chat_logs')
       .select('*')
       .eq('account_id', accountId!)
       .eq('cast_name', castName)
-      .gte('message_time', start)
-      .lte('message_time', end)
-      .order('message_time', { ascending: true })
+      .gte('timestamp', start)
+      .lte('timestamp', end)
+      .order('timestamp', { ascending: true })
       .limit(1000);
-    setSessionLogs((data || []) as SpyMessage[]);
+    setSessionLogs((data || []).map(mapChatLog) as SpyMessage[]);
     setSessionLogsLoading(false);
   }, [expandedSession, accountId, castName, sb]);
 
@@ -1448,16 +1449,16 @@ function CastDetailInner() {
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
-    // 最後のチップ（このキャストのspy_messages）
-    sb.from('spy_messages')
-      .select('user_name, tokens, message_time, message')
+    // 最後のチップ（このキャストのchat_logs）
+    sb.from('chat_logs')
+      .select('username, tokens, timestamp, message')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .in('msg_type', ['tip', 'gift'])
+      .in('message_type', ['tip', 'gift'])
       .gt('tokens', 0)
-      .order('message_time', { ascending: false })
+      .order('timestamp', { ascending: false })
       .limit(5)
-      .then(({ data }) => setLastTips((data || []) as typeof lastTips));
+      .then(({ data }) => setLastTips((data || []).map(r => ({ user_name: r.username, tokens: r.tokens, message_time: r.timestamp, message: r.message })) as typeof lastTips));
 
     // 直近のチケットチャット（このキャスト）
     sb.from('coin_transactions')

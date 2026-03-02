@@ -112,6 +112,7 @@ async function main() {
     cwd,
     env: {
       NODE_ENV: 'production',
+      DM_TEST_MODE: 'true',    // デフォルトON。本番送信時のみ 'false' に変更
     },
     autorestart: true,
     watch: false,
