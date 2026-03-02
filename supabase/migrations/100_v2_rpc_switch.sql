@@ -1146,7 +1146,7 @@ BEGIN
       WHERE cl.account_id = p_account_id AND cl.session_id::TEXT = ANY(v_session_ids) AND cl.tokens > 0 GROUP BY cl.message_type) t
   ),
   top5_chat AS (
-    SELECT COALESCE(jsonb_agg(jsonb_build_object('username', u.username, 'tokens', u.user_tokens, 'tip_count', u.user_tips) ORDER BY u.user_tokens DESC), '[]'::JSONB) AS top_list
+    SELECT COALESCE(jsonb_agg(jsonb_build_object('user_name', u.username, 'tokens', u.user_tokens, 'tip_count', u.user_tips) ORDER BY u.user_tokens DESC), '[]'::JSONB) AS top_list
     FROM (SELECT cl.username, SUM(cl.tokens)::BIGINT AS user_tokens, COUNT(*)::BIGINT AS user_tips FROM public.chat_logs cl
       WHERE cl.account_id = p_account_id AND cl.session_id::TEXT = ANY(v_session_ids) AND cl.tokens > 0 AND cl.username IS NOT NULL AND cl.username != ''
       GROUP BY cl.username ORDER BY SUM(cl.tokens) DESC LIMIT 5) u
@@ -1163,7 +1163,7 @@ BEGIN
   ),
   coin_user_stats AS (SELECT COUNT(*) FILTER (WHERE NOT cua.has_prior)::INTEGER AS new_u, COUNT(*) FILTER (WHERE cua.has_prior)::INTEGER AS ret_u FROM coin_user_agg cua),
   coin_top5 AS (
-    SELECT COALESCE(jsonb_agg(jsonb_build_object('username', cua.user_name, 'tokens', cua.user_tokens, 'types', cua.user_types, 'is_new', NOT cua.has_prior) ORDER BY cua.user_tokens DESC), '[]'::JSONB) AS top_list
+    SELECT COALESCE(jsonb_agg(jsonb_build_object('user_name', cua.user_name, 'tokens', cua.user_tokens, 'types', cua.user_types, 'is_new', NOT cua.has_prior) ORDER BY cua.user_tokens DESC), '[]'::JSONB) AS top_list
     FROM (SELECT * FROM coin_user_agg ORDER BY user_tokens DESC LIMIT 10) cua
   )
   SELECT v_session_ids[1], v_session_ids, v_cast,
@@ -1185,7 +1185,7 @@ DROP FUNCTION IF EXISTS public.get_transcript_timeline(UUID, TEXT, TEXT);
 
 CREATE OR REPLACE FUNCTION public.get_transcript_timeline(p_account_id UUID, p_cast_name TEXT, p_session_id TEXT)
 RETURNS TABLE(
-  event_time TIMESTAMPTZ, event_type TEXT, username TEXT, message TEXT,
+  event_time TIMESTAMPTZ, event_type TEXT, user_name TEXT, message TEXT,
   tokens INTEGER, coin_type TEXT, confidence NUMERIC, elapsed_sec INTEGER, is_highlight BOOLEAN
 ) LANGUAGE plpgsql SECURITY DEFINER AS $fn$
 DECLARE

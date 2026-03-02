@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
+import { mapChatLog } from '@/lib/table-mappers';
 import type { SpyMessage } from '@/types';
 
 interface UseRealtimeSpyOptions {
@@ -22,10 +23,10 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
   // 既知のメッセージIDセット（重複防止）
   const knownIdsRef = useRef(new Set<number>());
 
-  // キャスト一覧を取得（spy_messagesのdistinct cast_name — 直近のみ）
+  // キャスト一覧を取得（chat_logsのdistinct cast_name — 直近のみ）
   const loadCastNames = useCallback(async () => {
     let query = supabaseRef.current
-      .from('spy_messages')
+      .from('chat_logs')
       .select('cast_name')
       .order('created_at', { ascending: false })
       .limit(2000);
@@ -45,9 +46,9 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
   // DBからメッセージを取得（既存データとマージ）
   const loadMessages = useCallback(async () => {
     let query = supabaseRef.current
-      .from('spy_messages')
+      .from('chat_logs')
       .select('*')
-      .order('message_time', { ascending: false })
+      .order('timestamp', { ascending: false })
       .limit(INITIAL_LOAD_LIMIT);
     if (accountId) query = query.eq('account_id', accountId);
 
@@ -57,7 +58,7 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
       return;
     }
     if (data) {
-      const sorted = data.reverse(); // 古い順に並べる
+      const sorted = data.map(mapChatLog).reverse(); // chat_logs→SpyMessageに変換 + 古い順に並べる
 
       // 既知IDセットを更新
       const newIds = new Set<number>();
