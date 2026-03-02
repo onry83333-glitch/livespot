@@ -28,6 +28,7 @@ const navSections: NavSection[] = [
   {
     title: '管理',
     items: [
+      { href: '/admin/casts', icon: '🎭', label: 'キャスト管理' },
       { href: '/admin/test-data', icon: '🧹', label: 'テストデータ' },
     ],
   },

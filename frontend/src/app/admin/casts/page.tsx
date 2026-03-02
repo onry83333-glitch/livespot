@@ -159,6 +159,19 @@ export default function AdminCastsPage() {
     loadCasts();
   };
 
+  // 削除
+  const handleDelete = async (cast: RegisteredCast) => {
+    if (!confirm(`${cast.cast_name} を完全に削除しますか？\nこの操作は取り消せません。`)) return;
+    const sb = sbRef.current;
+    // コスト設定も削除
+    await sb.from('cast_cost_settings')
+      .delete()
+      .eq('account_id', selectedAccount)
+      .eq('cast_name', cast.cast_name);
+    await sb.from('registered_casts').delete().eq('id', cast.id);
+    loadCasts();
+  };
+
   if (!user) return null;
 
   const activeCasts = casts.filter(c => c.is_active);
@@ -404,10 +417,17 @@ export default function AdminCastsPage() {
                       {cast.display_name || '—'}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      <button onClick={() => handleToggleActive(cast)}
-                        className="btn-ghost text-[10px] py-1 px-3">
-                        有効化
-                      </button>
+                      <div className="flex gap-1 justify-end">
+                        <button onClick={() => handleToggleActive(cast)}
+                          className="btn-ghost text-[10px] py-1 px-3">
+                          有効化
+                        </button>
+                        <button onClick={() => handleDelete(cast)}
+                          className="text-[10px] py-1 px-2 rounded-lg hover:bg-rose-500/10 transition-colors"
+                          style={{ color: 'var(--accent-pink)' }}>
+                          削除
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
