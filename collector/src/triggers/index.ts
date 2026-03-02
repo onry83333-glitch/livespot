@@ -6,6 +6,7 @@ import { getSupabase } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { isInCooldown, isDailyLimitReached, isSegmentAllowed } from './cooldown.js';
 import { renderTemplate } from './template.js';
+import { guardDmSend, DmGuardError } from './dm-guard.js';
 import type {
   DmTrigger,
   DmTriggerRow,
@@ -295,6 +296,20 @@ export class TriggerEngine {
 
     // 4. Execute action
     if (trigger.action_type === 'direct_dm') {
+      const campaign = `trigger_${trigger.trigger_type}_${trigger.id.substring(0, 8)}`;
+
+      // DM安全ゲート: テストモード時ホワイトリスト外はスキップ + campaign必須チェック
+      try {
+        guardDmSend(ctx.userName, campaign);
+      } catch (e) {
+        if (e instanceof DmGuardError) {
+          log.warn(`DM guard blocked: ${e.message}`);
+          await this.logTriggerAction(trigger, ctx, 'skipped_test_mode');
+          return;
+        }
+        throw e;
+      }
+
       const message = trigger.message_template
         ? renderTemplate(trigger.message_template, ctx)
         : `Hi ${ctx.userName}!`;
@@ -308,7 +323,7 @@ export class TriggerEngine {
           user_name: ctx.userName,
           message,
           status: 'queued',
-          campaign: `trigger_${trigger.trigger_type}_${trigger.id.substring(0, 8)}`,
+          campaign,
           template_name: trigger.trigger_name,
         })
         .select('id')

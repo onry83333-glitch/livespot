@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { checkDailyDmLimit, checkCampaignLimit, getRemainingDailyQuota } from './dm-safety';
-import { guardDmSend, DmGuardError } from './dm-guard';
+import { guardDmSend } from './dm-guard';
 
 export interface QueueTarget {
   username: string;

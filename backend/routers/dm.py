@@ -10,6 +10,7 @@ from models.schemas import (
     DMStatusUpdate, DMTemplateCreate, DMLogResponse,
 )
 from services.adm_engine import run_adm_cycle
+from services.dm_guard import is_dm_test_mode, DM_TEST_WHITELIST
 
 router = APIRouter()
 
@@ -62,9 +63,19 @@ async def create_dm_batch(
     targets = body.targets[:remaining]
     batch_id = f"batch_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{user['user_id'][:8]}"
 
+    # DM安全ゲート: テストモード時ホワイトリスト外をフィルタ
+    test_mode = is_dm_test_mode()
+
     rows = []
+    blocked_count = 0
     for t in targets:
         user_name = _extract_username(t)
+
+        # テストモード時: ホワイトリスト外はブロック
+        if test_mode and user_name not in DM_TEST_WHITELIST:
+            blocked_count += 1
+            continue
+
         profile_url = t if t.startswith("http") else None
         row = {
             "account_id": account_id,
@@ -80,6 +91,12 @@ async def create_dm_batch(
         if cast_name:
             row["cast_name"] = cast_name
         rows.append(row)
+
+    if not rows:
+        raise HTTPException(
+            status_code=403,
+            detail=f"[DM_TEST_MODE] 全{blocked_count}名がホワイトリスト外のためブロック。許可: {', '.join(sorted(DM_TEST_WHITELIST))}",
+        )
 
     result = sb.table("dm_send_log").insert(rows).execute()
 
