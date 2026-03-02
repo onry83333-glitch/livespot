@@ -6,6 +6,7 @@ import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
+import { isDmTestMode, DM_TEST_WHITELIST, getDmGuardStatus } from '@/lib/dm-guard';
 import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
@@ -14,13 +15,14 @@ import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 import DmSegmentSender from '@/components/dm-segment-sender';
 import DataSyncPanel from '@/components/data-sync-panel';
 import { Accordion } from '@/components/accordion';
+import CastReportsTab from '@/components/cast-reports-tab';
 
 
 /* ============================================================
    Types
    ============================================================ */
 // M-6: screenshots タブはデータ0件のため非表示。SPY基盤安定後に再表示
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'settings';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'reports' | 'settings';
 
 interface CastStatsData {
   total_messages: number;
@@ -251,6 +253,7 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'sessions',   icon: '📺', label: 'セッション' },
   { key: 'dm',         icon: '💬', label: 'DM' },
   { key: 'analytics',  icon: '📈', label: 'アナリティクス' },
+  { key: 'reports',    icon: '📋', label: '配信レポート' },
   { key: 'settings',   icon: '⚙', label: '設定' },
 ];
 
@@ -336,6 +339,10 @@ function CastDetailInner() {
   // DM Delivery mode & Send order
   const [dmDeliveryMode, setDmDeliveryMode] = useState<'fast_text' | 'image_pipeline'>('fast_text');
   const [dmSendOrder, setDmSendOrder] = useState<'text_only' | 'image_only' | 'text_then_image' | 'image_then_text'>('text_only');
+
+  // DM安全ゲート: 送信先プレビュー確認
+  const [dmShowPreview, setDmShowPreview] = useState(false);
+  const [dmPreviewConfirmed, setDmPreviewConfirmed] = useState(false);
 
   // DM Safety: 3-step confirmation
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -1101,6 +1108,31 @@ function CastDetailInner() {
     const needsMessage = dmSendOrder !== 'image_only';
     const needsImage = dmDeliveryMode === 'image_pipeline' && (dmSendOrder === 'image_only' || dmSendOrder === 'text_then_image' || dmSendOrder === 'image_then_text');
     if (dmTargets.size === 0 || (needsMessage && !dmMessage.trim()) || (needsImage && !dmImageFile) || !accountId) return;
+
+    // DM安全ゲート: campaign必須チェック（タグ未入力時はブロック）
+    if (!dmCampaign.trim()) {
+      setDmError('キャンペーンタグは必須です。送信目的を識別するタグを入力してください。');
+      return;
+    }
+
+    // DM安全ゲート: テストモード時ホワイトリスト外チェック
+    const guardStatus = getDmGuardStatus();
+    if (guardStatus.isTestMode) {
+      const blocked = Array.from(dmTargets).filter(u => !DM_TEST_WHITELIST.has(u));
+      if (blocked.length > 0) {
+        const sample = blocked.slice(0, 5).join(', ');
+        const suffix = blocked.length > 5 ? ` 他${blocked.length - 5}名` : '';
+        setDmError(`[テストモード] ホワイトリスト外のユーザー${blocked.length}名をブロック: ${sample}${suffix}\n許可: ${guardStatus.whitelist.join(', ')}\n本番送信するにはDM_TEST_MODE=falseを設定`);
+        return;
+      }
+    }
+
+    // DM安全ゲート: 送信先プレビュー確認（未確認ならプレビューを表示して中断）
+    if (!dmPreviewConfirmed) {
+      setDmShowPreview(true);
+      return;
+    }
+
     setDmSending(true); setDmError(null); setDmResult(null);
     try {
       const usernames = Array.from(dmTargets);
@@ -1210,6 +1242,8 @@ function CastDetailInner() {
       setDmMessage('');
       setDmCampaign('');
       setDmImageFile(null);
+      setDmPreviewConfirmed(false);
+      setDmShowPreview(false);
       if (dmImagePreview) { URL.revokeObjectURL(dmImagePreview); setDmImagePreview(null); }
 
       // ログ再取得
@@ -1225,7 +1259,7 @@ function CastDetailInner() {
       setDmError(errMsg);
     }
     setDmSending(false);
-  }, [dmTargets, dmMessage, dmCampaign, dmIsTest, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview, dmDeliveryMode, dmSendOrder]);
+  }, [dmTargets, dmMessage, dmCampaign, dmIsTest, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview, dmDeliveryMode, dmSendOrder, dmPreviewConfirmed]);
 
   const toggleTarget = useCallback((un: string) => {
     setDmTargets(prev => { const n = new Set(prev); if (n.has(un)) n.delete(un); else n.add(un); return n; });
@@ -6009,6 +6043,11 @@ function CastDetailInner() {
             </div>
           )}
 
+          {/* ============ REPORTS (配信レポート) ============ */}
+          {activeTab === 'reports' && accountId && castInfo && (
+            <CastReportsTab accountId={accountId} castId={castInfo.id} castName={castName} />
+          )}
+
           {/* ============ SETTINGS (設定) ============ */}
           {activeTab === 'settings' && (
             <div className="space-y-4">
@@ -6536,6 +6575,74 @@ function CastDetailInner() {
                   color: 'white',
                 }}>
                 {dmSending ? '送信中...' : '送信実行'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DM安全ゲート: 送信先プレビューモーダル */}
+      {dmShowPreview && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="glass-card p-6 rounded-2xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col" style={{ border: '1px solid rgba(56,189,248,0.2)' }}>
+            <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--accent-primary)' }}>
+              送信先リスト確認（必須）
+            </h3>
+
+            {isDmTestMode() && (
+              <div className="mb-3 p-2 rounded-lg text-[10px]" style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', color: 'var(--accent-amber)' }}>
+                DM_TEST_MODE: ON — ホワイトリスト以外への送信は自動ブロックされます
+              </div>
+            )}
+
+            <div className="mb-3 grid grid-cols-2 gap-2 text-[10px]">
+              <div className="glass-panel p-2 rounded-lg">
+                <span style={{ color: 'var(--text-muted)' }}>送信先</span>
+                <p className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>{dmTargets.size}名</p>
+              </div>
+              <div className="glass-panel p-2 rounded-lg">
+                <span style={{ color: 'var(--text-muted)' }}>キャンペーン</span>
+                <p className="font-bold text-sm truncate" style={{ color: 'var(--accent-primary)' }}>{dmCampaign || '(未設定)'}</p>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto mb-3 glass-panel rounded-lg p-2" style={{ maxHeight: '300px' }}>
+              <p className="text-[10px] font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>送信対象ユーザー:</p>
+              <div className="flex flex-wrap gap-1">
+                {Array.from(dmTargets).map(u => (
+                  <span key={u} className="text-[10px] px-2 py-0.5 rounded-full" style={{
+                    background: DM_TEST_WHITELIST.has(u) ? 'rgba(34,197,94,0.15)' : 'rgba(15,23,42,0.6)',
+                    border: `1px solid ${DM_TEST_WHITELIST.has(u) ? 'rgba(34,197,94,0.3)' : 'var(--border-glass)'}`,
+                    color: DM_TEST_WHITELIST.has(u) ? 'var(--accent-green)' : 'var(--text-secondary)',
+                  }}>
+                    {u}{DM_TEST_WHITELIST.has(u) && ' (WL)'}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-3 glass-panel rounded-lg p-2">
+              <p className="text-[10px] font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>メッセージ:</p>
+              <p className="text-[11px] whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                {dmMessage.length > 200 ? dmMessage.slice(0, 200) + '...' : dmMessage}
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setDmShowPreview(false); setDmPreviewConfirmed(false); }}
+                className="btn-ghost text-xs py-2 px-4 flex-1">
+                キャンセル
+              </button>
+              <button
+                onClick={() => {
+                  setDmPreviewConfirmed(true);
+                  setDmShowPreview(false);
+                  setTimeout(() => handleDmSend(), 100);
+                }}
+                className="text-xs py-2 px-4 flex-1 rounded-xl font-semibold"
+                style={{ background: 'linear-gradient(135deg, var(--accent-primary), #0284c7)', color: 'white' }}>
+                {dmTargets.size}名への送信を確認
               </button>
             </div>
           </div>
