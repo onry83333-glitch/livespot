@@ -23,6 +23,7 @@ import { RetryTracker, sleep } from './utils/reconnect.js';
 import { createLogger, setLogLevel } from './utils/logger.js';
 import { getAuth, invalidateAuth } from './auth/index.js';
 import { TriggerEngine } from './triggers/index.js';
+import { generatePostSessionReport } from './reports/post-session-report.js';
 import { captureThumbnailForCast } from './thumbnails.js';
 import { runCoinSync } from './coin-sync.js';
 import { createHash } from 'crypto';
@@ -263,6 +264,12 @@ async function doPollStatus(): Promise<void> {
       triggerEngine.onSessionTransition(ACCOUNT_ID, CAST_NAME, 'end', {
         sessionId, messageCount: wsMessageCount, tipTotal: wsTipTotal,
       }).catch((err) => log.error(`Trigger session end error: ${err}`));
+    }
+
+    // 配信後レポート自動生成（registered_castsのみ）
+    if (sessionId && sessionStartTime && CAST_SOURCE === 'registered_casts') {
+      generatePostSessionReport(ACCOUNT_ID, CAST_NAME, sessionId, sessionStartTime)
+        .catch((err) => log.error(`Post-session report error: ${err}`));
     }
 
     wsClient?.disconnect();

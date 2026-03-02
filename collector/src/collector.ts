@@ -24,6 +24,7 @@ import { RetryTracker, sleep } from './utils/reconnect.js';
 import { createLogger } from './utils/logger.js';
 import { getAuth, invalidateAuth } from './auth/index.js';
 import type { TriggerEngine } from './triggers/index.js';
+import { generatePostSessionReport } from './reports/post-session-report.js';
 
 const log = createLogger('collector');
 
@@ -399,6 +400,12 @@ async function pollStatus(state: CastState): Promise<void> {
         messageCount: state.wsMessageCount,
         tipTotal: state.wsTipTotal,
       }).catch((err) => log.error(`Trigger session end error: ${err}`));
+    }
+
+    // 配信後レポート自動生成（registered_castsのみ）
+    if (state.sessionId && state.sessionStartTime && target.source === 'registered_casts') {
+      generatePostSessionReport(target.accountId, target.castName, state.sessionId, state.sessionStartTime)
+        .catch((err) => log.error(`Post-session report error: ${err}`));
     }
 
     // Disconnect WebSocket
