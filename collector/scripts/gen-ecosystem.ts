@@ -127,6 +127,28 @@ async function main() {
     listen_timeout: 10000,
   });
 
+  // daily-briefing: 日次ブリーフィング自動生成（毎朝09:00 JST = 00:00 UTC）
+  apps.push({
+    name: 'daily-briefing',
+    script: 'src/reports/daily-briefing.ts',
+    interpreter: 'node',
+    interpreter_args: '--import tsx',
+    cwd,
+    env: {
+      NODE_ENV: 'production',
+      TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
+      TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '8050153948',
+    },
+    autorestart: false,
+    cron_restart: '0 0 * * *',  // 00:00 UTC = 09:00 JST
+    watch: false,
+    max_memory_restart: '150M',
+    log_file: `${cwd}/logs/daily-briefing.log`,
+    error_file: `${cwd}/logs/daily-briefing-error.log`,
+    out_file: `${cwd}/logs/daily-briefing-out.log`,
+    log_date_format: 'YYYY-MM-DD HH:mm:ss',
+  });
+
   for (const cast of registered) {
     apps.push({
       name: `cast-${cast.cast_name}`,

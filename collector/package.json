@@ -20,7 +20,8 @@
     "start:auth": "tsx src/auth-manager/index.ts",
     "start:dm": "tsx src/dm-service/index.ts",
     "start:coin-sync": "tsx src/coin-sync-service.ts",
-    "gen-ecosystem": "tsx scripts/gen-ecosystem.ts"
+    "gen-ecosystem": "tsx scripts/gen-ecosystem.ts",
+    "daily-briefing": "tsx src/reports/daily-briefing.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
