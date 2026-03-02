@@ -12,6 +12,7 @@ import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 import DmSegmentSender from '@/components/dm-segment-sender';
 import DataSyncPanel from '@/components/data-sync-panel';
+import { Accordion } from '@/components/accordion';
 
 
 /* ============================================================
@@ -2123,6 +2124,7 @@ function CastDetailInner() {
                   </div>
                 </div>
 
+                <Accordion id={`cast-${castName}-new-paying`} title="新規応援ユーザー（24h）" icon="🆕" defaultOpen={false}>
                 {/* New paying users */}
                 {newPayingUsers.length > 0 && (() => {
                   const MAX_COLLAPSED = 5;
@@ -2181,6 +2183,9 @@ function CastDetailInner() {
                   );
                 })()}
 
+                </Accordion>
+
+                <Accordion id={`cast-${castName}-recent-sessions`} title="直近の配信" icon="📺" badge={`${sessions.length}件`} defaultOpen={false}>
                 {/* Recent sessions */}
                 <div className="glass-card p-4">
                   <h3 className="text-sm font-bold mb-3">直近の配信</h3>
@@ -2212,6 +2217,7 @@ function CastDetailInner() {
                     </div>
                   )}
                 </div>
+                </Accordion>
               </div>
 
               {/* Data sync panel */}
@@ -2219,6 +2225,7 @@ function CastDetailInner() {
                 <DataSyncPanel supabase={sb} accountId={accountId} castName={castName} />
               )}
 
+              <Accordion id={`cast-${castName}-top-fans`} title="トップファン" icon="💰" badge={`${fans.length}名`} defaultOpen={false}>
               {/* Top fans */}
               <div className="glass-card p-4">
                 <h3 className="text-sm font-bold mb-3">💰 トップファン</h3>
@@ -2244,6 +2251,7 @@ function CastDetailInner() {
                   </div>
                 )}
               </div>
+              </Accordion>
             </div>
           )}
 
@@ -2392,6 +2400,7 @@ function CastDetailInner() {
                         </div>
                       </div>
 
+                      <Accordion id={`cast-${castName}-revenue-type`} title="売上タイプ別内訳" icon="📊" defaultOpen={false}>
                       {/* 売上タイプ別内訳 */}
                       {Object.keys(broadcastBreakdown.revenue_by_type).length > 0 && (
                         <div className="glass-card p-4">
@@ -2429,6 +2438,8 @@ function CastDetailInner() {
                           </div>
                         </div>
                       )}
+
+                      </Accordion>
 
                       {/* 新規 vs リピーター 比較 */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -2472,6 +2483,7 @@ function CastDetailInner() {
                         </div>
                       </div>
 
+                      <Accordion id={`cast-${castName}-top-supporters`} title="トップ5 応援ユーザー" icon="🏆" defaultOpen={false}>
                       {/* トップ5応援ユーザー */}
                       {broadcastBreakdown.top_users && broadcastBreakdown.top_users.length > 0 && (
                         <div className="glass-card p-4">
@@ -2517,6 +2529,9 @@ function CastDetailInner() {
                         </div>
                       )}
 
+                      </Accordion>
+
+                      <Accordion id={`cast-${castName}-new-user-list`} title="新規ユーザー（初回応援）" icon="🆕" defaultOpen={false}>
                       {/* 新規ユーザーリスト */}
                       {broadcastNewUsers.filter(u => !u.has_prior_history).length > 0 && (
                         <div className="glass-card p-4">
@@ -2556,6 +2571,9 @@ function CastDetailInner() {
                         </div>
                       )}
 
+                      </Accordion>
+
+                      <Accordion id={`cast-${castName}-broadcast-info`} title="配信情報" icon="📺" defaultOpen={false}>
                       {/* 配信情報 */}
                       <div className="glass-card p-4">
                         <h3 className="text-sm font-bold mb-2">配信情報</h3>
@@ -2585,6 +2603,7 @@ function CastDetailInner() {
                           )}
                         </div>
                       </div>
+                      </Accordion>
                     </>
                   ) : (
                     <div className="glass-card p-8 text-center">

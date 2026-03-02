@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/components/auth-provider';
+import { Accordion } from '@/components/accordion';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 
@@ -70,20 +71,20 @@ export default function DataQualityPage() {
     // --- CHECK 1: Gap Detection (5min+ gaps in recent messages) ---
     try {
       const { data: recentMsgs } = await sb
-        .from('spy_messages')
-        .select('cast_name, message_time, msg_type')
+        .from('chat_logs')
+        .select('cast_name, timestamp, message_type')
         .eq('account_id', accountId)
-        .in('msg_type', ['chat', 'tip'])
-        .gte('message_time', oneDayAgo.toISOString())
+        .in('message_type', ['chat', 'tip'])
+        .gte('timestamp', oneDayAgo.toISOString())
         .order('cast_name')
-        .order('message_time', { ascending: true })
+        .order('timestamp', { ascending: true })
         .limit(5000);
 
       const gapMap = new Map<string, { count: number; maxMin: number }>();
       const msgs = recentMsgs || [];
       for (let i = 1; i < msgs.length; i++) {
         if (msgs[i].cast_name !== msgs[i - 1].cast_name) continue;
-        const diff = (new Date(msgs[i].message_time).getTime() - new Date(msgs[i - 1].message_time).getTime()) / 60000;
+        const diff = (new Date(msgs[i].timestamp).getTime() - new Date(msgs[i - 1].timestamp).getTime()) / 60000;
         if (diff > 5) {
           const prev = gapMap.get(msgs[i].cast_name) || { count: 0, maxMin: 0 };
           prev.count++;
@@ -112,17 +113,17 @@ export default function DataQualityPage() {
     // --- CHECK 2: Duplicate Detection ---
     try {
       const { data: dupMsgs } = await sb
-        .from('spy_messages')
-        .select('cast_name, message_time, user_name, message')
+        .from('chat_logs')
+        .select('cast_name, timestamp, username, message')
         .eq('account_id', accountId)
-        .gte('message_time', sevenDaysAgo.toISOString())
-        .order('message_time', { ascending: false })
+        .gte('timestamp', sevenDaysAgo.toISOString())
+        .order('timestamp', { ascending: false })
         .limit(8000);
 
       const seen = new Map<string, number>();
       let dupCount = 0;
       for (const m of dupMsgs || []) {
-        const key = `${m.cast_name}|${m.message_time}|${m.user_name}|${m.message}`;
+        const key = `${m.cast_name}|${m.timestamp}|${m.username}|${m.message}`;
         const cnt = (seen.get(key) || 0) + 1;
         seen.set(key, cnt);
         if (cnt > 1) dupCount++;
@@ -154,17 +155,17 @@ export default function DataQualityPage() {
 
       if (spyCasts && spyCasts.length > 0) {
         const { data: latestMsgs } = await sb
-          .from('spy_messages')
-          .select('cast_name, message_time')
+          .from('chat_logs')
+          .select('cast_name, timestamp')
           .eq('account_id', accountId)
-          .gte('message_time', oneDayAgo.toISOString())
-          .order('message_time', { ascending: false })
+          .gte('timestamp', oneDayAgo.toISOString())
+          .order('timestamp', { ascending: false })
           .limit(5000);
 
         const latestMap = new Map<string, Date>();
         for (const m of latestMsgs || []) {
           if (!latestMap.has(m.cast_name)) {
-            latestMap.set(m.cast_name, new Date(m.message_time));
+            latestMap.set(m.cast_name, new Date(m.timestamp));
           }
         }
 
@@ -212,10 +213,10 @@ export default function DataQualityPage() {
       ]);
 
       const { data: spyNames } = await sb
-        .from('spy_messages')
+        .from('chat_logs')
         .select('cast_name')
         .eq('account_id', accountId)
-        .gte('message_time', sevenDaysAgo.toISOString())
+        .gte('timestamp', sevenDaysAgo.toISOString())
         .limit(5000);
 
       const unregistered = new Set<string>();
@@ -240,10 +241,10 @@ export default function DataQualityPage() {
     // --- CHECK 5: NULL session_id ---
     try {
       const { count } = await sb
-        .from('spy_messages')
+        .from('chat_logs')
         .select('*', { count: 'exact', head: true })
         .eq('account_id', accountId)
-        .gte('message_time', sevenDaysAgo.toISOString())
+        .gte('timestamp', sevenDaysAgo.toISOString())
         .is('session_id', null);
 
       const nullCount = count || 0;
@@ -441,6 +442,7 @@ export default function DataQualityPage() {
         </div>
       )}
 
+      <Accordion id="admin-dq-checks" title="品質チェック結果" icon="🔍" badge={`${checks.length}件`} defaultOpen={true} lazy={false}>
       {/* Check cards */}
       {running && checks.length === 0 ? (
         <div className="space-y-3">
@@ -482,6 +484,7 @@ export default function DataQualityPage() {
           ))}
         </div>
       )}
+      </Accordion>
     </div>
   );
 }

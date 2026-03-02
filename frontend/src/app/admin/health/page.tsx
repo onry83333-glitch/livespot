@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '@/components/auth-provider';
+import { Accordion } from '@/components/accordion';
 import { createClient } from '@/lib/supabase/client';
 import Link from 'next/link';
 
@@ -436,6 +437,7 @@ export default function HealthPage() {
         </div>
       )}
 
+      <Accordion id="admin-health-checks" title="品質チェック結果" icon="🏥" badge={`${checks.length}件`} defaultOpen={true} lazy={false}>
       {/* Check cards */}
       {running && checks.length === 0 ? (
         <div className="space-y-3">
@@ -471,6 +473,9 @@ export default function HealthPage() {
         </div>
       )}
 
+      </Accordion>
+
+      <Accordion id="admin-sync-health" title="Collector 同期ヘルス" icon="🔄" defaultOpen={false}>
       {/* Sync Health Section */}
       <div>
         <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
@@ -488,6 +493,7 @@ export default function HealthPage() {
           <SyncHealthTable rows={syncHealth} />
         )}
       </div>
+      </Accordion>
     </div>
   );
 }

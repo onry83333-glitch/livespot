@@ -13,6 +13,8 @@ import type { TicketShowCVR, ViewerSnapshot } from '@/lib/cvr-calculator';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { SpyCast, RegisteredCast, CastType } from '@/types';
+import { mapChatLog } from '@/lib/table-mappers';
+import { Accordion } from '@/components/accordion';
 
 /* ============================================================
    Types
@@ -279,7 +281,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
 
         // Cast monitoring status: latest message per cast
         whisperSbRef.current
-          .from('spy_messages')
+          .from('chat_logs')
           .select('cast_name, created_at')
           .eq('account_id', data.id)
           .order('created_at', { ascending: false })
@@ -1605,16 +1607,17 @@ function SimpleAnalysisTab() {
     }
 
     // Session summary
-    let summaryQuery = supabase.from('spy_messages')
-      .select('message_time, tokens, msg_type, metadata')
+    let summaryQuery = supabase.from('chat_logs')
+      .select('timestamp, tokens, message_type, metadata')
       .eq('account_id', accountId)
       .eq('cast_name', selectedCast)
-      .gte('message_time', since);
-    if (until) summaryQuery = summaryQuery.lte('message_time', until);
+      .gte('timestamp', since);
+    if (until) summaryQuery = summaryQuery.lte('timestamp', until);
     summaryQuery
-      .order('message_time', { ascending: true })
+      .order('timestamp', { ascending: true })
       .limit(10000)
-      .then(({ data }) => {
+      .then(({ data: rawData }) => {
+        const data = rawData?.map(mapChatLog);
         if (data && data.length > 0) {
           const firstMsg = new Date(data[0].message_time);
           const lastMsg = new Date(data[data.length - 1].message_time);
@@ -1651,18 +1654,19 @@ function SimpleAnalysisTab() {
       });
 
     // Top tippers
-    let tippersQuery = supabase.from('spy_messages')
-      .select('user_name, tokens')
+    let tippersQuery = supabase.from('chat_logs')
+      .select('username, tokens')
       .eq('account_id', accountId)
       .eq('cast_name', selectedCast)
-      .in('msg_type', ['tip', 'gift'])
+      .in('message_type', ['tip', 'gift'])
       .gt('tokens', 0)
-      .gte('message_time', since);
-    if (until) tippersQuery = tippersQuery.lte('message_time', until);
+      .gte('timestamp', since);
+    if (until) tippersQuery = tippersQuery.lte('timestamp', until);
     tippersQuery
       .order('tokens', { ascending: false })
       .limit(10000)
-      .then(({ data }) => {
+      .then(({ data: rawData }) => {
+        const data = rawData?.map(mapChatLog);
         if (data) {
           const tipMap = new Map<string, number>();
           data.forEach(r => {
@@ -1677,19 +1681,20 @@ function SimpleAnalysisTab() {
       });
 
     // Tip timeline (last 20)
-    let timelineQuery = supabase.from('spy_messages')
-      .select('message_time, user_name, tokens')
+    let timelineQuery = supabase.from('chat_logs')
+      .select('timestamp, username, tokens')
       .eq('account_id', accountId)
       .eq('cast_name', selectedCast)
-      .in('msg_type', ['tip', 'gift'])
+      .in('message_type', ['tip', 'gift'])
       .gt('tokens', 0)
-      .gte('message_time', since);
-    if (until) timelineQuery = timelineQuery.lte('message_time', until);
+      .gte('timestamp', since);
+    if (until) timelineQuery = timelineQuery.lte('timestamp', until);
     timelineQuery
-      .order('message_time', { ascending: false })
+      .order('timestamp', { ascending: false })
       .limit(10000)
-      .then(({ data }) => {
-        if (data) setTipTimeline(data as { message_time: string; user_name: string; tokens: number }[]);
+      .then(({ data: rawData }) => {
+        const data = rawData?.map(mapChatLog);
+        if (data) setTipTimeline(data.map(d => ({ message_time: d.message_time, user_name: d.user_name, tokens: d.tokens })) as { message_time: string; user_name: string; tokens: number }[]);
         else setTipTimeline([]);
       });
   }, [accountId, selectedCast, selectedSessionId, sessions]);
@@ -1716,18 +1721,19 @@ function SimpleAnalysisTab() {
     }
 
     // Fetch ALL tip messages (not just 20) for ticket detection
-    let ticketQuery = supabase.from('spy_messages')
-      .select('message_time, user_name, tokens')
+    let ticketQuery = supabase.from('chat_logs')
+      .select('timestamp, username, tokens')
       .eq('account_id', accountId)
       .eq('cast_name', selectedCast)
-      .in('msg_type', ['tip', 'gift'])
+      .in('message_type', ['tip', 'gift'])
       .gt('tokens', 0)
-      .gte('message_time', ticketSince);
-    if (ticketUntil) ticketQuery = ticketQuery.lte('message_time', ticketUntil);
+      .gte('timestamp', ticketSince);
+    if (ticketUntil) ticketQuery = ticketQuery.lte('timestamp', ticketUntil);
     ticketQuery
-      .order('message_time', { ascending: true })
+      .order('timestamp', { ascending: true })
       .limit(10000)
-      .then(async ({ data: tipData }) => {
+      .then(async ({ data: rawTipData }) => {
+        const tipData = rawTipData?.map(mapChatLog);
         if (!tipData || tipData.length === 0) {
           setTicketShows([]);
           setTicketCVRs([]);
@@ -1905,6 +1911,7 @@ function SimpleAnalysisTab() {
         </div>
       </div>
 
+      <Accordion id="spy-tip-timeline" title="直近チップタイムライン" icon="💸" defaultOpen={false}>
       {/* Tip timeline */}
       <div className="glass-card p-4">
         <h3 className="text-xs font-bold mb-3">💸 直近チップタイムライン</h3>
@@ -1942,7 +1949,9 @@ function SimpleAnalysisTab() {
           </div>
         )}
       </div>
+      </Accordion>
 
+      <Accordion id="spy-ticket-analysis" title="チケットチャット分析" icon="🎫" defaultOpen={false}>
       {/* Ticket Show Analysis */}
       <div className="glass-card p-4">
         <h3 className="text-xs font-bold mb-3" style={{ color: '#a78bfa' }}>🎫 チケットチャット分析</h3>
@@ -2075,6 +2084,7 @@ function SimpleAnalysisTab() {
           </div>
         )}
       </div>
+      </Accordion>
     </div>
   );
 }
@@ -2765,15 +2775,16 @@ function TypeForm({ accountId, existingType, onSave, onCancel }: {
         .order('started_at', { ascending: false })
         .limit(500);
 
-      const { data: tips } = await supabase
-        .from('spy_messages')
-        .select('message_time, tokens')
+      const { data: rawTips } = await supabase
+        .from('chat_logs')
+        .select('timestamp, tokens')
         .eq('account_id', accountId)
         .eq('cast_name', benchmarkCast)
-        .in('msg_type', ['tip', 'gift'])
+        .in('message_type', ['tip', 'gift'])
         .gt('tokens', 0)
-        .order('message_time', { ascending: false })
+        .order('timestamp', { ascending: false })
         .limit(10000);
+      const tips = rawTips?.map(mapChatLog);
 
       if (sessions && sessions.length > 0 && tips) {
         const sessionRevenues: number[] = [];
