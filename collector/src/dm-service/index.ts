@@ -134,7 +134,8 @@ async function processBatch(accountId: string): Promise<{ sent: number; errors: 
 
     // 6a-1. キャンペーンフォーマット検証
     if (!isValidCampaign(task.campaign)) {
-      log('warn', `不正なcampaign形式: "${task.campaign}" — スキップ`, { taskId: task.id });
+      log('warn', `不正なcampaign形式: "${task.campaign}" — ブロック`, { taskId: task.id });
+      await markError(sb, task.id, `不正なcampaign形式: "${task.campaign}" — 許可: TEST/pipe/seq/bulk/trigger_/_sched_`);
       skipped++;
       continue;
     }

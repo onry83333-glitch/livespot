@@ -146,6 +146,7 @@ export function isValidCampaign(campaign: string): boolean {
     campaign.startsWith('pipe') ||
     campaign.startsWith('seq') ||
     campaign.startsWith('bulk') ||
+    campaign.startsWith('trigger_') ||
     campaign.includes('_sched_')
   );
 }
