@@ -7,6 +7,7 @@
 
 import { getSupabase } from '../config.js';
 import { createLogger } from '../utils/logger.js';
+import { generateTipperInsights, type LlmPromptContext, type SessionInsights } from './llm-client.js';
 
 const log = createLogger('report');
 
@@ -79,7 +80,7 @@ export async function generatePostSessionReport(
   const [msgResult, sessionResult] = await Promise.all([
     sb
       .from('spy_messages')
-      .select('msg_type, user_name, tokens, message_time, is_vip, metadata')
+      .select('msg_type, user_name, tokens, message_time, message, is_vip, metadata')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
       .eq('session_id', sessionId)
@@ -126,7 +127,12 @@ export async function generatePostSessionReport(
     sb, accountId, castName, sessionId, Array.from(uniqueChatters),
   );
 
-  // 8. cast_knowledge に UPSERT
+  // 8. LLM推論でインサイトを生成
+  const insights = await buildInsights(
+    sb, accountId, castName, metrics, msgs, periodStart,
+  );
+
+  // 9. cast_knowledge に UPSERT
   const { error: upsertErr } = await sb
     .from('cast_knowledge')
     .upsert(
@@ -137,7 +143,7 @@ export async function generatePostSessionReport(
         period_start: periodStart,
         period_end: periodEnd,
         metrics_json: metrics,
-        insights_json: {},
+        insights_json: insights,
       },
       { onConflict: 'cast_id,report_type,period_start' },
     );
@@ -163,6 +169,7 @@ interface SpyMessage {
   user_name: string;
   tokens: number;
   message_time: string;
+  message: string | null;
   is_vip: boolean;
   metadata: Record<string, unknown> | null;
 }
@@ -339,4 +346,101 @@ async function countReturningViewers(
 
   const uniqueReturning = new Set((data || []).map((r) => r.user_name));
   return uniqueReturning.size;
+}
+
+// ============================================================
+// LLM-powered insights
+// ============================================================
+
+async function buildInsights(
+  sb: ReturnType<typeof getSupabase>,
+  accountId: string,
+  castName: string,
+  metrics: PostSessionMetrics,
+  msgs: SpyMessage[],
+  periodStart: string,
+): Promise<SessionInsights> {
+  if (metrics.top_tippers.length === 0) {
+    return {
+      tipper_analysis: [],
+      session_summary: `${metrics.session_duration_minutes}分の配信。チップなし。`,
+      next_session_tips: ['ゴール設定で投げ銭を促す', 'チャットに積極的にリアクションする'],
+    };
+  }
+
+  const startMs = new Date(periodStart).getTime();
+  const tipperUsernames = metrics.top_tippers.map((t) => t.username);
+
+  // チップのタイミング（配信開始何分後か）
+  const tipMsgs = msgs.filter((m) => m.tokens > 0);
+  const tipTimings = tipMsgs.map((m) => ({
+    username: m.user_name,
+    minuteFromStart: Math.round((new Date(m.message_time).getTime() - startMs) / 60_000),
+    amount: m.tokens,
+  }));
+
+  // セグメント取得
+  const { data: segRows } = await sb
+    .from('paid_users')
+    .select('user_name, segment')
+    .eq('account_id', accountId)
+    .eq('cast_name', castName)
+    .in('user_name', tipperUsernames.slice(0, 50));
+
+  const segmentMap: Record<string, string> = {};
+  for (const r of segRows || []) {
+    segmentMap[r.user_name] = r.segment || 'unknown';
+  }
+
+  // 過去30日のチップ履歴
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 3600_000).toISOString();
+  const { data: historyRows } = await sb
+    .from('coin_transactions')
+    .select('user_name, tokens')
+    .eq('account_id', accountId)
+    .eq('cast_name', castName)
+    .in('user_name', tipperUsernames.slice(0, 50))
+    .gte('transaction_time', thirtyDaysAgo);
+
+  const tipHistory: { username: string; totalPast30d: number; txCount: number }[] = [];
+  const histMap = new Map<string, { total: number; count: number }>();
+  for (const r of historyRows || []) {
+    const entry = histMap.get(r.user_name) || { total: 0, count: 0 };
+    entry.total += r.tokens || 0;
+    entry.count += 1;
+    histMap.set(r.user_name, entry);
+  }
+  for (const [username, v] of histMap) {
+    tipHistory.push({ username, totalPast30d: v.total, txCount: v.count });
+  }
+
+  // チップ直前のチャットメッセージ
+  const recentChats: { username: string; message: string; minuteFromStart: number }[] = [];
+  const chatMsgs = msgs.filter((m) => m.msg_type !== 'system' && m.tokens === 0 && m.message);
+  for (const tipper of tipperUsernames.slice(0, 10)) {
+    const tipperChats = chatMsgs
+      .filter((m) => m.user_name === tipper)
+      .slice(0, 3);
+    for (const c of tipperChats) {
+      recentChats.push({
+        username: c.user_name,
+        message: (c.message || '').slice(0, 50),
+        minuteFromStart: Math.round((new Date(c.message_time).getTime() - startMs) / 60_000),
+      });
+    }
+  }
+
+  const ctx: LlmPromptContext = {
+    castName,
+    sessionDurationMinutes: metrics.session_duration_minutes,
+    totalTips: metrics.total_tips,
+    tipCount: metrics.tip_count,
+    topTippers: metrics.top_tippers,
+    tipTimings,
+    segmentMap,
+    recentChats,
+    tipHistory,
+  };
+
+  return generateTipperInsights(ctx);
 }

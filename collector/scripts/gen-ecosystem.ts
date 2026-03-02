@@ -164,6 +164,7 @@ async function main() {
         CAST_SOURCE: 'registered_casts',
         CAST_DISPLAY: cast.display_name || '',
         MODEL_ID: cast.stripchat_model_id || '',
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
       },
       autorestart: true,
       watch: false,
