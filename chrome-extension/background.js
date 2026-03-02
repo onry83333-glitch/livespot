@@ -2950,9 +2950,6 @@ async function exportSessionCookie() {
     const body = {
       account_id: accountId,
       session_cookie: sessionCookie.value,
-      csrf_token: csrfToken,
-      csrf_timestamp: csrfTimestamp,
-      stripchat_user_id: stripchatUserId,
       front_version: frontVersion,
       cookies_json: cookiesJson,
       is_valid: true,
@@ -2961,6 +2958,10 @@ async function exportSessionCookie() {
       expires_at: expiresAt,
       updated_at: new Date().toISOString(),
     };
+    // null値でDB上の既存データを上書きしないよう、値があるフィールドのみ含める
+    if (csrfToken) body.csrf_token = csrfToken;
+    if (csrfTimestamp) body.csrf_timestamp = csrfTimestamp;
+    if (stripchatUserId) body.stripchat_user_id = stripchatUserId;
 
     const upsertRes = await fetch(
       `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?on_conflict=account_id`,

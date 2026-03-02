@@ -257,9 +257,11 @@ export class StripchatDMApi {
    */
   async testConnection(): Promise<{ ok: boolean; status: number; cfBlocked: boolean }> {
     try {
-      const res = await fetch('https://ja.stripchat.com/api/front/v2/config', {
-        headers: { Cookie: this.buildCookieString(), 'User-Agent': USER_AGENT },
-      });
+      // /api/front/v2/config は404になるため、自分のユーザー情報で接続テスト
+      const res = await fetch(
+        `https://ja.stripchat.com/api/front/users/${this.session.stripchat_user_id}`,
+        { headers: { Cookie: this.buildCookieString(), 'User-Agent': USER_AGENT } },
+      );
       const cfBlocked = res.status === 403 || !!res.headers.get('cf-mitigated');
       return { ok: res.ok, status: res.status, cfBlocked };
     } catch {

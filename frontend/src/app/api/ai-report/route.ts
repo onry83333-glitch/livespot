@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { reportError } from '@/lib/error-handler';
+import { mapChatLog, mapUserProfile } from '@/lib/table-mappers';
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
@@ -76,12 +77,13 @@ function getSegment(totalCoins: number, lastSeen: string | null): string {
 // ============================================================
 interface TimeSlot { startTime: string; count: number; sampleMessage: string }
 
-function detectHotSpots(messages: { message_time: string; message: string }[]): TimeSlot[] {
-  if (messages.length < 10) return [];
-  const start = new Date(messages[0].message_time).getTime();
-  const groups = new Map<number, typeof messages>();
+function detectHotSpots(messages: { message_time: string | null; message: string | null }[]): TimeSlot[] {
+  const valid = messages.filter(m => m.message_time != null) as { message_time: string; message: string | null }[];
+  if (valid.length < 10) return [];
+  const start = new Date(valid[0].message_time).getTime();
+  const groups = new Map<number, typeof valid>();
 
-  for (const m of messages) {
+  for (const m of valid) {
     const t = new Date(m.message_time).getTime();
     const bucket = Math.floor((t - start) / 300000); // 5分
     if (!groups.has(bucket)) groups.set(bucket, []);
@@ -121,14 +123,14 @@ async function generateSessionReport(token: string, sessionId: string) {
   let endedAt = session.ended_at;
   if (!endedAt) {
     const { data: lastMsg } = await supabase
-      .from('spy_messages')
-      .select('message_time')
+      .from('chat_logs')
+      .select('timestamp')
       .eq('account_id', session.account_id)
       .eq('session_id', sessionId)
-      .order('message_time', { ascending: false })
+      .order('timestamp', { ascending: false })
       .limit(1)
       .single();
-    endedAt = lastMsg?.message_time || new Date().toISOString();
+    endedAt = lastMsg?.timestamp || new Date().toISOString();
   }
 
   const durationMinutes = Math.max(1, Math.round(
@@ -137,14 +139,14 @@ async function generateSessionReport(token: string, sessionId: string) {
 
   // 2. セッション中の全メッセージ取得
   const { data: messages } = await supabase
-    .from('spy_messages')
-    .select('user_name, message, msg_type, tokens, message_time')
+    .from('chat_logs')
+    .select('username, message, message_type, tokens, timestamp')
     .eq('account_id', session.account_id)
     .eq('session_id', sessionId)
-    .order('message_time', { ascending: true })
+    .order('timestamp', { ascending: true })
     .limit(10000);
 
-  const msgs = messages || [];
+  const msgs = (messages || []).map(mapChatLog);
   const uniqueUsers = new Set(msgs.map(m => m.user_name).filter(Boolean)).size;
 
   // 3. チップ集計
@@ -173,14 +175,20 @@ async function generateSessionReport(token: string, sessionId: string) {
   let segmentSummary = '';
 
   if (usernames.length > 0) {
-    const { data: paidUsers } = await supabase
-      .from('paid_users')
-      .select('user_name, total_coins, last_seen')
+    const { data: rawPaidUsers } = await supabase
+      .from('user_profiles')
+      .select('username, total_tokens, last_seen')
       .eq('cast_name', session.cast_name)
-      .in('user_name', usernames.slice(0, 500))
+      .in('username', usernames.slice(0, 500))
       .limit(500);
 
-    if (paidUsers && paidUsers.length > 0) {
+    const paidUsers = (rawPaidUsers || []).map(u => ({
+      user_name: u.username,
+      total_coins: u.total_tokens ?? 0,
+      last_seen: u.last_seen ?? null,
+    }));
+
+    if (paidUsers.length > 0) {
       const vips = paidUsers.filter(u => u.total_coins >= 5000);
       const regulars = paidUsers.filter(u => u.total_coins >= 1000 && u.total_coins < 5000);
 
