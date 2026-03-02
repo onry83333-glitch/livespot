@@ -80,6 +80,17 @@ export class StripchatDMApi {
   async getCsrfToken(): Promise<CsrfInfo | null> {
     // 方法1: DB保存のCSRFトークン
     if (this.session.csrf_token) {
+      // DB保存のtimestampがあればそのまま使用（サーバーはtoken+timestampのペア照合をする）
+      if (this.session.csrf_timestamp) {
+        return {
+          token: this.session.csrf_token,
+          timestamp: this.session.csrf_timestamp,
+          notifyTimestamp: new Date(
+            new Date(this.session.csrf_timestamp).getTime() + 36 * 3600 * 1000,
+          ).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+        };
+      }
+      // timestampがない場合は現在時刻で生成（フォールバック）
       const now = new Date();
       return {
         token: this.session.csrf_token,

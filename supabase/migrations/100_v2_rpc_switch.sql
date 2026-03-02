@@ -228,7 +228,7 @@ RETURNS TABLE (
   cast_name TEXT,
   total_messages BIGINT,
   total_tips BIGINT,
-  total_tokens BIGINT,
+  total_coins BIGINT,
   unique_users BIGINT,
   last_activity TIMESTAMPTZ
 ) AS $$
@@ -238,7 +238,7 @@ BEGIN
     cl.cast_name,
     COUNT(*)::BIGINT AS total_messages,
     COUNT(*) FILTER (WHERE cl.message_type IN ('tip', 'gift'))::BIGINT AS total_tips,
-    COALESCE(SUM(cl.tokens) FILTER (WHERE cl.message_type IN ('tip', 'gift')), 0)::BIGINT AS total_tokens,
+    COALESCE(SUM(cl.tokens) FILTER (WHERE cl.message_type IN ('tip', 'gift')), 0)::BIGINT AS total_coins,
     COUNT(DISTINCT cl.username)::BIGINT AS unique_users,
     MAX(cl."timestamp") AS last_activity
   FROM public.chat_logs cl
@@ -257,7 +257,7 @@ CREATE OR REPLACE FUNCTION public.get_cast_fans(
   p_limit INTEGER DEFAULT 50
 )
 RETURNS TABLE (
-  username TEXT,
+  user_name TEXT,
   total_tokens BIGINT,
   msg_count BIGINT,
   last_seen TIMESTAMPTZ
@@ -265,7 +265,7 @@ RETURNS TABLE (
 BEGIN
   RETURN QUERY
   SELECT
-    cl.username,
+    cl.username AS user_name,
     COALESCE(SUM(cl.tokens), 0)::BIGINT AS total_tokens,
     COUNT(*)::BIGINT AS msg_count,
     MAX(cl."timestamp") AS last_seen
@@ -323,9 +323,9 @@ BEGIN
       seg_id,
       jsonb_agg(
         jsonb_build_object(
-          'username', username,
-          'total_tokens', total_tokens,
-          'last_seen', last_seen
+          'user_name', username,
+          'total_coins', total_tokens,
+          'last_payment_date', last_seen
         ) ORDER BY total_tokens DESC
       ) FILTER (WHERE rn <= 100) AS users_json
     FROM (
@@ -379,8 +379,8 @@ BEGIN
         ELSE '低'
       END,
       'user_count', sa.user_count,
-      'total_tokens', sa.seg_total_tokens,
-      'avg_tokens', sa.avg_tokens,
+      'total_coins', sa.seg_total_tokens,
+      'avg_coins', sa.avg_tokens,
       'users', COALESCE(su.users_json, '[]'::JSONB)
     ) ORDER BY sa.seg_id
   ), '[]'::JSONB)
@@ -734,17 +734,17 @@ CREATE OR REPLACE FUNCTION public.get_user_acquisition_dashboard(
   p_min_coins INTEGER DEFAULT 0, p_max_coins INTEGER DEFAULT 999999
 )
 RETURNS TABLE (
-  username TEXT, total_tokens BIGINT, last_seen TIMESTAMPTZ, first_seen TIMESTAMPTZ,
+  user_name TEXT, total_coins BIGINT, last_payment_date TIMESTAMPTZ, created_at TIMESTAMPTZ,
   tx_count BIGINT, dm_sent BOOLEAN, dm_sent_date TIMESTAMPTZ, dm_campaign TEXT,
   segment TEXT, is_new_user BOOLEAN, converted_after_dm BOOLEAN
 ) AS $$
 BEGIN
   RETURN QUERY
   SELECT
-    up.username,
-    up.total_tokens::BIGINT,
-    up.last_seen,
-    up.first_seen,
+    up.username AS user_name,
+    up.total_tokens::BIGINT AS total_coins,
+    up.last_seen AS last_payment_date,
+    up.first_seen AS created_at,
     COALESCE(ct_agg.tx_count, 0)::BIGINT,
     EXISTS (SELECT 1 FROM dm_send_log dm WHERE dm.user_name = up.username AND dm.account_id = p_account_id) AS dm_sent,
     (SELECT MAX(dm.queued_at) FROM dm_send_log dm WHERE dm.user_name = up.username AND dm.account_id = p_account_id) AS dm_sent_date,
@@ -784,13 +784,13 @@ CREATE OR REPLACE FUNCTION public.search_user_detail(
   p_account_id UUID, p_cast_name TEXT, p_user_name TEXT
 )
 RETURNS TABLE (
-  username TEXT, total_tokens BIGINT, last_seen TIMESTAMPTZ, first_seen TIMESTAMPTZ,
+  user_name TEXT, total_coins BIGINT, last_payment_date TIMESTAMPTZ, created_at TIMESTAMPTZ,
   tx_count BIGINT, segment TEXT, dm_history JSONB, recent_transactions JSONB
 ) AS $$
 BEGIN
   RETURN QUERY
   SELECT
-    up.username, up.total_tokens::BIGINT, up.last_seen, up.first_seen,
+    up.username AS user_name, up.total_tokens::BIGINT AS total_coins, up.last_seen AS last_payment_date, up.first_seen AS created_at,
     (SELECT COUNT(*) FROM coin_transactions ct WHERE ct.user_name = up.username
       AND ct.cast_name = p_cast_name AND ct.account_id = p_account_id)::BIGINT AS tx_count,
     CASE

@@ -121,10 +121,12 @@ async function main() {
       if (meta) csrfToken = csrfToken || meta.getAttribute('content');
     } catch {}
 
-    return { csrfToken, userId };
+    return { csrfToken, csrfTimestamp, csrfNotifyTimestamp, userId };
   });
 
   console.log('Extracted csrfToken:', result.csrfToken || 'NOT FOUND');
+  console.log('Extracted csrfTimestamp:', result.csrfTimestamp || 'NOT FOUND');
+  console.log('Extracted csrfNotifyTimestamp:', result.csrfNotifyTimestamp || 'NOT FOUND');
   console.log('Extracted userId:', result.userId || 'NOT FOUND');
 
   // 6. If CSRF not found, try intercepting network requests
@@ -199,6 +201,9 @@ async function main() {
   };
   if (result.csrfToken) {
     updateData.csrf_token = result.csrfToken;
+  }
+  if (result.csrfTimestamp) {
+    updateData.csrf_timestamp = result.csrfTimestamp;
   }
 
   const { error: updateErr } = await sb
