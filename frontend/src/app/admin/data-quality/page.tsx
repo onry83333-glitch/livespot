@@ -269,17 +269,17 @@ export default function DataQualityPage() {
         .eq('is_active', true);
 
       const { data: msgData } = await sb
-        .from('spy_messages')
-        .select('cast_name, msg_type, tokens')
+        .from('chat_logs')
+        .select('cast_name, message_type, tokens')
         .eq('account_id', accountId)
-        .gte('message_time', sevenDaysAgo.toISOString())
+        .gte('timestamp', sevenDaysAgo.toISOString())
         .limit(10000);
 
       const castMap = new Map<string, { msgs: number; tips: number; tokens: number }>();
       for (const m of msgData || []) {
         const prev = castMap.get(m.cast_name) || { msgs: 0, tips: 0, tokens: 0 };
         prev.msgs++;
-        if (m.msg_type === 'tip') {
+        if (m.message_type === 'tip') {
           prev.tips++;
           prev.tokens += m.tokens || 0;
         }
@@ -316,18 +316,18 @@ export default function DataQualityPage() {
     // --- CHECK 7: Cross-check SPY tips vs coin_transactions ---
     try {
       const { data: spyTips } = await sb
-        .from('spy_messages')
-        .select('cast_name, message_time')
+        .from('chat_logs')
+        .select('cast_name, timestamp')
         .eq('account_id', accountId)
-        .eq('msg_type', 'tip')
+        .eq('message_type', 'tip')
         .gt('tokens', 0)
-        .gte('message_time', sevenDaysAgo.toISOString())
+        .gte('timestamp', sevenDaysAgo.toISOString())
         .limit(5000);
 
       // Get unique cast_name + date combos from spy tips
       const spyDays = new Set<string>();
       for (const t of spyTips || []) {
-        const d = new Date(t.message_time);
+        const d = new Date(t.timestamp);
         const jstDate = new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString().split('T')[0];
         spyDays.add(`${t.cast_name}|${jstDate}`);
       }

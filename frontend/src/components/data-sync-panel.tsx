@@ -128,13 +128,13 @@ export default function DataSyncPanel({ supabase, accountId, castName }: Props) 
 
     if (!hasSpy) {
       const { data: spyData } = await supabase
-        .from('spy_messages')
-        .select('message_time')
+        .from('chat_logs')
+        .select('timestamp')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
-        .order('message_time', { ascending: false })
+        .order('timestamp', { ascending: false })
         .limit(1);
-      fb.spy_chat = spyData?.[0]?.message_time || null;
+      fb.spy_chat = spyData?.[0]?.timestamp || null;
     }
 
     if (!hasViewer) {

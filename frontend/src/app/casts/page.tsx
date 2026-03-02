@@ -229,7 +229,7 @@ export default function CastsPage() {
         const [statsRes, coinStatsResult, spyLiveRes, rev30dRes, alertsRes, dmRes] = await Promise.all([
           supabase.rpc('get_cast_stats', { p_account_id: selectedAccount, p_cast_names: castNames }),
           fetchWeeklyCoinStats(supabase, selectedAccount, castNames, thisWeekStart, lastWeekStart, todayStartUTC),
-          supabase.from('spy_messages').select('cast_name, created_at')
+          supabase.from('chat_logs').select('cast_name, created_at')
             .eq('account_id', selectedAccount).order('created_at', { ascending: false }).limit(200),
           // Dashboard KPI: 30日売上（ページネーション）
           (async () => {
@@ -249,9 +249,9 @@ export default function CastsPage() {
             }
             return { data: total };
           })(),
-          supabase.from('spy_messages').select('id', { count: 'exact', head: true })
+          supabase.from('chat_logs').select('id', { count: 'exact', head: true })
             .eq('account_id', selectedAccount).in('cast_name', castNames).eq('is_vip', true)
-            .gte('message_time', todayStartUTC.toISOString()),
+            .gte('timestamp', todayStartUTC.toISOString()),
           supabase.from('dm_send_log').select('id', { count: 'exact', head: true })
             .eq('account_id', selectedAccount).in('cast_name', castNames).gte('queued_at', since7d),
         ]);

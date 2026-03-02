@@ -87,29 +87,30 @@ export default function AlertsPage() {
     })();
   }, [user, sb]);
 
-  // paid_usersルックアップ
+  // user_profilesルックアップ
   const lookupUser = useCallback(async (userName: string, castName?: string): Promise<{ total_coins: number; user_level: number; last_payment_date: string | null }> => {
     if (!accountId) return { total_coins: 0, user_level: 0, last_payment_date: null };
     let query = sb
-      .from('paid_users')
-      .select('total_coins, user_level, last_payment_date')
+      .from('user_profiles')
+      .select('total_tokens, user_level, last_seen')
       .eq('account_id', accountId)
-      .eq('user_name', userName);
+      .eq('username', userName);
     if (castName) query = query.eq('cast_name', castName);
     const { data } = await query.maybeSingle();
-    return data || { total_coins: 0, user_level: 0, last_payment_date: null };
+    return data ? { total_coins: data.total_tokens ?? 0, user_level: data.user_level ?? 0, last_payment_date: data.last_seen ?? null } : { total_coins: 0, user_level: 0, last_payment_date: null };
   }, [sb, accountId]);
 
   // 初回ロード: 直近の enter イベント50件
   const loadInitial = useCallback(async () => {
     if (!accountId) return;
-    const { data } = await sb
-      .from('spy_messages')
-      .select('id, user_name, cast_name, message_time')
+    const { data: rawData } = await sb
+      .from('chat_logs')
+      .select('id, username, cast_name, timestamp')
       .eq('account_id', accountId)
-      .eq('msg_type', 'enter')
-      .order('message_time', { ascending: false })
+      .eq('message_type', 'enter')
+      .order('timestamp', { ascending: false })
       .limit(50);
+    const data = (rawData || []).map(r => ({ id: r.id, user_name: r.username, cast_name: r.cast_name, message_time: r.timestamp }));
 
     if (!data || data.length === 0) { setAlerts([]); return; }
 
@@ -134,7 +135,7 @@ export default function AlertsPage() {
 
   useEffect(() => { loadInitial(); }, [loadInitial]);
 
-  // Realtime: spy_messages INSERT (msg_type=enter)
+  // Realtime: chat_logs INSERT (message_type=enter)
   const triggersRef = useRef(triggers);
   triggersRef.current = triggers;
   const lookupUserRef = useRef(lookupUser);
@@ -154,9 +155,10 @@ export default function AlertsPage() {
       .channel('alerts-enter-realtime')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'spy_messages', filter: `account_id=eq.${accountId}` },
+        { event: 'INSERT', schema: 'public', table: 'chat_logs', filter: `account_id=eq.${accountId}` },
         async (payload) => {
-          const row = payload.new as { id: number; account_id: string; msg_type: string; user_name: string; cast_name: string; message_time: string };
+          const raw = payload.new as Record<string, unknown>;
+          const row = { id: raw.id as number, account_id: raw.account_id as string, msg_type: (raw.message_type ?? raw.msg_type) as string, user_name: (raw.username ?? raw.user_name) as string, cast_name: raw.cast_name as string, message_time: (raw.timestamp ?? raw.message_time) as string };
           if (row.msg_type !== 'enter') return;
 
           const info = await lookupUserRef.current(row.user_name || '', row.cast_name);
@@ -190,10 +192,10 @@ export default function AlertsPage() {
     setSelectedName(userName);
     if (!accountId) return;
 
-    let paidQuery = sb.from('paid_users')
-      .select('user_name, total_coins, user_level, last_payment_date, created_at')
+    let paidQuery = sb.from('user_profiles')
+      .select('username, total_tokens, user_level, last_seen, created_at')
       .eq('account_id', accountId)
-      .eq('user_name', userName);
+      .eq('username', userName);
     if (castName) paidQuery = paidQuery.eq('cast_name', castName);
 
     const [paidRes, dmRes] = await Promise.all([
@@ -209,9 +211,9 @@ export default function AlertsPage() {
     const paid = paidRes.data;
     setSelectedUser({
       user_name: userName,
-      total_coins: paid?.total_coins ?? 0,
+      total_coins: paid?.total_tokens ?? 0,
       user_level: paid?.user_level ?? 0,
-      last_payment_date: paid?.last_payment_date ?? null,
+      last_payment_date: paid?.last_seen ?? null,
       created_at: paid?.created_at ?? null,
       lastDmAt: dmRes.data?.[0]?.queued_at ?? null,
     });
@@ -237,15 +239,15 @@ export default function AlertsPage() {
       const rows = names.map((name, i) => ({
         account_id: accountId,
         cast_name: 'サクラ',
-        message_time: new Date(now.getTime() - i * 30000).toISOString(),
-        msg_type: 'enter',
-        user_name: name,
+        timestamp: new Date(now.getTime() - i * 30000).toISOString(),
+        message_type: 'enter',
+        username: name,
         message: null,
         tokens: 0,
         is_vip: false,
         metadata: {},
       }));
-      const { error } = await sb.from('spy_messages').insert(rows);
+      const { error } = await sb.from('chat_logs').insert(rows);
       if (error) throw new Error(error.message);
     } catch (e: unknown) {
       setDemoError(e instanceof Error ? e.message : String(e));
