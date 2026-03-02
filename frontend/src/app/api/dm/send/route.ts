@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabase } from '@/lib/supabase/server';
 import { StripchatAPI } from '@/lib/stripchat-api';
 import { checkDailyDmLimit } from '@/lib/dm-safety';
+import { isDmTestMode, DM_TEST_WHITELIST } from '@/lib/dm-guard';
 
 // ============================================================
 // POST /api/dm/send — 単発DM送信
@@ -34,6 +35,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: 'target_username and message are required' },
       { status: 400 },
+    );
+  }
+
+  // DM安全ゲート: campaign必須チェック
+  if (!body.campaign && !dm_log_id) {
+    // dm_log_id がある場合は既存キューの実行なのでcampaignは登録済み
+    return NextResponse.json(
+      { error: 'campaign is required. campaign_idなしのDM送信は許可されていません。' },
+      { status: 400 },
+    );
+  }
+
+  // DM安全ゲート: テストモード時ホワイトリスト外ブロック
+  if (isDmTestMode() && !DM_TEST_WHITELIST.has(target_username)) {
+    return NextResponse.json(
+      {
+        error: `[DM_TEST_MODE] ${target_username} はホワイトリスト外のためブロック`,
+        test_mode: true,
+        whitelist: Array.from(DM_TEST_WHITELIST),
+      },
+      { status: 403 },
     );
   }
 

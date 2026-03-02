@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabase } from '@/lib/supabase/server';
 import { StripchatAPI } from '@/lib/stripchat-api';
 import { checkDailyDmLimit } from '@/lib/dm-safety';
+import { isDmTestMode, DM_TEST_WHITELIST } from '@/lib/dm-guard';
 import { reportError } from '@/lib/error-handler';
 
 function sleep(ms: number) {
@@ -128,6 +129,30 @@ export async function POST(req: NextRequest) {
   const errors: Array<{ user_name: string; error: string }> = [];
 
   for (const task of tasks) {
+    // DM安全ゲート: テストモード時ホワイトリスト外はスキップ
+    if (isDmTestMode() && !DM_TEST_WHITELIST.has(task.user_name)) {
+      errorCount++;
+      const guardMsg = `[DM_TEST_MODE] ${task.user_name} はホワイトリスト外のためブロック`;
+      errors.push({ user_name: task.user_name, error: guardMsg });
+      await supabase
+        .from('dm_send_log')
+        .update({ status: 'error', error: guardMsg })
+        .eq('id', task.id);
+      continue;
+    }
+
+    // DM安全ゲート: campaign未設定のタスクはスキップ
+    if (!task.campaign) {
+      errorCount++;
+      const guardMsg = 'campaign未設定のためブロック';
+      errors.push({ user_name: task.user_name, error: guardMsg });
+      await supabase
+        .from('dm_send_log')
+        .update({ status: 'error', error: guardMsg })
+        .eq('id', task.id);
+      continue;
+    }
+
     // status を sending に更新
     await supabase
       .from('dm_send_log')

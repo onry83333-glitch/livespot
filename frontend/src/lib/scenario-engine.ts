@@ -9,6 +9,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isDmTestMode, DM_TEST_WHITELIST } from './dm-guard';
 
 // ============================================================
 // Types
@@ -232,6 +233,13 @@ export async function processScenarioQueue(
 
       if (recentDm && recentDm.length > 0) {
         console.info(`[scenario-engine] 重複スキップ: ${enrollment.username} (24h以内に送信済み)`);
+        skipped++;
+        continue;
+      }
+
+      // DM安全ゲート: テストモード時ホワイトリスト外はスキップ
+      if (isDmTestMode() && !DM_TEST_WHITELIST.has(enrollment.username)) {
+        console.info(`[scenario-engine] [DM_TEST_MODE] スキップ: ${enrollment.username} はホワイトリスト外`);
         skipped++;
         continue;
       }

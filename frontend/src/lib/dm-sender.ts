@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { checkDailyDmLimit, checkCampaignLimit, getRemainingDailyQuota } from './dm-safety';
+import { guardDmSend, DmGuardError } from './dm-guard';
 
 export interface QueueTarget {
   username: string;
@@ -71,6 +72,11 @@ export async function queueDmBatch(
   options: { skipDuplicates?: boolean; campaignMaxCount?: number } = {},
 ): Promise<QueueResult> {
   if (targets.length === 0) throw new Error('送信対象が0件です');
+
+  // DM安全ゲート: campaign必須 + テストモード時ホワイトリストチェック
+  const allUsernames = targets.map(t => t.username);
+  const guardResult = guardDmSend(allUsernames, campaign);
+  // テストモードでブロックされたユーザーを除外（guardDmSendがthrowしなかった場合=全員許可）
 
   const { skipDuplicates = true, campaignMaxCount } = options;
   const now = new Date();
