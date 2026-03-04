@@ -5,7 +5,7 @@
  *   1. user_name: null/undefined/空文字/'unknown' → 拒否（return null）
  *   2. account_id: 空 → 拒否
  *   3. cast_name: 空 → 拒否
- *   4. msg_type: 'chat' | 'tip' | 'system' に正規化（不明値 → 'chat'）
+ *   4. msg_type: 'chat' | 'tip' | 'system' | 'goal' に正規化（不明値 → 'chat'）
  *   5. tokens: 数値に変換、NaN → 0、負数 → 0
  *   6. message_time: ISO 8601 検証、無効 → 現在時刻
  *   7. message: 文字列に変換、前後空白トリム
@@ -15,7 +15,7 @@
 
 import type { RawMessage, NormalizedMessage } from './types.js';
 
-const VALID_MSG_TYPES = new Set(['chat', 'tip', 'system']);
+const VALID_MSG_TYPES = new Set(['chat', 'tip', 'system', 'goal']);
 const REJECTED_USERNAMES = new Set(['unknown', 'undefined', 'null', '']);
 
 /** ISO 8601 タイムスタンプの簡易検証 */
@@ -56,13 +56,13 @@ export function normalizeMessage(raw: RawMessage): NormalizedMessage | null {
   // --- msg_type 正規化 ---
   const rawType = asString(raw.msg_type).toLowerCase();
   const msgType = VALID_MSG_TYPES.has(rawType)
-    ? (rawType as 'chat' | 'tip' | 'system')
+    ? (rawType as 'chat' | 'tip' | 'system' | 'goal')
     : 'chat';
 
   // --- tokens 正規化 ---
   const tokens = asNonNegativeInt(raw.tokens);
 
-  // tip 整合性: tokens > 0 なのに msg_type が chat → tip に補正
+  // tip 整合性: tokens > 0 なのに msg_type が chat → tip に補正（goal は除外）
   const finalMsgType = (tokens > 0 && msgType === 'chat') ? 'tip' : msgType;
 
   // --- message_time 正規化 ---

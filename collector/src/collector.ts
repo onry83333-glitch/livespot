@@ -19,6 +19,7 @@ import {
 import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast } from './storage/supabase.js';
 import { accumulateViewer } from './storage/spy-profiles.js';
 import { parseCentrifugoChat } from './parsers/chat.js';
+import { parseCentrifugoGoal } from './parsers/goal.js';
 import { normalizeMessage, normalizeViewers } from './normalizer/index.js';
 import { RetryTracker, sleep } from './utils/reconnect.js';
 import { createLogger } from './utils/logger.js';
@@ -179,6 +180,33 @@ function createWsHandler(state: CastState) {
         log.info(`${target.castName}: TIP ${parsed.userName} ${parsed.tokens}tk "${parsed.message.substring(0, 40)}"`);
       } else {
         log.debug(`${target.castName}: CHAT ${parsed.userName}: ${parsed.message.substring(0, 60)}`);
+      }
+    } else if (msg.event === 'goalChanged') {
+      // ゴール進捗/達成イベント
+      const goalEvent = parseCentrifugoGoal(msg.data);
+      if (goalEvent) {
+        log.info(`${target.castName}: GOAL ${goalEvent.isAchieved ? 'ACHIEVED' : 'PROGRESS'} ${goalEvent.currentAmount}/${goalEvent.goalAmount} "${goalEvent.goalText}"`);
+
+        const goalMsg = normalizeMessage({
+          account_id: target.accountId,
+          cast_name: target.castName,
+          message_time: msg.receivedAt,
+          msg_type: 'goal',
+          user_name: 'system',
+          message: goalEvent.message,
+          tokens: 0,
+          is_vip: false,
+          session_id: state.sessionId,
+          metadata: {
+            source: 'collector-ws',
+            channel: msg.channel,
+            goalAmount: goalEvent.goalAmount,
+            currentAmount: goalEvent.currentAmount,
+            isAchieved: goalEvent.isAchieved,
+            goalText: goalEvent.goalText,
+          },
+        });
+        if (goalMsg) enqueue('spy_messages', goalMsg);
       }
     } else if (msg.event === 'newModelEvent') {
       const eventType = String(msg.data.event || msg.data.type || 'unknown');

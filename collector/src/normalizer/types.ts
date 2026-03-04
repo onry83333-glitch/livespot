@@ -31,7 +31,7 @@ export interface NormalizedMessage {
   account_id: string;
   cast_name: string;
   message_time: string;
-  msg_type: 'chat' | 'tip' | 'system';
+  msg_type: 'chat' | 'tip' | 'system' | 'goal';
   user_name: string;
   message: string;
   tokens: number;

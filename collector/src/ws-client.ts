@@ -26,6 +26,7 @@ const KEEPALIVE_INTERVAL = 25000;
 const WS_CHANNELS = [
   'newChatMessage',
   'newModelEvent',
+  'goalChanged',
   'clearChatMessages',
   'userUpdated',
 ];

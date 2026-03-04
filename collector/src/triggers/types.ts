@@ -30,6 +30,7 @@ export type ActionTaken =
   | 'skipped_duplicate'
   | 'skipped_segment'
   | 'skipped_daily_limit'
+  | 'skipped_test_mode'
   | 'error';
 
 /**
