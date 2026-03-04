@@ -385,8 +385,11 @@ function CastDetailInner() {
   }
   const [scenarios, setScenarios] = useState<ScenarioItem[]>([]);
   const [scenarioEnrollCounts, setScenarioEnrollCounts] = useState<Map<string, number>>(new Map());
+  interface EnrollmentDetail { scenario_id: string; user_name: string; current_step: number; status: string; enrolled_at: string; }
+  const [scenarioEnrollDetails, setScenarioEnrollDetails] = useState<Map<string, EnrollmentDetail[]>>(new Map());
   const [scenariosLoading, setScenariosLoading] = useState(false);
   const [scenarioExpanded, setScenarioExpanded] = useState<string | null>(null);
+  const [enrollExpanded, setEnrollExpanded] = useState<Set<string>>(new Set());
   const [scenarioCreating, setScenarioCreating] = useState(false);
   const [newScenario, setNewScenario] = useState({ name: '', triggerType: 'first_payment', config: '{}' });
 
@@ -421,8 +424,7 @@ function CastDetailInner() {
   const [refreshingSegments, setRefreshingSegments] = useState(false);
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
 
-  // H5: Segment legend
-  const [showSegmentLegend, setShowSegmentLegend] = useState(true);
+  // H5: Segment legend — now managed by Accordion component (localStorage)
 
   // M3: Segment user list expand
   const [segmentUserExpanded, setSegmentUserExpanded] = useState<Set<string>>(new Set());
@@ -1001,20 +1003,25 @@ function CastDetailInner() {
       .then(async ({ data: scData }) => {
         const items = (scData || []) as ScenarioItem[];
         setScenarios(items);
-        // エンロール数を取得
+        // エンロール数+詳細を取得
         if (items.length > 0) {
           const { data: enrollData } = await sb
             .from('dm_scenario_enrollments')
-            .select('scenario_id, status')
+            .select('scenario_id, user_name, current_step, status, enrolled_at')
             .eq('account_id', accountId)
             .eq('cast_name', castName)
             .eq('status', 'active')
+            .order('enrolled_at', { ascending: false })
             .limit(50000);
           const countMap = new Map<string, number>();
-          for (const e of enrollData || []) {
+          const detailMap = new Map<string, EnrollmentDetail[]>();
+          for (const e of (enrollData || []) as EnrollmentDetail[]) {
             countMap.set(e.scenario_id, (countMap.get(e.scenario_id) || 0) + 1);
+            if (!detailMap.has(e.scenario_id)) detailMap.set(e.scenario_id, []);
+            detailMap.get(e.scenario_id)!.push(e);
           }
           setScenarioEnrollCounts(countMap);
+          setScenarioEnrollDetails(detailMap);
         }
         setScenariosLoading(false);
       });
@@ -3553,6 +3560,55 @@ function CastDetailInner() {
                                   <span>最小間隔: {sc.min_interval_hours}h</span>
                                   <span>Step0自動: {sc.auto_approve_step0 ? 'ON' : 'OFF'}</span>
                                 </div>
+
+                                {/* エンロールメント詳細リスト（折りたたみ） */}
+                                {enrollCount > 0 && (() => {
+                                  const details = scenarioEnrollDetails.get(sc.id) || [];
+                                  const isEnrollOpen = enrollExpanded.has(sc.id);
+                                  const displayLimit = 30;
+                                  const visibleEnrolls = isEnrollOpen ? details.slice(0, displayLimit) : [];
+                                  return (
+                                    <div className="mt-1">
+                                      <button
+                                        onClick={() => setEnrollExpanded(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(sc.id)) next.delete(sc.id); else next.add(sc.id);
+                                          return next;
+                                        })}
+                                        className="flex items-center gap-2 text-[10px] font-semibold w-full text-left hover:opacity-80 transition-opacity py-1"
+                                        style={{ color: 'var(--accent-primary)' }}
+                                      >
+                                        <span>{isEnrollOpen ? '▼' : '▶'}</span>
+                                        <span>進行中ユーザー（{enrollCount}名）</span>
+                                      </button>
+                                      {isEnrollOpen && (
+                                        <div className="space-y-0.5 max-h-60 overflow-auto mt-1">
+                                          {visibleEnrolls.map(e => (
+                                            <div key={e.user_name} className="flex items-center justify-between text-[10px] px-2 py-1 rounded hover:bg-white/[0.03]">
+                                              <span className="truncate font-medium" style={{ color: 'var(--text-secondary)' }}>
+                                                {e.user_name}
+                                              </span>
+                                              <div className="flex items-center gap-2 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
+                                                <span className="px-1.5 py-0.5 rounded" style={{
+                                                  background: 'rgba(56,189,248,0.1)',
+                                                  color: 'var(--accent-primary)',
+                                                }}>
+                                                  Step {e.current_step}
+                                                </span>
+                                                <span>{new Date(e.enrolled_at).toLocaleDateString('ja-JP')}</span>
+                                              </div>
+                                            </div>
+                                          ))}
+                                          {details.length > displayLimit && (
+                                            <p className="text-[10px] text-center py-1" style={{ color: 'var(--text-muted)' }}>
+                                              ... 他 {details.length - displayLimit}名
+                                            </p>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             )}
                           </div>
@@ -3848,16 +3904,8 @@ function CastDetailInner() {
 
                         {/* H5: Segment legend (collapsible) */}
                         <div className="glass-card p-3 mb-4">
-                          <button
-                            onClick={() => setShowSegmentLegend(!showSegmentLegend)}
-                            className="flex items-center gap-2 text-[11px] font-semibold w-full text-left hover:opacity-80 transition-opacity"
-                            style={{ color: 'var(--text-secondary)' }}
-                          >
-                            <span>{showSegmentLegend ? '▼' : '▶'}</span>
-                            <span>凡例</span>
-                          </button>
-                          {showSegmentLegend && (
-                            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1 text-[10px]">
+                          <Accordion id="segment-legend" title="凡例" defaultOpen={true}>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-[10px]">
                               <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(239,68,68,0.06)' }}>
                                 <span className="font-bold w-6">S1</span>
                                 <span>Whale現役 — 高額応援＋最近も応援</span>
@@ -3899,7 +3947,7 @@ function CastDetailInner() {
                                 <span>離脱 — 長期間来ていない</span>
                               </div>
                             </div>
-                          )}
+                          </Accordion>
                         </div>
 
                         {/* M26: Segment sort options + M19: color legend */}
