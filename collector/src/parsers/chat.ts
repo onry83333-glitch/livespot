@@ -24,10 +24,10 @@ function str(v: any): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function num(v: any): number {
   if (v === null || v === undefined) return 0;
-  if (typeof v === 'number') return v;
+  if (typeof v === 'number') return Math.max(0, Math.floor(v));
   if (typeof v === 'string') {
     const n = parseInt(v, 10);
-    return isNaN(n) ? 0 : n;
+    return isNaN(n) ? 0 : Math.max(0, n);
   }
   return 0;
 }

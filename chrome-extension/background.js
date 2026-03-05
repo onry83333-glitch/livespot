@@ -68,6 +68,7 @@ async function saveSessionState() {
       _castSessions: sessions,
       _castLastActivity: activity,
       _castSessionStarted: started,
+      _monitoredCastStatus: monitoredCastStatus,
     });
     console.log('[LS-BG] セッション状態保存:', castSessions.size, '件');
   } catch (e) {
@@ -77,8 +78,8 @@ async function saveSessionState() {
 
 async function restoreSessionState() {
   try {
-    const { _castSessions, _castLastActivity, _castSessionStarted } = await chrome.storage.local.get([
-      '_castSessions', '_castLastActivity', '_castSessionStarted',
+    const { _castSessions, _castLastActivity, _castSessionStarted, _monitoredCastStatus } = await chrome.storage.local.get([
+      '_castSessions', '_castLastActivity', '_castSessionStarted', '_monitoredCastStatus',
     ]);
     if (_castSessions) {
       for (const [k, v] of Object.entries(_castSessions)) castSessions.set(k, v);
@@ -89,7 +90,10 @@ async function restoreSessionState() {
     if (_castSessionStarted) {
       for (const [k, v] of Object.entries(_castSessionStarted)) castSessionStarted.set(k, v);
     }
-    console.log('[LS-BG] セッション状態復元:', castSessions.size, '件');
+    if (_monitoredCastStatus && typeof _monitoredCastStatus === 'object') {
+      monitoredCastStatus = _monitoredCastStatus;
+    }
+    console.log('[LS-BG] セッション状態復元:', castSessions.size, '件, 巡回状態:', Object.keys(monitoredCastStatus).length, '件');
   } catch (e) {
     console.warn('[LS-BG] セッション状態復元失敗:', e.message);
   }
@@ -1167,9 +1171,20 @@ function checkBroadcastEnd() {
 
   for (const [castName, lastTime] of castLastActivity.entries()) {
     if (now - lastTime > TIMEOUT_MS && castSessions.has(castName)) {
-      console.log('[LS-BG] 配信終了検出(5分タイムアウト):', castName);
-      closeCastSession(castName).catch(e => {
-        console.warn('[LS-BG] closeCastSession失敗:', castName, e.message);
+      // API確認してからクローズ（メッセージ途絶≠配信終了）
+      checkCastOnlineStatus(castName).then(status => {
+        if (!isStreamingStatus(status)) {
+          console.log('[LS-BG] 配信終了検出(5分タイムアウト+API確認):', castName, 'status=', status);
+          closeCastSession(castName).catch(e => {
+            console.warn('[LS-BG] closeCastSession失敗:', castName, e.message);
+          });
+        } else {
+          // まだ配信中 → タイムスタンプを更新して誤クローズ防止
+          castLastActivity.set(castName, Date.now());
+          console.log('[LS-BG] 5分無活動だが配信中:', castName, 'status=', status);
+        }
+      }).catch(e => {
+        console.warn('[LS-BG] checkBroadcastEnd API確認失敗:', castName, e.message);
       });
     }
   }
@@ -1927,9 +1942,15 @@ async function runAutoPatrol() {
     return;
   }
 
-  // キャッシュが空ならロード
-  if (registeredCastNames.size === 0) {
+  // キャッシュが空または5分以上経過ならリロード
+  if (registeredCastNames.size === 0 || (Date.now() - (runAutoPatrol._lastCacheLoad || 0)) > 5 * 60 * 1000) {
+    const oldCache = new Set(registeredCastNames);
     await loadRegisteredCasts();
+    runAutoPatrol._lastCacheLoad = Date.now();
+    // ロード失敗時は古いキャッシュを復元
+    if (registeredCastNames.size === 0 && oldCache.size > 0) {
+      registeredCastNames = oldCache;
+    }
   }
   if (registeredCastNames.size === 0) {
     return; // 自社キャスト未登録
@@ -1951,6 +1972,7 @@ async function runAutoPatrol() {
     const nowStreaming = isStreamingStatus(status);
 
     monitoredCastStatus[castName] = status;
+    scheduleSessionStateSave();
 
     // Task K: Survival tracking — update last_seen_online when cast is streaming
     if (nowStreaming) {

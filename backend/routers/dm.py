@@ -88,8 +88,7 @@ async def create_dm_batch(
             "campaign": batch_id,
             "template_name": "",
         }
-        if cast_name:
-            row["cast_name"] = cast_name
+        row["cast_name"] = cast_name or ""
         rows.append(row)
 
     if not rows:

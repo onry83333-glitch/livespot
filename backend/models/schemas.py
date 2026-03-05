@@ -1,7 +1,7 @@
 """Pydantic models for Morning Hook SaaS API"""
 from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ============================================================
@@ -110,7 +110,7 @@ class SpyMessageCreate(BaseModel):
     msg_type: str  # chat, gift, tip, enter, leave, system
     user_name: Optional[str] = None
     message: Optional[str] = None
-    tokens: int = 0
+    tokens: int = Field(default=0, ge=0)
     metadata: dict = {}
     session_id: Optional[str] = None
     session_title: Optional[str] = None
