@@ -957,7 +957,7 @@ claude
 ## Known Issues
 
 - SPYログベースの売上表示はchat内tip/giftのみ（private/cam2cam/GC/ticket未計上）→ セッション詳細にコインAPI集計を並列表示する改善が必要
-- テストDMデータ（campaign LIKE 'bulk_%', 'pipe3_bulk_%', '20250217_test_%'）が本番DBに残留 → 手動DELETE待ち
+- ~~テストDMデータ~~ → ✅ 2026-03-05 削除済み（Migration 100: 464件全削除）
 - dm_scenarios の CHECK制約にCR文字混入の可能性（Supabase SQL Editor経由のコピペ問題）
 
 ### Production Hardening（品質巡回で発見）
