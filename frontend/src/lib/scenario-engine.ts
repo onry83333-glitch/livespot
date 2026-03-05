@@ -112,6 +112,7 @@ async function generateAiMessage(
   scenarioType: string,
   stepNumber: number,
   totalSteps: number,
+  enrollmentId?: string,
 ): Promise<{ message: string; isAi: true } | null> {
   try {
     const res = await fetch(`${baseUrl}/api/persona`, {
@@ -135,6 +136,7 @@ async function generateAiMessage(
           // 追加のシナリオ固有コンテキスト:
           scenario_purpose: SCENARIO_PURPOSE[scenarioType] || SCENARIO_PURPOSE.manual,
           step_tone_guide: getStepToneGuide(stepNumber, totalSteps),
+          scenario_enrollment_id: enrollmentId,
         },
       }),
     });
@@ -331,6 +333,7 @@ export async function processScenarioQueue(
           scenario.trigger_type,
           currentStep + 1,
           steps.length,
+          enrollment.id,
         );
         if (aiResult) {
           message = aiResult.message;
@@ -485,9 +488,10 @@ export async function fireGoalEvents(
       }
     }
 
-    // visit ゴールチェック: SPYメッセージに来訪ログがあるか
+    // visit ゴールチェック: chat_logs → spy_messages フォールバック
     if (goalType === 'visit' || goalType === 'reply_or_visit') {
-      const { data: spyMsgs } = await supabase
+      // 1st: chat_logs (v2)
+      const { data: chatVisits } = await supabase
         .from('chat_logs')
         .select('id')
         .eq('username', enrollment.username)
@@ -495,17 +499,32 @@ export async function fireGoalEvents(
         .gte('timestamp', since)
         .limit(1);
 
-      if (spyMsgs && spyMsgs.length > 0) {
+      if (chatVisits && chatVisits.length > 0) {
+        await markGoalReached(supabase, enrollment.id);
+        fired++;
+        continue;
+      }
+
+      // 2nd: spy_messages (v1) フォールバック
+      const { data: spyVisits } = await supabase
+        .from('spy_messages')
+        .select('id')
+        .eq('user_name', enrollment.username)
+        .eq('cast_name', enrollment.cast_name)
+        .gte('message_time', since)
+        .limit(1);
+
+      if (spyVisits && spyVisits.length > 0) {
         await markGoalReached(supabase, enrollment.id);
         fired++;
         continue;
       }
     }
 
-    // reply ゴールチェック: DM返信検出（dm_send_logのステータスベース）
+    // reply ゴールチェック: chat_logs → spy_messages フォールバック
     if (goalType === 'reply' || goalType === 'reply_or_visit') {
-      // SPYメッセージで「DM返信」タイプのメッセージがあるか
-      const { data: replies } = await supabase
+      // 1st: chat_logs (v2) dm_reply タイプ
+      const { data: chatReplies } = await supabase
         .from('chat_logs')
         .select('id')
         .eq('username', enrollment.username)
@@ -514,7 +533,23 @@ export async function fireGoalEvents(
         .gte('timestamp', since)
         .limit(1);
 
-      if (replies && replies.length > 0) {
+      if (chatReplies && chatReplies.length > 0) {
+        await markGoalReached(supabase, enrollment.id);
+        fired++;
+        continue;
+      }
+
+      // 2nd: spy_messages (v1) dm_reply タイプ
+      const { data: spyReplies } = await supabase
+        .from('spy_messages')
+        .select('id')
+        .eq('user_name', enrollment.username)
+        .eq('cast_name', enrollment.cast_name)
+        .eq('msg_type', 'dm_reply')
+        .gte('message_time', since)
+        .limit(1);
+
+      if (spyReplies && spyReplies.length > 0) {
         await markGoalReached(supabase, enrollment.id);
         fired++;
         continue;

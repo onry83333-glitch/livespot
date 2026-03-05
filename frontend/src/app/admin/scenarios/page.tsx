@@ -220,9 +220,21 @@ export default function ScenariosPage() {
   // AI文面プレビュー
   const [previewMsg, setPreviewMsg] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [castNames, setCastNames] = useState<string[]>([]);
+
+  // 登録キャスト名一覧を取得
+  useEffect(() => {
+    if (!accountId) return;
+    supabase.from('registered_casts').select('cast_name').eq('account_id', accountId).eq('is_active', true)
+      .then(({ data }) => {
+        if (data && data.length > 0) setCastNames(data.map(d => d.cast_name));
+      });
+  }, [accountId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const previewAiMessage = async (scenario: Scenario) => {
     setPreviewLoading(true);
     setPreviewMsg(null);
+    const previewCast = castNames[0] || 'default';
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch('/api/persona', {
@@ -233,12 +245,12 @@ export default function ScenariosPage() {
         },
         body: JSON.stringify({
           mode: 'ai',
-          cast_name: 'hanshakun',
+          cast_name: previewCast,
           account_id: accountId,
           task_type: 'dm_generate',
           context: {
-            user_name: 'test_user',
-            cast_name: 'hanshakun',
+            user_name: 'preview_user',
+            cast_name: previewCast,
             account_id: accountId,
             scenario_type: scenario.trigger_type,
             step_number: 1,

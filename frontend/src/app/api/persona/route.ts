@@ -413,14 +413,30 @@ async function buildUserPrompt(
       const scenarioType = context.scenario_type as string || 'thankyou_regular';
       const stepNumber = context.step_number as number || 1;
 
-      const { data: rawSpyMsgs } = await supabase
+      // chat_logs (v2) → spy_messages (v1) フォールバック
+      const { data: rawChatLogs } = await supabase
         .from('chat_logs')
         .select('message, timestamp, message_type, tokens')
         .eq('username', userName)
         .eq('cast_name', castName)
         .order('timestamp', { ascending: false })
         .limit(10);
-      const spyMsgs = (rawSpyMsgs || []).map(r => ({ message: r.message, message_time: r.timestamp, msg_type: r.message_type, tokens: r.tokens }));
+
+      let spyMsgs: { message: string; message_time: string; msg_type: string; tokens: number }[];
+
+      if (rawChatLogs && rawChatLogs.length > 0) {
+        spyMsgs = rawChatLogs.map(r => ({ message: r.message, message_time: r.timestamp, msg_type: r.message_type, tokens: r.tokens }));
+      } else {
+        // フォールバック: spy_messages (v1)
+        const { data: rawSpyMsgs } = await supabase
+          .from('spy_messages')
+          .select('message, message_time, msg_type, tokens')
+          .eq('user_name', userName)
+          .eq('cast_name', castName)
+          .order('message_time', { ascending: false })
+          .limit(10);
+        spyMsgs = (rawSpyMsgs || []).map(r => ({ message: r.message, message_time: r.message_time, msg_type: r.msg_type, tokens: r.tokens }));
+      }
 
       const accountId = context.account_id as string | undefined;
 
@@ -471,6 +487,24 @@ async function buildUserPrompt(
       const scenarioPurpose = context.scenario_purpose as string || '';
       const stepToneGuide = context.step_tone_guide as string || '';
 
+      // シナリオ内の過去ステップDM取得（同じユーザーへの前ステップメッセージ）
+      const scenarioEnrollmentId = context.scenario_enrollment_id as string | undefined;
+      let scenarioDmLog = '';
+      if (scenarioEnrollmentId) {
+        const { data: scenarioDms } = await supabase
+          .from('dm_send_log')
+          .select('message, sent_at, campaign')
+          .eq('scenario_enrollment_id', scenarioEnrollmentId)
+          .in('status', ['success', 'queued', 'sending'])
+          .order('sent_at', { ascending: true })
+          .limit(10);
+        if (scenarioDms && scenarioDms.length > 0) {
+          scenarioDmLog = scenarioDms.map((d, i) =>
+            `- Step${i + 1}: ${d.message || '?'} (${d.sent_at?.slice(0, 10) || '?'})`
+          ).join('\n');
+        }
+      }
+
       return `ユーザー名: ${userName}
 セグメント: ${segment}
 累計コイン: ${totalCoins}tk / 平均: ${avgCoins}tk / 最終: ${lastTxDate}
@@ -480,6 +514,7 @@ ${stepToneGuide ? `ステップ指示: ${stepToneGuide}` : ''}
 
 前回DM履歴（直近3件）:
 ${lastDmLog}
+${scenarioDmLog ? `\nこのシナリオで送信済みのDM:\n${scenarioDmLog}\n↑ 上記と異なるトーン・話題で書くこと。同じ表現の繰り返し禁止。` : ''}
 
 直近の発言ログ:
 ${spyLog}
@@ -487,7 +522,8 @@ ${spyLog}
 上記の情報をもとに、このユーザーに最適なDMを生成してください。
 - 前回DMと異なるトーンにしてください（感情→事実→感情の交互）。
 - ユーザーの発言内容に触れて個別感を出してください。
-- シナリオ目的に沿った文面にしてください。`;
+- シナリオ目的に沿った文面にしてください。
+${scenarioDmLog ? '- このシナリオの前ステップで送った内容と重複しないこと。' : ''}`;
     }
 
     case 'fb_report': {
