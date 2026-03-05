@@ -319,26 +319,37 @@ async function upsertTransactions(
   accountId: string,
   castName: string,
   transactions: RawTransaction[],
+  registeredCasts: RegisteredCast[],
 ): Promise<number> {
   const sb = getSupabase();
   const now = new Date().toISOString();
   const rows: Record<string, unknown>[] = [];
 
+  // registered_castsのcast_nameをSetで保持（user_name→cast_name解決用）
+  const castNameSet = new Set(registeredCasts.map(c => c.cast_name));
+
   for (const tx of transactions) {
     const userName = tx.userName || tx.user_name || tx.username || '';
     const tokens = Math.max(0, parseInt(String(tx.tokens || tx.amount || 0), 10));
     const txDate = tx.date || tx.createdAt || tx.created_at || now;
+    const txType = tx.type || tx.source || 'unknown';
 
     if (!userName || tokens <= 0) continue;
 
+    // studio payoutはuser_nameがキャスト自身 → registered_castsから正しいcast_nameを判定
+    let resolvedCastName = castName;
+    if (txType === 'studio' && castNameSet.has(userName)) {
+      resolvedCastName = userName;
+    }
+
     rows.push({
       account_id: accountId,
-      cast_name: castName,
+      cast_name: resolvedCastName,
       stripchat_tx_id: tx.id ? String(tx.id) : null,
       user_name: userName,
       user_id: tx.userId ? String(tx.userId) : null,
       tokens,
-      type: tx.type || tx.source || 'unknown',
+      type: txType,
       date: txDate,
       source_detail: tx.description || tx.sourceDetail || '',
       is_anonymous: tx.isAnonymous === true || tx.isAnonymous === 1,
@@ -458,7 +469,7 @@ async function syncAccount(
     }
 
     if (transactions.length > 0) {
-      const count = await upsertTransactions(accountId, cast.cast_name, transactions);
+      const count = await upsertTransactions(accountId, cast.cast_name, transactions, casts);
       totalTx += count;
       log.info(`[${cast.cast_name}] ${count}件 coin_transactions 保存`);
     } else {
