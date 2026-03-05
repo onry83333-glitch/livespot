@@ -189,12 +189,14 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
 
   // キャストの今日のchat_logsを削除（account_idフィルタ付き）
   const deleteCastMessages = useCallback(async (targetCastName: string): Promise<string | null> => {
+    if (!accountId) return 'account_id が不明です';
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
     const { error } = await supabaseRef.current
       .from('chat_logs')
       .delete()
+      .eq('account_id', accountId)
       .eq('cast_name', targetCastName)
       .gte('timestamp', todayStart.toISOString());
 

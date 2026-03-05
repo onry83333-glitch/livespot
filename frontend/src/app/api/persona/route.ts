@@ -422,19 +422,21 @@ async function buildUserPrompt(
         .limit(10);
       const spyMsgs = (rawSpyMsgs || []).map(r => ({ message: r.message, message_time: r.timestamp, msg_type: r.message_type, tokens: r.tokens }));
 
-      const { data: coinTx } = await supabase
+      const accountId = context.account_id as string | undefined;
+
+      let coinTxQuery = supabase
         .from('coin_transactions')
         .select('tokens, type, date')
         .eq('user_name', userName)
         .eq('cast_name', castName)
         .order('date', { ascending: false })
         .limit(20);
+      if (accountId) coinTxQuery = coinTxQuery.eq('account_id', accountId);
+      const { data: coinTx } = await coinTxQuery;
 
       const totalCoins = coinTx?.reduce((s, t) => s + (t.tokens || 0), 0) || 0;
       const avgCoins = coinTx && coinTx.length > 0 ? Math.round(totalCoins / coinTx.length) : 0;
       const lastTxDate = coinTx?.[0]?.date || '不明';
-
-      const accountId = context.account_id as string | undefined;
       let paidUserQuery = supabase
         .from('user_profiles')
         .select('total_tokens, last_seen')
@@ -447,7 +449,7 @@ async function buildUserPrompt(
         ? getSegmentLabel(paidUser.total_tokens, paidUser.last_seen)
         : 'S10:単発';
 
-      const { data: lastDms } = await supabase
+      let lastDmsQuery = supabase
         .from('dm_send_log')
         .select('message, sent_at, template_name')
         .eq('user_name', userName)
@@ -455,6 +457,8 @@ async function buildUserPrompt(
         .eq('status', 'success')
         .order('sent_at', { ascending: false })
         .limit(3);
+      if (accountId) lastDmsQuery = lastDmsQuery.eq('account_id', accountId);
+      const { data: lastDms } = await lastDmsQuery;
 
       const spyLog = spyMsgs?.map(m =>
         `[${m.message_time?.slice(11, 16) || '??:??'}] ${m.msg_type}: ${m.message || ''} ${m.tokens ? `(${m.tokens}tk)` : ''}`

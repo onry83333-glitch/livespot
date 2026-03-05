@@ -357,8 +357,10 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
     if (!user || castFilter !== 'own') return;
     const supabase = createClient();
     const loadViewer = () => {
+      if (!accountId) return;
       let query = supabase.from('viewer_stats')
-        .select('total, coin_users, others, recorded_at, cast_name');
+        .select('total, coin_users, others, recorded_at, cast_name')
+        .eq('account_id', accountId);
       // 特定キャスト選択時はフィルタ、未選択時は自社キャスト全体の最新
       if (selectedCast) {
         query = query.eq('cast_name', selectedCast);
@@ -375,7 +377,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
     loadViewer();
     const interval = setInterval(loadViewer, 30000);
     return () => clearInterval(interval);
-  }, [user, castFilter, selectedCast, registeredCastNames]);
+  }, [user, castFilter, selectedCast, registeredCastNames, accountId]);
 
   // Filtered messages
   const allFilterTypes = useMemo(() => {
