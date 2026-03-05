@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
     .from('coin_transactions')
     .select('date, type, user_name, tokens')
     .eq('account_id', account_id)
-    .or(`cast_name.eq.${cast_name},cast_name.is.null`)
+    .eq('cast_name', cast_name)
     .gte('date', new Date(new Date(sessionStart).getTime() - 5 * 60000).toISOString())
     .lte('date', new Date(new Date(sessionEnd).getTime() + 30 * 60000).toISOString())
     .gt('tokens', 0)

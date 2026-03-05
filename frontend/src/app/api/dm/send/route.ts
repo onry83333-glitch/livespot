@@ -159,7 +159,8 @@ export async function POST(req: NextRequest) {
           sent_at: new Date().toISOString(),
           error: null,
         })
-        .eq('id', dm_log_id);
+        .eq('id', dm_log_id)
+        .eq('account_id', account.id);
     }
 
     return NextResponse.json({
@@ -178,7 +179,8 @@ export async function POST(req: NextRequest) {
         sent_via: 'api',
         error: result.error,
       })
-      .eq('id', dm_log_id);
+      .eq('id', dm_log_id)
+      .eq('account_id', account.id);
   }
 
   if (result.sessionExpired) {
