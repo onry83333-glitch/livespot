@@ -434,12 +434,14 @@ async function buildUserPrompt(
       const avgCoins = coinTx && coinTx.length > 0 ? Math.round(totalCoins / coinTx.length) : 0;
       const lastTxDate = coinTx?.[0]?.date || '不明';
 
-      const { data: paidUser } = await supabase
+      const accountId = context.account_id as string | undefined;
+      let paidUserQuery = supabase
         .from('user_profiles')
         .select('total_tokens, last_seen')
         .eq('username', userName)
-        .eq('cast_name', castName)
-        .single();
+        .eq('cast_name', castName);
+      if (accountId) paidUserQuery = paidUserQuery.eq('account_id', accountId);
+      const { data: paidUser } = await paidUserQuery.single();
 
       const segment = paidUser
         ? getSegmentLabel(paidUser.total_tokens, paidUser.last_seen)
@@ -1055,7 +1057,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
       mode === 'recruitment' ? `\n${RECRUITMENT_AXIS_TRANSFORM}` : '',
     ].filter(Boolean).join('\n');
 
-    const userPrompt = await buildUserPrompt(task_type, { ...context, cast_name }, auth.token);
+    const userPrompt = await buildUserPrompt(task_type, { ...context, cast_name, account_id: reqAccountId }, auth.token);
 
     const maxTokens = task_type === 'dm_generate' || task_type === 'realtime_coach' ? 500 : 1000;
 

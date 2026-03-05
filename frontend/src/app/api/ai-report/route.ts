@@ -178,6 +178,7 @@ async function generateSessionReport(token: string, sessionId: string) {
     const { data: rawPaidUsers } = await supabase
       .from('user_profiles')
       .select('username, total_tokens, last_seen')
+      .eq('account_id', session.account_id)
       .eq('cast_name', session.cast_name)
       .in('username', usernames.slice(0, 500))
       .limit(500);
