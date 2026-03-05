@@ -310,9 +310,12 @@ export class TriggerEngine {
         throw e;
       }
 
-      const message = trigger.message_template
-        ? renderTemplate(trigger.message_template, ctx)
-        : `Hi ${ctx.userName}!`;
+      // Priority: RPC suggested template > trigger template > fallback
+      const message = ctx.suggestedTemplate
+        ? ctx.suggestedTemplate
+        : trigger.message_template
+          ? renderTemplate(trigger.message_template, ctx)
+          : `Hi ${ctx.userName}!`;
 
       // Insert into dm_send_log
       const { data: dmRow, error: dmError } = await sb

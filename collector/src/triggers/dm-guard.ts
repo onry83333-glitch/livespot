@@ -5,6 +5,9 @@
  *
  * 1. DM_TEST_MODE: デフォルトON。テスト時はホワイトリスト以外への送信をブロック
  * 2. campaign必須: campaign_idなしのDMは送信拒否
+ * 3. DM_TRIGGER_ENABLED: トリガーDM（campaign が trigger_ で始まる）の許可フラグ
+ *    - DM_TEST_MODE=true でも DM_TRIGGER_ENABLED=true なら trigger_ campaignは通す
+ *    - デフォルト: false（明示的にONにする必要あり）
  */
 
 import { createLogger } from '../utils/logger.js';
@@ -23,10 +26,15 @@ export function isDmTestMode(): boolean {
   return !['false', 'off', '0'].includes(val.toLowerCase());
 }
 
+export function isDmTriggerEnabled(): boolean {
+  const val = process.env.DM_TRIGGER_ENABLED ?? 'false';
+  return ['true', 'on', '1'].includes(val.toLowerCase());
+}
+
 export class DmGuardError extends Error {
   constructor(
     message: string,
-    public readonly code: 'TEST_MODE_BLOCKED' | 'CAMPAIGN_REQUIRED',
+    public readonly code: 'TEST_MODE_BLOCKED' | 'CAMPAIGN_REQUIRED' | 'TRIGGER_DISABLED',
     public readonly blockedUsers?: string[],
   ) {
     super(message);
@@ -50,7 +58,23 @@ export function guardDmSend(
     );
   }
 
-  // 2. テストモード＋ホワイトリストチェック
+  // 2. トリガーDM: DM_TRIGGER_ENABLED で独立制御
+  const isTriggerCampaign = campaign.startsWith('trigger_');
+  if (isTriggerCampaign) {
+    if (!isDmTriggerEnabled()) {
+      log.info(`[DM_TRIGGER] ブロック: DM_TRIGGER_ENABLED=false — ${userName} (${campaign})`);
+      throw new DmGuardError(
+        `トリガーDMは無効です。DM_TRIGGER_ENABLED=true で有効化してください。`,
+        'TRIGGER_DISABLED',
+        [userName],
+      );
+    }
+    // トリガーDMが有効なら、テストモードに関係なく通す
+    log.debug(`[DM_TRIGGER] 許可: ${userName} (${campaign})`);
+    return { allowed: true, isTestMode: isDmTestMode() };
+  }
+
+  // 3. 通常DM: テストモード＋ホワイトリストチェック
   const isTestMode = isDmTestMode();
 
   if (isTestMode && !DM_TEST_WHITELIST.has(userName)) {

@@ -105,6 +105,8 @@ export interface TriggerContext {
   previousSegment?: string;
   daysSinceLastVisit?: number;
   sessionTokens?: number;
+  /** RPC-generated suggested template (e.g. from get_thankyou_dm_candidates) */
+  suggestedTemplate?: string;
 }
 
 export interface EvaluationResult {

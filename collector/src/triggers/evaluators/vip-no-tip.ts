@@ -24,27 +24,55 @@ export async function evaluateVipNoTip(
   const sb = getSupabase();
   const minTotalTokens = (trigger.condition_config.min_total_tokens as number) || 1000;
 
-  // 1. Get all viewers for this session
-  const { data: viewers, error: viewerErr } = await sb
+  // Get session time range for reliable filtering
+  const { data: session } = await sb
+    .from('sessions')
+    .select('started_at, ended_at')
+    .eq('session_id', sessionId)
+    .single();
+
+  if (!session?.started_at) {
+    return { shouldFire: false, targets: [], reason: 'session not found' };
+  }
+
+  const startedAt = session.started_at;
+  const endedAt = session.ended_at || new Date().toISOString();
+
+  // 1. Get all viewers for this session (try session_id first, fallback to time range)
+  let viewerNames: string[] = [];
+  const { data: viewers } = await sb
     .from('spy_viewers')
     .select('user_name')
     .eq('account_id', accountId)
     .eq('cast_name', castName)
     .eq('session_id', sessionId);
 
-  if (viewerErr || !viewers || viewers.length === 0) {
-    return { shouldFire: false, targets: [], reason: 'no viewers' };
+  if (viewers && viewers.length > 0) {
+    viewerNames = viewers.map((v: { user_name: string }) => v.user_name);
+  } else {
+    // Fallback: get distinct chatters during session as proxy for "viewers"
+    const { data: chatters } = await sb
+      .from('spy_messages')
+      .select('user_name')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .gte('message_time', startedAt)
+      .lte('message_time', endedAt);
+
+    if (!chatters || chatters.length === 0) {
+      return { shouldFire: false, targets: [], reason: 'no viewers/chatters' };
+    }
+    viewerNames = [...new Set(chatters.map((c: { user_name: string }) => c.user_name))];
   }
 
-  const viewerNames = viewers.map((v: { user_name: string }) => v.user_name);
-
-  // 2. Get users who tipped in this session
+  // 2. Get users who tipped during session time range
   const { data: tippers, error: tipErr } = await sb
     .from('spy_messages')
     .select('user_name')
     .eq('account_id', accountId)
     .eq('cast_name', castName)
-    .eq('session_id', sessionId)
+    .gte('message_time', startedAt)
+    .lte('message_time', endedAt)
     .gt('tokens', 0);
 
   if (tipErr) {
@@ -55,31 +83,46 @@ export async function evaluateVipNoTip(
   const tipperSet = new Set((tippers || []).map((t: { user_name: string }) => t.user_name));
 
   // 3. Viewers who did NOT tip
-  const noTipViewers = viewerNames.filter((name: string) => !tipperSet.has(name));
+  const noTipViewers = viewerNames.filter((name) => !tipperSet.has(name));
   if (noTipViewers.length === 0) {
     return { shouldFire: false, targets: [] };
   }
 
-  // 4. Filter to high-value users (total tokens >= threshold from spy_user_profiles)
-  const { data: profiles, error: profErr } = await sb
-    .from('spy_user_profiles')
-    .select('user_name, total_tokens')
+  // 4. Filter to high-value users (try user_profiles first, fallback to spy_user_profiles)
+  let profiles: { user_name: string; total_tokens: number }[] | null = null;
+
+  const { data: v2Profiles } = await sb
+    .from('user_profiles')
+    .select('username, total_tokens')
     .eq('account_id', accountId)
     .eq('cast_name', castName)
-    .eq('is_registered_cast', true)
-    .in('user_name', noTipViewers)
+    .in('username', noTipViewers)
     .gte('total_tokens', minTotalTokens);
 
-  if (profErr) {
-    log.error(`Failed to query profiles: ${profErr.message}`);
-    return { shouldFire: false, targets: [] };
+  if (v2Profiles && v2Profiles.length > 0) {
+    profiles = v2Profiles.map((p: { username: string; total_tokens: number }) => ({
+      user_name: p.username,
+      total_tokens: p.total_tokens,
+    }));
+  } else {
+    // Fallback to legacy spy_user_profiles
+    const { data: legacyProfiles } = await sb
+      .from('spy_user_profiles')
+      .select('user_name, total_tokens')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .eq('is_registered_cast', true)
+      .in('user_name', noTipViewers)
+      .gte('total_tokens', minTotalTokens);
+
+    profiles = legacyProfiles;
   }
 
   if (!profiles || profiles.length === 0) {
     return { shouldFire: false, targets: [] };
   }
 
-  const targets: TriggerContext[] = profiles.map((p: { user_name: string; total_tokens: number }) => ({
+  const targets: TriggerContext[] = profiles.map((p) => ({
     accountId,
     castName,
     userName: p.user_name,
