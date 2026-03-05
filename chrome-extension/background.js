@@ -1813,6 +1813,89 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ============================================================
+// getLoggedInCastFromCookies — CookieからログインキャストのStripchat IDを取得
+// ============================================================
+async function getLoggedInCastFromCookies() {
+  // 1. stripchat_com_userId Cookie取得
+  const allCookies = await chrome.cookies.getAll({ domain: '.stripchat.com' });
+  const userIdValues = new Set();
+  for (const c of allCookies) {
+    if (c.name === 'stripchat_com_userId' && c.value) {
+      userIdValues.add(c.value);
+    }
+  }
+
+  // userId が取れない場合
+  if (userIdValues.size === 0) {
+    return { userId: null, castName: null };
+  }
+
+  // 複数userId検出（複数アカウントが混在）
+  const allUserIds = [...userIdValues];
+  if (allUserIds.length > 1) {
+    return { multipleDetected: true, allUserIds };
+  }
+
+  const userId = allUserIds[0];
+
+  // 2. registered_casts から stripchat_user_id で照合
+  const token = accessToken;
+  if (!token || !accountId) {
+    return { userId, castName: null };
+  }
+
+  try {
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,stripchat_user_id`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${token}`,
+        },
+      }
+    );
+    if (!res.ok) {
+      return { userId, castName: null };
+    }
+
+    const casts = await res.json();
+    const matched = casts.find(c => String(c.stripchat_user_id) === String(userId));
+
+    return {
+      userId,
+      castName: matched?.cast_name || null,
+      displayName: matched?.cast_name || null,
+      allCasts: casts,
+    };
+  } catch (e) {
+    console.warn('[LS-BG] getLoggedInCastFromCookies: registered_casts照合失敗:', e.message);
+    return { userId, castName: null };
+  }
+}
+
+// ============================================================
+// clearStripchatIdentityCookies — Stripchat認証Cookieをクリア
+// ============================================================
+async function clearStripchatIdentityCookies() {
+  const cookieNames = [
+    'stripchat_com_userId',
+    'stripchat_com_sessionId',
+    'AMP',
+  ];
+  const cleared = [];
+  for (const name of cookieNames) {
+    try {
+      await chrome.cookies.remove({ url: 'https://stripchat.com', name });
+      cleared.push(name);
+    } catch (e) {
+      // Cookie が存在しない場合は無視
+    }
+  }
+  console.log('[LS-BG] clearStripchatIdentityCookies: クリア完了', cleared);
+  return cleared;
+}
+
+// ============================================================
 // STT Queue Processing — 音声チャンクをFastAPIに送信（並行処理対応）
 // 最大STT_MAX_CONCURRENT件を同時にtranscribe
 // ============================================================
