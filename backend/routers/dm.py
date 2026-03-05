@@ -293,6 +293,11 @@ async def create_template(body: DMTemplateCreate, user=Depends(get_current_user)
 @router.delete("/templates/{template_id}")
 async def delete_template(template_id: str, user=Depends(get_current_user)):
     sb = get_supabase_admin()
+    # 所有権チェック: テンプレートのaccount_idがユーザーのものか確認
+    tmpl = sb.table("dm_templates").select("account_id").eq("id", template_id).single().execute()
+    if not tmpl.data:
+        raise HTTPException(status_code=404, detail="Template not found")
+    _verify_account_ownership(sb, tmpl.data["account_id"], user["user_id"])
     sb.table("dm_templates").delete().eq("id", template_id).execute()
     return {"deleted": True}
 
