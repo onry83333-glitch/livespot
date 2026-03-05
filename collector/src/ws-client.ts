@@ -37,7 +37,13 @@ const FETCH_HEADERS = {
 };
 
 // ----- Types -----
-export type CastStatus = 'public' | 'private' | 'off' | 'p2p' | 'unknown';
+export type CastStatus = 'public' | 'private' | 'off' | 'p2p' | 'ticketShow' | 'groupShow' | 'unknown';
+
+/** ステータスが配信中（セッション継続）とみなせるか */
+export function isOnlineStatus(status: CastStatus | string): boolean {
+  return status === 'public' || status === 'private' || status === 'p2p'
+    || status === 'ticketShow' || status === 'groupShow';
+}
 
 export interface StatusResult {
   status: CastStatus;

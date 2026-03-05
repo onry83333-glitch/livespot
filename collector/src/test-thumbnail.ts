@@ -10,7 +10,7 @@
 
 import 'dotenv/config';
 import { getSupabase, loadTargets } from './config.js';
-import { pollCastStatus } from './ws-client.js';
+import { pollCastStatus, isOnlineStatus } from './ws-client.js';
 import { captureThumbnail, type OnlineCast } from './thumbnails.js';
 import { createLogger, setLogLevel } from './utils/logger.js';
 
@@ -55,7 +55,6 @@ async function main(): Promise<void> {
     log.info(`Checking ${t.castName} (modelId=${t.stripchatModelId || 'unknown'})...`);
     const result = await pollCastStatus(t.castName);
 
-    const isOnline = result.status === 'public' || result.status === 'private' || result.status === 'p2p';
     const modelId = result.modelId || t.stripchatModelId;
 
     if (modelId) {
@@ -67,7 +66,7 @@ async function main(): Promise<void> {
         source: t.source,
       };
 
-      if (isOnline) {
+      if (isOnlineStatus(result.status)) {
         log.info(`Found ONLINE cast: ${t.castName} (modelId=${modelId})`);
         break;
       } else {

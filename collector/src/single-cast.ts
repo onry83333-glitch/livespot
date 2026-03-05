@@ -15,7 +15,7 @@
 
 import 'dotenv/config';
 import { CastTarget, POLL_INTERVALS, BATCH_CONFIG, getSupabase } from './config.js';
-import { pollCastStatus, pollViewers, CastStatus, StripchatWsClient, WsMessage } from './ws-client.js';
+import { pollCastStatus, pollViewers, CastStatus, StripchatWsClient, WsMessage, isOnlineStatus } from './ws-client.js';
 import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast, startBatchFlush, stopBatchFlush, flushBuffer } from './storage/supabase.js';
 import { accumulateViewer, flushProfiles } from './storage/spy-profiles.js';
 import { parseCentrifugoChat } from './parsers/chat.js';
@@ -245,8 +245,8 @@ async function doPollStatus(): Promise<void> {
   viewerCount = result.viewerCount;
   if (result.modelId) modelId = result.modelId;
 
-  const isOnline = result.status === 'public' || result.status === 'private' || result.status === 'p2p';
-  const wasOnline = prevStatus === 'public' || prevStatus === 'private' || prevStatus === 'p2p';
+  const isOnline = isOnlineStatus(result.status);
+  const wasOnline = isOnlineStatus(prevStatus);
 
   // --- ONLINE transition ---
   if (isOnline && !wasOnline && prevStatus !== 'unknown') {
@@ -362,8 +362,7 @@ async function doPollStatus(): Promise<void> {
 
 async function doPollViewerList(): Promise<void> {
   const now = Date.now();
-  const isOnline = status === 'public' || status === 'private' || status === 'p2p';
-  if (!isOnline) return;
+  if (!isOnlineStatus(status)) return;
   if (now - lastViewerPoll < POLL_INTERVALS.viewerSec * 1000) return;
   lastViewerPoll = now;
 
@@ -409,8 +408,7 @@ let triggerEngine: TriggerEngine | null = null;
 
 // ----- Thumbnail (for this cast only when online) -----
 async function doThumbnail(): Promise<void> {
-  const isOnline = status === 'public' || status === 'private' || status === 'p2p';
-  if (!isOnline || !modelId) return;
+  if (!isOnlineStatus(status) || !modelId) return;
   try {
     await captureThumbnailForCast(CAST_NAME, modelId, ACCOUNT_ID, sessionId, CAST_SOURCE);
   } catch (err) {
@@ -422,9 +420,9 @@ async function doThumbnail(): Promise<void> {
 async function reportHealth(): Promise<void> {
   try {
     const sb = getSupabase();
-    const isOnline = status === 'public' || status === 'private' || status === 'p2p';
+    const online = isOnlineStatus(status);
     const wsConnected = wsClient?.isConnected() ?? false;
-    const detail = `${CAST_NAME}: ${isOnline ? status : 'off'} WS=${wsConnected ? 'ON' : 'off'} ${wsMessageCount}msg ${wsTipTotal}tk`;
+    const detail = `${CAST_NAME}: ${online ? status : 'off'} WS=${wsConnected ? 'ON' : 'off'} ${wsMessageCount}msg ${wsTipTotal}tk`;
 
     await sb.from('pipeline_status').upsert({
       pipeline_name: `Collector:${CAST_NAME}`,

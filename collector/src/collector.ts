@@ -15,6 +15,7 @@ import {
   CastStatus,
   StripchatWsClient,
   WsMessage,
+  isOnlineStatus,
 } from './ws-client.js';
 import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast } from './storage/supabase.js';
 import { accumulateViewer } from './storage/spy-profiles.js';
@@ -300,8 +301,7 @@ export function getOnlineCasts(): {
 }[] {
   return Array.from(castStates.values())
     .filter((s) => {
-      const isOnline = s.status === 'public' || s.status === 'private' || s.status === 'p2p';
-      return isOnline && s.modelId;
+      return isOnlineStatus(s.status) && s.modelId;
     })
     .map((s) => ({
       castName: s.target.castName,
@@ -339,8 +339,8 @@ async function pollStatus(state: CastState): Promise<void> {
     state.modelId = result.modelId;
   }
 
-  const isOnline = result.status === 'public' || result.status === 'private' || result.status === 'p2p';
-  const wasOnline = prevStatus === 'public' || prevStatus === 'private' || prevStatus === 'p2p';
+  const isOnline = isOnlineStatus(result.status);
+  const wasOnline = isOnlineStatus(prevStatus);
 
   // ------ ONLINE transition ------
   if (isOnline && !wasOnline && prevStatus !== 'unknown') {
@@ -488,8 +488,7 @@ async function pollViewerList(state: CastState): Promise<void> {
   const { target } = state;
   const now = Date.now();
 
-  const isOnline = state.status === 'public' || state.status === 'private' || state.status === 'p2p';
-  if (!isOnline) return;
+  if (!isOnlineStatus(state.status)) return;
 
   if (now - state.lastViewerPoll < POLL_INTERVALS.viewerSec * 1000) return;
   state.lastViewerPoll = now;
