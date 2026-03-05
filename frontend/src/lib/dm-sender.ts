@@ -13,6 +13,7 @@ interface QueueResult {
   skipped: number;
   skippedUsers: string[];
   blockedByLimit: number;
+  blacklistedCount?: number;
   batchId: string;
   limitReason?: string;
 }
@@ -21,6 +22,37 @@ interface DuplicateCheckResult {
   duplicates: string[];
   duplicate_count: number;
   checked_count: number;
+}
+
+/**
+ * ブラックリストチェック
+ * 指定ユーザー名リストからブラックリスト該当者を返す
+ */
+export async function checkBlacklist(
+  supabase: SupabaseClient,
+  accountId: string,
+  castName: string,
+  usernames: string[],
+): Promise<{ blocked: string[]; blocked_count: number }> {
+  try {
+    const { data, error } = await supabase.rpc('check_blacklisted_users', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_user_names: usernames,
+    });
+
+    if (error || !data) {
+      console.warn('[dm-sender] Blacklist check RPC failed, skipping:', error?.message);
+      return { blocked: [], blocked_count: 0 };
+    }
+
+    return {
+      blocked: data.blocked || [],
+      blocked_count: data.blocked_count || 0,
+    };
+  } catch {
+    return { blocked: [], blocked_count: 0 };
+  }
 }
 
 /**
@@ -85,6 +117,26 @@ export async function queueDmBatch(
   let skipped = 0;
   let skippedUsers: string[] = [];
   let blockedByLimit = 0;
+  let blacklistedCount = 0;
+
+  // ブラックリストチェック: 該当ユーザーを送信対象から除外
+  if (castName) {
+    const blCheck = await checkBlacklist(supabase, accountId, castName, usernames);
+    if (blCheck.blocked_count > 0) {
+      const blSet = new Set(blCheck.blocked);
+      blacklistedCount = blCheck.blocked_count;
+      filteredTargets = filteredTargets.filter(t => !blSet.has(t.username));
+      usernames = filteredTargets.map(t => t.username);
+
+      console.info(
+        `[dm-sender] ブラックリスト除外: ${blacklistedCount}件 (${blCheck.blocked.join(', ')})`,
+      );
+
+      if (filteredTargets.length === 0) {
+        return { queued: 0, skipped: 0, skippedUsers: [], blockedByLimit: 0, batchId: campaign };
+      }
+    }
+  }
 
   // P0-5: 1日あたりの送信上限チェック
   const dailyCheck = await checkDailyDmLimit(supabase, accountId);
@@ -253,5 +305,5 @@ export async function queueDmBatch(
     batchId = campaign;
   }
 
-  return { queued: count, skipped, skippedUsers, blockedByLimit, batchId };
+  return { queued: count, skipped, skippedUsers, blockedByLimit, blacklistedCount, batchId };
 }

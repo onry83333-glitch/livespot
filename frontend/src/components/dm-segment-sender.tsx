@@ -89,6 +89,12 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
   const [allTimeUsers, setAllTimeUsers] = useState<AggregatedUser[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // --- Blacklist state ---
+  const [blacklistedNames, setBlacklistedNames] = useState<Set<string>>(new Set());
+  const [blacklistLoading, setBlacklistLoading] = useState(false);
+  const [showBlacklist, setShowBlacklist] = useState(false);
+  const [blacklistInput, setBlacklistInput] = useState('');
+
   // --- Send state ---
   const [message, setMessage] = useState('');
   const [campaign, setCampaign] = useState('');
@@ -120,6 +126,64 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
           )
         );
       });
+  }, [supabase, accountId, castName]);
+
+  // Fetch blacklist
+  const fetchBlacklist = useCallback(async () => {
+    const { data } = await supabase
+      .from('blacklisted_users')
+      .select('user_name')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName);
+    setBlacklistedNames(new Set((data || []).map((r: { user_name: string }) => r.user_name)));
+  }, [supabase, accountId, castName]);
+
+  useEffect(() => {
+    if (!accountId || !castName) return;
+    fetchBlacklist();
+  }, [accountId, castName, fetchBlacklist]);
+
+  // Add to blacklist
+  const addToBlacklist = useCallback(async (userName: string, reason?: string) => {
+    setBlacklistLoading(true);
+    await supabase.from('blacklisted_users').upsert(
+      { account_id: accountId, cast_name: castName, user_name: userName, reason: reason || null },
+      { onConflict: 'account_id,cast_name,user_name' },
+    );
+    setBlacklistedNames(prev => { const s = new Set(Array.from(prev)); s.add(userName); return s; });
+    setBlacklistLoading(false);
+  }, [supabase, accountId, castName]);
+
+  // Remove from blacklist
+  const removeFromBlacklist = useCallback(async (userName: string) => {
+    setBlacklistLoading(true);
+    await supabase.from('blacklisted_users')
+      .delete()
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .eq('user_name', userName);
+    setBlacklistedNames(prev => { const s = new Set(Array.from(prev)); s.delete(userName); return s; });
+    setBlacklistLoading(false);
+  }, [supabase, accountId, castName]);
+
+  // Bulk add to blacklist
+  const bulkAddToBlacklist = useCallback(async (userNames: string[]) => {
+    if (userNames.length === 0) return;
+    setBlacklistLoading(true);
+    const rows = userNames.map(u => ({
+      account_id: accountId,
+      cast_name: castName,
+      user_name: u,
+      reason: 'manual',
+    }));
+    await supabase.from('blacklisted_users').upsert(rows, { onConflict: 'account_id,cast_name,user_name' });
+    setBlacklistedNames(prev => {
+      const s = new Set(Array.from(prev));
+      userNames.forEach(n => s.add(n));
+      return s;
+    });
+    setBlacklistLoading(false);
+    setBlacklistInput('');
   }, [supabase, accountId, castName]);
 
   // Fetch coin_transactions for the selected period
@@ -178,16 +242,23 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
   // ============================================================
 
   const filteredUsers = useMemo(() => {
+    let result: AggregatedUser[];
     // Special case: churned preset — users in allTimeUsers but NOT in periodUsers (or 0 coins in period)
     if (activePreset === 'churned' && period !== 'all') {
       const periodSet = new Set(periodUsers.map((u) => u.user_name));
-      return allTimeUsers
+      result = allTimeUsers
         .filter((u) => u.total_coins >= 1 && !periodSet.has(u.user_name))
         .sort((a, b) => b.total_coins - a.total_coins);
+    } else {
+      result = periodUsers.filter((u) => u.total_coins >= minCoins && u.total_coins <= maxCoins);
     }
 
-    return periodUsers.filter((u) => u.total_coins >= minCoins && u.total_coins <= maxCoins);
-  }, [periodUsers, allTimeUsers, minCoins, maxCoins, activePreset, period]);
+    // Exclude blacklisted users
+    if (blacklistedNames.size > 0) {
+      result = result.filter((u) => !blacklistedNames.has(u.user_name));
+    }
+    return result;
+  }, [periodUsers, allTimeUsers, minCoins, maxCoins, activePreset, period, blacklistedNames]);
 
   // Stats
   const totalFilteredCoins = useMemo(() => filteredUsers.reduce((s, u) => s + u.total_coins, 0), [filteredUsers]);
@@ -450,13 +521,21 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
                     <span className="text-[10px] mr-2" style={{ color: 'var(--text-muted)' }}>{i + 1}.</span>
                     {u.user_name}
                   </span>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
                     <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                       {u.tx_count > 0 && `${u.tx_count}回`}
                     </span>
                     <span style={{ color: 'var(--accent-primary)' }}>
                       {u.total_coins.toLocaleString()}tk
                     </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); addToBlacklist(u.user_name); }}
+                      title="ブラックリストに追加"
+                      className="text-[9px] px-1 py-0.5 rounded opacity-40 hover:opacity-100 transition-opacity"
+                      style={{ color: 'var(--accent-pink)' }}
+                    >
+                      🚫
+                    </button>
                   </div>
                 </div>
               ))}
@@ -467,6 +546,86 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
               </div>
             )}
           </>
+        )}
+      </div>
+
+      {/* Blacklist management */}
+      <div className="glass-card p-4">
+        <div className="flex items-center justify-between mb-2">
+          <button
+            onClick={() => setShowBlacklist(!showBlacklist)}
+            className="text-xs font-bold flex items-center gap-1.5"
+            style={{ color: 'var(--text-primary)' }}
+          >
+            <span style={{ color: 'var(--accent-pink)' }}>🚫</span>
+            ブラックリスト
+            <span className="text-[10px] font-normal" style={{ color: 'var(--text-muted)' }}>
+              ({blacklistedNames.size}名)
+            </span>
+            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              {showBlacklist ? '▲' : '▼'}
+            </span>
+          </button>
+        </div>
+
+        {showBlacklist && (
+          <div className="space-y-3">
+            {/* Add by username */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={blacklistInput}
+                onChange={(e) => setBlacklistInput(e.target.value)}
+                className="input-glass flex-1 text-xs"
+                placeholder="ユーザー名を入力（カンマ区切りで複数可）"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && blacklistInput.trim()) {
+                    const names = blacklistInput.split(',').map(s => s.trim()).filter(Boolean);
+                    bulkAddToBlacklist(names);
+                  }
+                }}
+              />
+              <button
+                onClick={() => {
+                  const names = blacklistInput.split(',').map(s => s.trim()).filter(Boolean);
+                  if (names.length > 0) bulkAddToBlacklist(names);
+                }}
+                disabled={!blacklistInput.trim() || blacklistLoading}
+                className="btn-danger text-[11px] px-3 py-1.5 disabled:opacity-40"
+              >
+                追加
+              </button>
+            </div>
+
+            {/* Blacklisted user list */}
+            {blacklistedNames.size > 0 ? (
+              <div className="space-y-1 max-h-36 overflow-y-auto">
+                {Array.from(blacklistedNames).sort().map((name) => (
+                  <div
+                    key={name}
+                    className="flex items-center justify-between py-1 px-2 rounded text-xs"
+                    style={{ background: 'rgba(244,63,94,0.06)' }}
+                  >
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      <span style={{ color: 'var(--accent-pink)' }}>🚫</span> {name}
+                    </span>
+                    <button
+                      onClick={() => removeFromBlacklist(name)}
+                      disabled={blacklistLoading}
+                      className="text-[10px] px-2 py-0.5 rounded transition-all hover:opacity-80"
+                      style={{ color: 'var(--accent-pink)', background: 'rgba(244,63,94,0.1)' }}
+                    >
+                      解除
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-[10px] text-center py-2" style={{ color: 'var(--text-muted)' }}>
+                ブラックリストは空です
+              </div>
+            )}
+          </div>
         )}
       </div>
 
