@@ -99,8 +99,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // P0-5: キャスト身元検証ゲート — cast_name→registered_casts.stripchat_user_id→session一致確認
-  if (body.cast_name && session.stripchat_user_id) {
+  // P0-5: キャスト身元検証ゲート — cast_name必須、stripchat_user_id照合
+  if (!body.cast_name) {
+    return NextResponse.json(
+      { error: 'cast_name is required. キャスト名なしのDM送信は許可されていません。' },
+      { status: 400 },
+    );
+  }
+
+  if (!session.stripchat_user_id) {
+    return NextResponse.json(
+      { error: 'セッションにstripchat_user_idがありません。Chrome拡張でセッションを再同期してください。' },
+      { status: 400 },
+    );
+  }
+
+  {
     const { data: rc } = await supabase
       .from('registered_casts')
       .select('stripchat_user_id')
@@ -109,7 +123,17 @@ export async function POST(req: NextRequest) {
       .eq('is_active', true)
       .maybeSingle();
 
-    if (rc?.stripchat_user_id && String(rc.stripchat_user_id) !== String(session.stripchat_user_id)) {
+    if (!rc?.stripchat_user_id) {
+      return NextResponse.json(
+        {
+          error: 'CAST_IDENTITY_UNREGISTERED',
+          detail: `cast=${body.cast_name} のstripchat_user_idが未登録です。キャスト設定でIDを登録してください。`,
+        },
+        { status: 403 },
+      );
+    }
+
+    if (String(rc.stripchat_user_id) !== String(session.stripchat_user_id)) {
       return NextResponse.json(
         {
           error: 'CAST_IDENTITY_MISMATCH',

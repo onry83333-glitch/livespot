@@ -20,7 +20,7 @@
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { StripchatDMApi, type SessionData } from './stripchat-api.js';
-import { fetchQueuedTasks, markSending, markSuccess, markError, markBlockedTestMode, markBlockedNoCampaign, requeue, getQueueCount } from './queue.js';
+import { fetchQueuedTasks, markSending, markSuccess, markError, markBlockedTestMode, markBlockedNoCampaign, markBlockedIdentityMismatch, requeue, getQueueCount } from './queue.js';
 import { waitForSlot, checkDailyLimit, isUserOnCooldown, SEND_INTERVAL_MS, DAILY_LIMIT } from './rate-limiter.js';
 import {
   getActiveSession, invalidateSession,
@@ -152,12 +152,12 @@ async function processBatch(accountId: string): Promise<{ sent: number; errors: 
     // 6b. キャスト身元検証 (P0-5)
     const identityError = verifyCastIdentity(identity, task.cast_name);
     if (identityError) {
-      log('error', identityError, { taskId: task.id });
-      await markError(sb, task.id, identityError);
+      log('error', identityError, { taskId: task.id, castName: task.cast_name });
+      await markBlockedIdentityMismatch(sb, task.id, identityError);
       errors++;
       // 身元不一致は全件停止
       for (const remaining of tasks.slice(tasks.indexOf(task) + 1)) {
-        await markError(sb, remaining.id, identityError);
+        await markBlockedIdentityMismatch(sb, remaining.id, identityError);
         errors++;
       }
       return { sent, errors, skipped };

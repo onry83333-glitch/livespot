@@ -119,10 +119,17 @@ export function verifyCastIdentity(
   identity: CastIdentityMap,
   taskCastName: string,
 ): string | null {
-  if (!taskCastName) return null; // cast_name未設定はスキップ
+  // cast_name未設定 → ブロック（身元不明のDMは送信禁止）
+  if (!taskCastName) {
+    return 'CAST_IDENTITY_MISSING: cast_nameが未設定のため送信ブロック';
+  }
 
   const registeredId = identity.map.get(taskCastName);
-  if (!registeredId) return null; // 未登録キャストはスキップ
+
+  // registered_castsにstripchat_user_id未登録 → ブロック（身元照合不可能）
+  if (!registeredId) {
+    return `CAST_IDENTITY_UNREGISTERED: cast=${taskCastName} のstripchat_user_idが未登録のため送信ブロック`;
+  }
 
   if (registeredId !== identity.sessionUserId) {
     return `CAST_IDENTITY_MISMATCH: cast=${taskCastName}(ID:${registeredId}) != session(${identity.sessionUserId})`;

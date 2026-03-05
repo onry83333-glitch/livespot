@@ -129,6 +129,20 @@ export async function markBlockedNoCampaign(sb: SupabaseClient, taskId: number):
 }
 
 /**
+ * キャスト身元検証失敗でブロックされた送信を記録
+ */
+export async function markBlockedIdentityMismatch(sb: SupabaseClient, taskId: number, reason: string): Promise<void> {
+  await sb
+    .from('dm_send_log')
+    .update({
+      status: 'blocked_identity_mismatch',
+      sent_via: 'api',
+      error: reason.slice(0, 1000),
+    })
+    .eq('id', taskId);
+}
+
+/**
  * タスクをキューに戻す（セッション切れ時）
  */
 export async function requeue(sb: SupabaseClient, taskId: number): Promise<void> {
