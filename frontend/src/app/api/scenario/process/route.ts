@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { authenticateAndValidateAccount } from '@/lib/api-auth';
-import { processScenarioQueue } from '@/lib/scenario-engine';
+import { processScenarioQueue, fireGoalEvents } from '@/lib/scenario-engine';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -26,6 +26,9 @@ export async function POST(req: NextRequest) {
     global: { headers: { Authorization: `Bearer ${auth.token}` } },
   });
 
+  // ゴール自動発火: キュー処理前にアクティブエンロールメントのゴール到達をチェック
+  const goalResult = await fireGoalEvents(supabase, accountId);
+
   // baseUrl を自動解決（リクエストのorigin）
   const url = new URL(req.url);
   const baseUrl = url.origin;
@@ -38,5 +41,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     success: true,
     ...result,
+    goals_fired: goalResult.fired,
+    goals_checked: goalResult.checked,
   });
 }

@@ -80,7 +80,29 @@ export interface ProcessResult {
   aiErrors: number;
 }
 
-// AI文面生成: Persona APIサーバーサイド呼び出し
+// シナリオタイプ別の送信目的マッピング（AI文面生成のcontextに渡す）
+const SCENARIO_PURPOSE: Record<string, string> = {
+  thankyou_vip: '感謝+特別感。VIPとして唯一性を強調。限定情報を匂わせる。',
+  thankyou_regular: '感謝+再来訪の種まき。直接誘わない。余韻を残す。',
+  thankyou_first: '初課金お礼。嬉しさを全面に。次も来やすい空気を作る。',
+  first_payment: '初課金検出。自然な感謝。押しすぎない。',
+  high_payment: '高額応援お礼。特別扱い+承認欲求充足。',
+  churn_recovery: '存在を思い出させる+懐かしさ。理由を聞かない。圧ゼロ。',
+  dormant: '長期不在フォロー。軽い接触+BYAF強め。',
+  visit_no_action: '来訪ありがとう。課金には触れない。純粋に嬉しさだけ。',
+  segment_change: 'セグメント変動通知。アップなら祝福、ダウンなら気遣い。',
+  manual: '手動シナリオ。テンプレートに従う。',
+};
+
+// ステップ番号に応じたトーン指示
+function getStepToneGuide(stepNumber: number, totalSteps: number): string {
+  if (totalSteps <= 1) return '1通のみのシナリオ。感謝と余韻で完結させる。';
+  if (stepNumber === 1) return 'Step 1: 最初の接触。軽く自然に。感謝ベース。';
+  if (stepNumber === totalSteps) return `最終Step: クロージング。BYAF強め。圧をかけない。来てくれたら嬉しい、で終わる。`;
+  return `Step ${stepNumber}/${totalSteps}: 中間ステップ。前回と異なるトーン（感情⇔事実交互）。話題を変える。`;
+}
+
+// AI文面生成: Persona API mode='ai' でフルコンテキスト送信
 async function generateAiMessage(
   baseUrl: string,
   token: string,
@@ -89,6 +111,7 @@ async function generateAiMessage(
   userName: string,
   scenarioType: string,
   stepNumber: number,
+  totalSteps: number,
 ): Promise<{ message: string; isAi: true } | null> {
   try {
     const res = await fetch(`${baseUrl}/api/persona`, {
@@ -98,14 +121,20 @@ async function generateAiMessage(
         'Authorization': `Bearer ${token}`,
       },
       body: JSON.stringify({
-        mode: 'customer',
+        mode: 'ai',
         cast_name: castName,
         account_id: accountId,
         task_type: 'dm_generate',
         context: {
-          username: userName,
-          scenario: SCENARIO_TYPE_MAP[scenarioType] || 'A',
+          user_name: userName,
+          cast_name: castName,
+          account_id: accountId,
+          scenario_type: scenarioType,
           step_number: stepNumber,
+          // フルコンテキスト: buildUserPrompt() が自動的にSPYログ・課金履歴・過去DM・セグメントを取得
+          // 追加のシナリオ固有コンテキスト:
+          scenario_purpose: SCENARIO_PURPOSE[scenarioType] || SCENARIO_PURPOSE.manual,
+          step_tone_guide: getStepToneGuide(stepNumber, totalSteps),
         },
       }),
     });
@@ -116,7 +145,12 @@ async function generateAiMessage(
     }
 
     const data = await res.json();
-    const aiMessage = data.output?.message || data.message;
+    // mode='ai' は output がオブジェクト（{message, reasoning}）または文字列
+    const aiMessage = typeof data.output === 'object'
+      ? data.output?.message
+      : typeof data.output === 'string'
+        ? data.output
+        : data.message;
     if (aiMessage && typeof aiMessage === 'string' && aiMessage.length > 0) {
       return { message: aiMessage, isAi: true };
     }
@@ -296,6 +330,7 @@ export async function processScenarioQueue(
           enrollment.username,
           scenario.trigger_type,
           currentStep + 1,
+          steps.length,
         );
         if (aiResult) {
           message = aiResult.message;
@@ -400,6 +435,107 @@ export async function processScenarioQueue(
   }
 
   return { processed, errors, skipped, aiGenerated, aiErrors };
+}
+
+// ============================================================
+// fireGoalEvents — アクティブエンロールメントのゴール自動検出
+// SPYメッセージ返信・課金・来訪を自動スキャンし、ゴール発火
+// ============================================================
+
+export async function fireGoalEvents(
+  supabase: SupabaseClient,
+  accountId: string,
+): Promise<{ fired: number; checked: number }> {
+  let fired = 0;
+
+  // 1. アクティブなエンロールメントを取得（ゴールタイプ付き）
+  const { data: enrollments, error } = await supabase
+    .from('dm_scenario_enrollments')
+    .select('id, username, cast_name, goal_type, last_step_sent_at')
+    .eq('account_id', accountId)
+    .eq('status', 'active')
+    .not('goal_type', 'is', null)
+    .limit(500);
+
+  if (error || !enrollments || enrollments.length === 0) {
+    return { fired: 0, checked: enrollments?.length || 0 };
+  }
+
+  for (const enrollment of enrollments) {
+    if (!enrollment.cast_name || !enrollment.goal_type) continue;
+    const since = enrollment.last_step_sent_at || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const goalType = enrollment.goal_type as string;
+
+    // payment ゴールチェック: 最終ステップ送信後に課金があるか
+    if (goalType === 'payment' || goalType === 'reply_or_visit') {
+      if (goalType === 'payment') {
+        const { data: coinTx } = await supabase
+          .from('coin_transactions')
+          .select('id')
+          .eq('user_name', enrollment.username)
+          .eq('cast_name', enrollment.cast_name)
+          .gte('date', since)
+          .limit(1);
+
+        if (coinTx && coinTx.length > 0) {
+          await markGoalReached(supabase, enrollment.id);
+          fired++;
+          continue;
+        }
+      }
+    }
+
+    // visit ゴールチェック: SPYメッセージに来訪ログがあるか
+    if (goalType === 'visit' || goalType === 'reply_or_visit') {
+      const { data: spyMsgs } = await supabase
+        .from('chat_logs')
+        .select('id')
+        .eq('username', enrollment.username)
+        .eq('cast_name', enrollment.cast_name)
+        .gte('timestamp', since)
+        .limit(1);
+
+      if (spyMsgs && spyMsgs.length > 0) {
+        await markGoalReached(supabase, enrollment.id);
+        fired++;
+        continue;
+      }
+    }
+
+    // reply ゴールチェック: DM返信検出（dm_send_logのステータスベース）
+    if (goalType === 'reply' || goalType === 'reply_or_visit') {
+      // SPYメッセージで「DM返信」タイプのメッセージがあるか
+      const { data: replies } = await supabase
+        .from('chat_logs')
+        .select('id')
+        .eq('username', enrollment.username)
+        .eq('cast_name', enrollment.cast_name)
+        .eq('message_type', 'dm_reply')
+        .gte('timestamp', since)
+        .limit(1);
+
+      if (replies && replies.length > 0) {
+        await markGoalReached(supabase, enrollment.id);
+        fired++;
+        continue;
+      }
+    }
+  }
+
+  return { fired, checked: enrollments.length };
+}
+
+async function markGoalReached(supabase: SupabaseClient, enrollmentId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await supabase
+    .from('dm_scenario_enrollments')
+    .update({
+      status: 'goal_reached',
+      goal_reached_at: now,
+      completed_at: now,
+      next_step_due_at: null,
+    })
+    .eq('id', enrollmentId);
 }
 
 // ============================================================

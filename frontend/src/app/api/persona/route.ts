@@ -464,10 +464,15 @@ async function buildUserPrompt(
         `- ${d.message || '?'} (${d.sent_at?.slice(0, 10) || '?'}, ${d.template_name || ''})`
       ).join('\n') || 'なし';
 
+      const scenarioPurpose = context.scenario_purpose as string || '';
+      const stepToneGuide = context.step_tone_guide as string || '';
+
       return `ユーザー名: ${userName}
 セグメント: ${segment}
 累計コイン: ${totalCoins}tk / 平均: ${avgCoins}tk / 最終: ${lastTxDate}
 シナリオ: ${scenarioType} (Step ${stepNumber})
+${scenarioPurpose ? `\nシナリオ目的: ${scenarioPurpose}` : ''}
+${stepToneGuide ? `ステップ指示: ${stepToneGuide}` : ''}
 
 前回DM履歴（直近3件）:
 ${lastDmLog}
@@ -477,7 +482,8 @@ ${spyLog}
 
 上記の情報をもとに、このユーザーに最適なDMを生成してください。
 - 前回DMと異なるトーンにしてください（感情→事実→感情の交互）。
-- ユーザーの発言内容に触れて個別感を出してください。`;
+- ユーザーの発言内容に触れて個別感を出してください。
+- シナリオ目的に沿った文面にしてください。`;
     }
 
     case 'fb_report': {
