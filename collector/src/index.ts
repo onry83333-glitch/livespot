@@ -199,6 +199,7 @@ async function main(): Promise<void> {
       await triggerEngine.initSnapshots(accountId);
     }
     log.info('TriggerEngine initialized');
+    log.info(`DM_TEST_MODE=${process.env.DM_TEST_MODE ?? 'true(default)'}, DM_TRIGGER_ENABLED=${process.env.DM_TRIGGER_ENABLED ?? 'true(default)'}`);
   } catch (err) {
     log.warn('TriggerEngine init failed (triggers disabled)', err);
   }

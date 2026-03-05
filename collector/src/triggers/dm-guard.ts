@@ -7,7 +7,7 @@
  * 2. campaign必須: campaign_idなしのDMは送信拒否
  * 3. DM_TRIGGER_ENABLED: トリガーDM（campaign が trigger_ で始まる）の許可フラグ
  *    - DM_TEST_MODE=true でも DM_TRIGGER_ENABLED=true なら trigger_ campaignは通す
- *    - デフォルト: false（明示的にONにする必要あり）
+ *    - デフォルト: true（無効化する場合は DM_TRIGGER_ENABLED=false を設定）
  */
 
 import { createLogger } from '../utils/logger.js';
@@ -27,7 +27,7 @@ export function isDmTestMode(): boolean {
 }
 
 export function isDmTriggerEnabled(): boolean {
-  const val = process.env.DM_TRIGGER_ENABLED ?? 'false';
+  const val = process.env.DM_TRIGGER_ENABLED ?? 'true';
   return ['true', 'on', '1'].includes(val.toLowerCase());
 }
 
