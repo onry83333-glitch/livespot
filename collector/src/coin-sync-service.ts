@@ -128,21 +128,40 @@ async function getSessionFromDB(
     return null;
   }
 
-  // userId解決（3段フォールバック）
+  // userId解決（4段フォールバック）
   let userId = sess.stripchat_user_id
     ? String(sess.stripchat_user_id)
     : sess.cookies_json['stripchat_com_userId'] || '';
 
-  // フォールバック: registered_casts.stripchat_user_id
+  // フォールバック: AMP cookieからuserIdを抽出
   if (!userId) {
-    const fallbackId = casts[0]?.stripchat_user_id || casts[0]?.stripchat_model_id;
-    if (fallbackId) {
-      userId = String(fallbackId);
-      log.info(`[${accountId}] registered_castsからuserId取得: ${userId}`);
-      // DBにも保存
-      await sb.from('stripchat_sessions')
-        .update({ stripchat_user_id: userId })
-        .eq('account_id', accountId);
+    const ampCookie = sess.cookies_json['AMP_19a23394ad'] || '';
+    if (ampCookie) {
+      try {
+        const decoded = Buffer.from(ampCookie, 'base64').toString('utf-8');
+        let jsonStr = decoded;
+        if (decoded.includes('%7B') || decoded.includes('%22')) {
+          jsonStr = decodeURIComponent(decoded);
+        }
+        const json = JSON.parse(jsonStr);
+        if (json.userId) {
+          userId = String(json.userId);
+          log.info(`[${accountId}] AMP cookieからuserId取得: ${userId}`);
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  // フォールバック: registered_casts.stripchat_user_id（全キャストを走査）
+  // NOTE: DBのstripchat_user_idは上書きしない（正しいオーナーIDが汚染されるのを防ぐ）
+  if (!userId) {
+    for (const cast of casts) {
+      const fallbackId = cast.stripchat_user_id || cast.stripchat_model_id;
+      if (fallbackId) {
+        userId = String(fallbackId);
+        log.info(`[${accountId}] registered_casts(${cast.cast_name})からuserId取得: ${userId}`);
+        break;
+      }
     }
   }
 
@@ -412,18 +431,19 @@ async function syncAccount(
   let authFailed = false;
 
   for (const cast of casts) {
-    // 差分同期: 最終synced_atから24hバッファ
+    // 差分同期: 最新トランザクション日時から24hバッファ
+    // NOTE: synced_atではなくdateを使う（ignoreDuplicates=trueでsynced_atが更新されないため）
     const { data: lastTx } = await sb
       .from('coin_transactions')
-      .select('synced_at')
+      .select('date')
       .eq('account_id', accountId)
       .eq('cast_name', cast.cast_name)
-      .order('synced_at', { ascending: false })
+      .order('date', { ascending: false })
       .limit(1);
 
-    const lastSyncedAt = lastTx?.[0]?.synced_at;
-    const sinceDate = lastSyncedAt
-      ? new Date(new Date(lastSyncedAt).getTime() - 24 * 60 * 60 * 1000)
+    const lastDate = lastTx?.[0]?.date;
+    const sinceDate = lastDate
+      ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000)
       : null;
 
     log.info(`[${cast.cast_name}] 差分同期 (since=${sinceDate?.toISOString() || 'フル同期'})`);

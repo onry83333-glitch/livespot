@@ -449,13 +449,13 @@ export default function CastsPage() {
         return (
           <div className="grid grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(dashKpi.revenue30d, coinRate)}</p>
-              <p className="text-[9px] mt-0.5 tabular-nums" style={{ color: 'var(--text-muted)' }}>{dashKpi.revenue30d.toLocaleString()} tk</p>
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(dashKpi.revenue30d)}</p>
+              <p className="text-[9px] mt-0.5 tabular-nums" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(dashKpi.revenue30d, coinRate)})</p>
               <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>30日売上</p>
             </div>
             <div className="glass-card p-4 text-center">
-              <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(totals.thisWeekCoins, coinRate)}</p>
-              <p className="text-[9px] mt-0.5 tabular-nums" style={{ color: 'var(--text-muted)' }}>{totals.thisWeekCoins.toLocaleString()} tk</p>
+              <p className="text-2xl font-bold" style={{ color: 'var(--accent-green)' }}>{formatTokens(totals.thisWeekCoins)}</p>
+              <p className="text-[9px] mt-0.5 tabular-nums" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(totals.thisWeekCoins, coinRate)})</p>
               <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
             </div>
             <div className="glass-card p-4 text-center">
@@ -618,13 +618,13 @@ export default function CastsPage() {
                       )}
                     </td>
                     <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{ color: cast.today_coins > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
-                      {cast.today_coins > 0 ? tokensToJPY(cast.today_coins, coinRate) : '--'}
+                      {cast.today_coins > 0 ? formatTokens(cast.today_coins) : '--'}
                     </td>
                     <td className="text-right px-4 py-3 font-semibold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
                       {formatTokens(cast.this_week_coins)}
                     </td>
-                    <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--accent-green)' }}>
-                      {tokensToJPY(cast.this_week_coins, coinRate)}
+                    <td className="text-right px-4 py-3 tabular-nums text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                      ({tokensToJPY(cast.this_week_coins, coinRate)})
                     </td>
                     <td className="text-right px-4 py-3 tabular-nums" style={{ color: 'var(--text-secondary)' }}>
                       {formatTokens(cast.last_week_coins)}

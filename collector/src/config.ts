@@ -57,6 +57,14 @@ export const BATCH_CONFIG = {
   maxSize: parseInt(process.env.BATCH_MAX_SIZE || '500', 10),
 };
 
+// ----- Spy rotation config -----
+export const ROTATION_CONFIG = {
+  /** Max spy_casts to monitor concurrently (auto_monitor=true are excluded from count) */
+  maxConcurrent: parseInt(process.env.SPY_ROTATION_SIZE || '8', 10),
+  /** Rotation interval in ms (default 15 min) */
+  intervalMs: parseInt(process.env.SPY_ROTATION_INTERVAL || '900000', 10),
+};
+
 // ----- Stripchat API endpoints -----
 export const STRIPCHAT = {
   statusUrl: (castName: string) =>

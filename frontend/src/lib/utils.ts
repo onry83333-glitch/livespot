@@ -24,9 +24,9 @@ export function formatJST(dateStr: string): string {
   return new Date(dateStr).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
 }
 
-/** Format tokens as dual currency: ¥yen (N tk) */
-export function formatCoinDual(tokens: number): string {
-  return `${tokensToJPY(tokens)} (${tokens.toLocaleString()} tk)`;
+/** Format tokens as dual currency: N tk (¥yen) — tk主表示・円副表示 */
+export function formatCoinDual(tokens: number, coinRate: number = COIN_RATE): string {
+  return `${tokens.toLocaleString()} tk (${tokensToJPY(tokens, coinRate)})`;
 }
 
 /** Format relative time */

@@ -961,19 +961,20 @@ async function syncCastCoins(
 ): Promise<'ok' | 'auth_failed'> {
   const sb = getSupabase();
 
-  // 最終同期日を取得（差分同期用）
+  // 最終トランザクション日時を取得（差分同期用）
+  // NOTE: synced_atではなくdateを使う（ignoreDuplicates=trueでsynced_atが更新されないため）
   const { data: lastTx } = await sb
     .from('coin_transactions')
-    .select('synced_at')
+    .select('date')
     .eq('account_id', accountId)
     .eq('cast_name', castName)
-    .order('synced_at', { ascending: false })
+    .order('date', { ascending: false })
     .limit(1);
 
-  const lastSyncedAt = lastTx?.[0]?.synced_at;
-  // 差分: 最終同期から1日バッファ引き
-  const sinceDate = lastSyncedAt
-    ? new Date(new Date(lastSyncedAt).getTime() - 24 * 60 * 60 * 1000)
+  const lastDate = lastTx?.[0]?.date;
+  // 差分: 最終トランザクションから1日バッファ引き
+  const sinceDate = lastDate
+    ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000)
     : null;
 
   log.info(

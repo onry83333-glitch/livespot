@@ -2088,8 +2088,8 @@ function CastDetailInner() {
               <span style={{ color: 'var(--accent-amber)' }}>
                 TIP <span className="font-bold">{formatTokens(totalCoinTx ?? stats.total_coins)}</span>
               </span>
-              <span style={{ color: 'var(--accent-green)' }}>
-                <span className="font-bold">{tokensToJPY(totalCoinTx ?? stats.total_coins, coinRate)}</span>
+              <span style={{ color: 'var(--text-muted)' }}>
+                <span className="text-[10px]">({tokensToJPY(totalCoinTx ?? stats.total_coins, coinRate)})</span>
               </span>
               <span style={{ color: 'var(--accent-purple, #a855f7)' }}>
                 USERS <span className="font-bold">{stats.unique_users}</span>
@@ -2134,17 +2134,17 @@ function CastDetailInner() {
                 <div className="grid grid-cols-3 gap-3">
                   <div className="glass-card p-4 text-center">
                     <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
-                      {tokensToJPY(thisWeekCoins, coinRate)}
+                      {formatTokens(thisWeekCoins)}
                     </p>
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週の売上</p>
-                    <p className="text-[9px]" style={{ color: 'var(--accent-amber)' }}>{formatTokens(thisWeekCoins)}</p>
+                    <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(thisWeekCoins, coinRate)})</p>
                   </div>
                   <div className="glass-card p-4 text-center">
                     <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
-                      {tokensToJPY(lastWeekCoins, coinRate)}
+                      {formatTokens(lastWeekCoins)}
                     </p>
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週の売上</p>
-                    <p className="text-[9px]" style={{ color: 'var(--accent-amber)' }}>{formatTokens(lastWeekCoins)}</p>
+                    <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(lastWeekCoins, coinRate)})</p>
                   </div>
                   <div className="glass-card p-4 text-center">
                     <p className="text-xl font-bold" style={{
@@ -2422,9 +2422,9 @@ function CastDetailInner() {
                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                         <div className="glass-card p-4">
                           <p className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>売上</p>
-                          <p className="text-2xl font-bold text-amber-400 mt-1">{formatTokens(broadcastBreakdown.total_tokens)}<span className="text-xs ml-1">tk</span></p>
+                          <p className="text-2xl font-bold text-amber-400 mt-1">{formatTokens(broadcastBreakdown.total_tokens)}</p>
                           <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                            ¥{tokensToJPY(broadcastBreakdown.total_tokens, 7.7)}
+                            ({tokensToJPY(broadcastBreakdown.total_tokens, coinRate)})
                           </p>
                           {broadcastBreakdown.change_pct !== null && (
                             <p className={`text-[10px] mt-1 font-bold ${broadcastBreakdown.change_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -2463,7 +2463,7 @@ function CastDetailInner() {
                                     <div className="flex items-center justify-between mb-1">
                                       <span className="text-xs font-medium">{type}</span>
                                       <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                                        {formatTokens(tokens)}tk ({pct}%) — ¥{tokensToJPY(tokens, 7.7)}
+                                        {formatTokens(tokens)} ({pct}%) — {tokensToJPY(tokens, coinRate)}
                                       </span>
                                     </div>
                                     <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(15,23,42,0.6)' }}>
@@ -2555,8 +2555,8 @@ function CastDetailInner() {
                                 </div>
                                 <div className="flex items-center gap-3">
                                   <div className="text-right">
-                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.tokens)}tk</p>
-                                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>¥{tokensToJPY(u.tokens, 7.7)}</p>
+                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.tokens)}</p>
+                                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(u.tokens, coinRate)})</p>
                                   </div>
                                   <button
                                     onClick={() => {
@@ -2599,7 +2599,7 @@ function CastDetailInner() {
                                     </p>
                                   </div>
                                   <div className="flex items-center gap-3">
-                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.total_tokens_on_date)}tk</p>
+                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.total_tokens_on_date)}</p>
                                     <button
                                       onClick={() => {
                                         setDmTargets(new Set([u.user_name]));
@@ -2642,7 +2642,7 @@ function CastDetailInner() {
                               <p className="text-xs font-medium">
                                 {new Date(broadcastBreakdown.prev_session_date).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })}
                                 <span className="text-[10px] ml-1" style={{ color: 'var(--text-muted)' }}>
-                                  ({formatTokens(broadcastBreakdown.prev_session_tokens)}tk)
+                                  ({formatTokens(broadcastBreakdown.prev_session_tokens)})
                                 </span>
                               </p>
                             </div>
@@ -4840,22 +4840,25 @@ function CastDetailInner() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
-                        {tokensToJPY(thisWeekCoins, coinRate)}
+                        {formatTokens(thisWeekCoins)}
                       </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(thisWeekCoins, coinRate)})</p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
                       <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-primary)' }}>チャット内チップ（SPYログ）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--accent-amber)' }}>
-                        {tokensToJPY(salesThisWeek, coinRate)}
+                        {formatTokens(salesThisWeek)}
                       </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(salesThisWeek, coinRate)})</p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
                       <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
-                        {tokensToJPY(salesLastWeek, coinRate)}
+                        {formatTokens(salesLastWeek)}
                       </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(salesLastWeek, coinRate)})</p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週売上</p>
                       <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
                     </div>
@@ -4896,7 +4899,7 @@ function CastDetailInner() {
                         <p className="text-xs mt-1 font-bold">
                           <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(stats?.total_coins || 0)}</span>
                           {' '}
-                          <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(stats?.total_coins || 0, coinRate)}</span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(stats?.total_coins || 0, coinRate)})</span>
                         </p>
                       </div>
                       <div className="glass-panel p-3 rounded-xl">
@@ -4956,8 +4959,8 @@ function CastDetailInner() {
                                 <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
                                   {u.total_coins.toLocaleString()} tk
                                 </span>
-                                <p className="text-[9px]" style={{ color: 'var(--accent-green)' }}>
-                                  {tokensToJPY(u.total_coins, coinRate)}
+                                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                  ({tokensToJPY(u.total_coins, coinRate)})
                                 </p>
                               </div>
                             </div>
@@ -5058,11 +5061,11 @@ function CastDetailInner() {
                                       </div>
                                       <div className="flex justify-between">
                                         <span style={{ color: 'var(--text-muted)' }}>合計収益</span>
-                                        <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(row.total_tokens, coinRate)}</span>
+                                        <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(row.total_tokens)} <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(row.total_tokens, coinRate)})</span></span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span style={{ color: 'var(--text-muted)' }}>サポーター平均</span>
-                                        <span style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)}</span>
+                                        <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(Math.round(row.avg_tokens_per_payer || 0))} <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)})</span></span>
                                       </div>
                                     </div>
                                   )}
