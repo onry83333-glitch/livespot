@@ -1075,7 +1075,7 @@ function CastDetailInner() {
 
     const channel = sb
       .channel(`dm-cast-status-realtime-${castName}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: `cast_name=eq.${castName}` }, async () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: accountId ? `cast_name=eq.${castName},account_id=eq.${accountId}` : `cast_name=eq.${castName}` }, async () => {
         const bid = dmBatchIdRef.current;
         if (!bid) return;
         const { data: items } = await sb.from('dm_send_log')

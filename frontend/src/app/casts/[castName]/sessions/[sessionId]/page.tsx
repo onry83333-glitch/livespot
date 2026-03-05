@@ -1310,7 +1310,7 @@ export default function SessionDetailPage() {
         event: 'INSERT',
         schema: 'public',
         table: 'chat_logs',
-        filter: `session_id=eq.${sessionId}`,
+        filter: accountId ? `session_id=eq.${sessionId},account_id=eq.${accountId}` : `session_id=eq.${sessionId}`,
       }, (payload: { new: Record<string, unknown> }) => {
         const mapped = mapChatLog(payload.new);
         handleNewMessageRef.current({ new: mapped as unknown as Record<string, unknown> });
