@@ -11,6 +11,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { isDmTestMode, DM_TEST_WHITELIST } from './dm-guard';
 
+// シナリオタイプ → Persona API scenario ラベル変換
+const SCENARIO_TYPE_MAP: Record<string, string> = {
+  thankyou_vip: 'A',
+  thankyou_regular: 'A',
+  thankyou_first: 'A',
+  first_payment: 'A',
+  high_payment: 'A',
+  churn_recovery: 'B',
+  dormant: 'B',
+  visit_no_action: 'C',
+  segment_change: 'D',
+  manual: 'A',
+};
+
 // ============================================================
 // Types
 // ============================================================
@@ -62,6 +76,55 @@ export interface ProcessResult {
   processed: number;
   errors: number;
   skipped: number;
+  aiGenerated: number;
+  aiErrors: number;
+}
+
+// AI文面生成: Persona APIサーバーサイド呼び出し
+async function generateAiMessage(
+  baseUrl: string,
+  token: string,
+  castName: string,
+  accountId: string,
+  userName: string,
+  scenarioType: string,
+  stepNumber: number,
+): Promise<{ message: string; isAi: true } | null> {
+  try {
+    const res = await fetch(`${baseUrl}/api/persona`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        mode: 'customer',
+        cast_name: castName,
+        account_id: accountId,
+        task_type: 'dm_generate',
+        context: {
+          username: userName,
+          scenario: SCENARIO_TYPE_MAP[scenarioType] || 'A',
+          step_number: stepNumber,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn(`[scenario-engine] Persona API ${res.status}: ${await res.text().catch(() => '')}`);
+      return null;
+    }
+
+    const data = await res.json();
+    const aiMessage = data.output?.message || data.message;
+    if (aiMessage && typeof aiMessage === 'string' && aiMessage.length > 0) {
+      return { message: aiMessage, isAi: true };
+    }
+    return null;
+  } catch (e) {
+    console.warn('[scenario-engine] AI文面生成失敗:', e);
+    return null;
+  }
 }
 
 // ============================================================
@@ -162,10 +225,15 @@ export async function checkAndEnroll(
 export async function processScenarioQueue(
   supabase: SupabaseClient,
   accountId: string,
+  options?: { baseUrl?: string; token?: string },
 ): Promise<ProcessResult> {
   let processed = 0;
   let errors = 0;
   let skipped = 0;
+  let aiGenerated = 0;
+  let aiErrors = 0;
+  const baseUrl = options?.baseUrl || '';
+  const authToken = options?.token || '';
 
   // 1. 期日到来のエンロールメントを取得（シナリオ情報を結合）
   const { data: dueEnrollments, error: fetchError } = await supabase
@@ -179,11 +247,11 @@ export async function processScenarioQueue(
 
   if (fetchError) {
     console.warn('[scenario-engine] Failed to fetch due enrollments:', fetchError.message);
-    return { processed: 0, errors: 0, skipped: 0 };
+    return { processed: 0, errors: 0, skipped: 0, aiGenerated: 0, aiErrors: 0 };
   }
 
   if (!dueEnrollments || dueEnrollments.length === 0) {
-    return { processed: 0, errors: 0, skipped: 0 };
+    return { processed: 0, errors: 0, skipped: 0, aiGenerated: 0, aiErrors: 0 };
   }
 
   for (const raw of dueEnrollments) {
@@ -215,9 +283,35 @@ export async function processScenarioQueue(
 
       const step = steps[currentStep];
 
-      // メッセージテンプレートの {username} を置換
-      const message = (step.message || step.template || '')
-        .replace(/\{username\}/g, enrollment.username);
+      // AI文面生成 or テンプレート置換
+      let message: string;
+      let usedAi = false;
+
+      if (step.use_persona !== false && baseUrl && authToken) {
+        const aiResult = await generateAiMessage(
+          baseUrl,
+          authToken,
+          enrollment.cast_name || '',
+          accountId,
+          enrollment.username,
+          scenario.trigger_type,
+          currentStep + 1,
+        );
+        if (aiResult) {
+          message = aiResult.message;
+          usedAi = true;
+          aiGenerated++;
+        } else {
+          // AI失敗時はテンプレートにフォールバック
+          message = (step.message || step.template || '')
+            .replace(/\{username\}/g, enrollment.username);
+          aiErrors++;
+        }
+      } else {
+        // use_persona=false or AI設定なし → テンプレート
+        message = (step.message || step.template || '')
+          .replace(/\{username\}/g, enrollment.username);
+      }
 
       // P0-5: 24時間以内の重複チェック（シナリオ経由のDMも対象）
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -257,7 +351,7 @@ export async function processScenarioQueue(
           status: dmStatus,
           campaign: `scenario_${scenario.id.slice(0, 8)}_step${currentStep}`,
           scenario_enrollment_id: enrollment.id,
-          ai_generated: step.use_persona !== false,
+          ai_generated: usedAi,
         });
 
       if (dmError) {
@@ -305,7 +399,7 @@ export async function processScenarioQueue(
     }
   }
 
-  return { processed, errors, skipped };
+  return { processed, errors, skipped, aiGenerated, aiErrors };
 }
 
 // ============================================================

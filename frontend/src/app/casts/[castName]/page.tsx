@@ -392,6 +392,10 @@ function CastDetailInner() {
   const [enrollExpanded, setEnrollExpanded] = useState<Set<string>>(new Set());
   const [scenarioCreating, setScenarioCreating] = useState(false);
   const [newScenario, setNewScenario] = useState({ name: '', triggerType: 'first_payment', config: '{}' });
+  const [scenarioProcessing, setScenarioProcessing] = useState(false);
+  const [scenarioProcessResult, setScenarioProcessResult] = useState<{
+    processed: number; errors: number; skipped: number; aiGenerated: number; aiErrors: number;
+  } | null>(null);
 
   // Sales state
   const [coinTxs, setCoinTxs] = useState<CoinTxItem[]>([]);
@@ -3351,18 +3355,76 @@ function CastDetailInner() {
                 <div className="glass-card p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-bold">📋 DMシナリオ</h3>
-                    <button
-                      onClick={() => setScenarioCreating(!scenarioCreating)}
-                      className="text-[10px] px-2 py-1 rounded-lg"
-                      style={{
-                        background: 'rgba(56,189,248,0.12)',
-                        border: '1px solid rgba(56,189,248,0.3)',
-                        color: 'var(--accent-primary)',
-                      }}
-                    >
-                      {scenarioCreating ? '✕ 閉じる' : '＋ 新規作成'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        disabled={scenarioProcessing || !accountId}
+                        onClick={async () => {
+                          if (!accountId) return;
+                          setScenarioProcessing(true);
+                          setScenarioProcessResult(null);
+                          try {
+                            const { data: { session } } = await sb.auth.getSession();
+                            const res = await fetch('/api/scenario/process', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${session?.access_token || ''}`,
+                              },
+                              body: JSON.stringify({ account_id: accountId }),
+                            });
+                            const result = await res.json();
+                            if (res.ok) {
+                              setScenarioProcessResult(result);
+                            } else {
+                              alert(result.error || 'キュー処理失敗');
+                            }
+                          } catch (e) {
+                            alert('キュー処理エラー: ' + (e instanceof Error ? e.message : ''));
+                          } finally {
+                            setScenarioProcessing(false);
+                          }
+                        }}
+                        className="text-[10px] px-2 py-1 rounded-lg disabled:opacity-40"
+                        style={{
+                          background: 'rgba(34,197,94,0.12)',
+                          border: '1px solid rgba(34,197,94,0.3)',
+                          color: 'var(--accent-green)',
+                        }}
+                      >
+                        {scenarioProcessing ? '処理中...' : '▶ キュー実行'}
+                      </button>
+                      <button
+                        onClick={() => setScenarioCreating(!scenarioCreating)}
+                        className="text-[10px] px-2 py-1 rounded-lg"
+                        style={{
+                          background: 'rgba(56,189,248,0.12)',
+                          border: '1px solid rgba(56,189,248,0.3)',
+                          color: 'var(--accent-primary)',
+                        }}
+                      >
+                        {scenarioCreating ? '✕ 閉じる' : '＋ 新規作成'}
+                      </button>
+                    </div>
                   </div>
+
+                  {/* キュー処理結果 */}
+                  {scenarioProcessResult && (
+                    <div className="glass-panel rounded-lg p-2 mb-3 flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                      <span style={{ color: 'var(--accent-green)' }}>処理: {scenarioProcessResult.processed}件</span>
+                      {scenarioProcessResult.aiGenerated > 0 && (
+                        <span style={{ color: 'var(--accent-purple)' }}>AI生成: {scenarioProcessResult.aiGenerated}件</span>
+                      )}
+                      {scenarioProcessResult.skipped > 0 && (
+                        <span style={{ color: 'var(--text-muted)' }}>スキップ: {scenarioProcessResult.skipped}件</span>
+                      )}
+                      {scenarioProcessResult.errors > 0 && (
+                        <span style={{ color: 'var(--accent-pink)' }}>エラー: {scenarioProcessResult.errors}件</span>
+                      )}
+                      {scenarioProcessResult.aiErrors > 0 && (
+                        <span style={{ color: 'var(--accent-amber)' }}>AI失敗(テンプレ代替): {scenarioProcessResult.aiErrors}件</span>
+                      )}
+                    </div>
+                  )}
 
                   {/* 新規作成フォーム */}
                   {scenarioCreating && (
