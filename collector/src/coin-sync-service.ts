@@ -185,11 +185,14 @@ async function fetchTransactions(
   sinceDate: Date | null,
 ): Promise<{ transactions: RawTransaction[]; authFailed: boolean }> {
   const allTx: RawTransaction[] = [];
-  let page = 1;
+  let offset = 0;
   let hitOldData = false;
+  const maxItems = MAX_TX_PAGES * PAGE_SIZE;
+  let firstPage = true;
 
-  while (page <= MAX_TX_PAGES && !hitOldData) {
-    const url = `${EARNINGS_API}/${userId}/transactions?page=${page}&limit=${PAGE_SIZE}`;
+  while (offset < maxItems && !hitOldData) {
+    // NOTE: Stripchat APIは`page`パラメータを無視する。`offset`を使う。
+    const url = `${EARNINGS_API}/${userId}/transactions?offset=${offset}&limit=${PAGE_SIZE}`;
 
     let resp: Response;
     try {
@@ -197,7 +200,7 @@ async function fetchTransactions(
         headers: { Cookie: cookieHeader, Accept: 'application/json', 'User-Agent': USER_AGENT },
       });
     } catch (err) {
-      log.error(`Transactions API接続エラー page=${page}: ${err}`);
+      log.error(`Transactions API接続エラー offset=${offset}: ${err}`);
       break;
     }
 
@@ -213,7 +216,7 @@ async function fetchTransactions(
     }
 
     if (!resp.ok) {
-      log.error(`Transactions API ${resp.status} page=${page}`);
+      log.error(`Transactions API ${resp.status} offset=${offset}`);
       break;
     }
 
@@ -221,15 +224,16 @@ async function fetchTransactions(
     try {
       data = await resp.json() as typeof data;
     } catch {
-      log.error(`JSONパース失敗 page=${page}`);
+      log.error(`JSONパース失敗 offset=${offset}`);
       break;
     }
 
     const items = data.transactions || data.items || [];
     if (items.length === 0) break;
 
-    if (page === 1 && data.numberOfTransactions) {
+    if (firstPage && data.numberOfTransactions) {
       log.info(`総トランザクション数: ${data.numberOfTransactions}`);
+      firstPage = false;
     }
 
     for (const tx of items) {
@@ -242,11 +246,11 @@ async function fetchTransactions(
     }
 
     if (items.length < PAGE_SIZE) break;
-    page++;
+    offset += PAGE_SIZE;
     await sleep(REQUEST_DELAY_MS);
   }
 
-  log.info(`Transactions: ${allTx.length}件取得 (${page - 1}ページ)`);
+  log.info(`Transactions: ${allTx.length}件取得 (offset=${offset})`);
   return { transactions: allTx, authFailed: false };
 }
 
@@ -442,19 +446,33 @@ async function syncAccount(
   let authFailed = false;
 
   for (const cast of casts) {
-    // 差分同期: 最新トランザクション日時から24hバッファ
-    // NOTE: synced_atではなくdateを使う（ignoreDuplicates=trueでsynced_atが更新されないため）
+    // 差分同期: 最新トランザクション日時からバッファを引いて差分取得
     const { data: lastTx } = await sb
       .from('coin_transactions')
-      .select('date')
+      .select('date, synced_at')
       .eq('account_id', accountId)
       .eq('cast_name', cast.cast_name)
       .order('date', { ascending: false })
       .limit(1);
 
     const lastDate = lastTx?.[0]?.date;
+    const lastSyncedAt = lastTx?.[0]?.synced_at;
+
+    // ギャップ検出: 前回同期から2時間以上経過していたら、バッファを拡張
+    const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000;
+    let bufferMs = 24 * 60 * 60 * 1000;
+    if (lastSyncedAt) {
+      const sinceLast = Date.now() - new Date(lastSyncedAt).getTime();
+      if (sinceLast > GAP_THRESHOLD_MS) {
+        bufferMs = sinceLast + 24 * 60 * 60 * 1000;
+        log.warn(
+          `[${cast.cast_name}] 同期ギャップ検出: ${Math.round(sinceLast / 3600000)}h経過 → バッファ拡張 ${Math.round(bufferMs / 3600000)}h`,
+        );
+      }
+    }
+
     const sinceDate = lastDate
-      ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000)
+      ? new Date(new Date(lastDate).getTime() - bufferMs)
       : null;
 
     log.info(`[${cast.cast_name}] 差分同期 (since=${sinceDate?.toISOString() || 'フル同期'})`);
@@ -574,7 +592,7 @@ async function runSync(): Promise<void> {
   await updatePipelineStatus(overallSuccess, failureReason);
 
   if (overallSuccess) {
-    log.info('=== コイン同期完了 ===');
+    log.info(`=== コイン同期完了 (${casts.length}キャスト) ===`);
   } else {
     log.error(`=== コイン同期失敗: ${failureReason} ===`);
   }
@@ -598,6 +616,47 @@ async function updatePipelineStatus(success: boolean, failureReason: string): Pr
   }
 }
 
+// ----- 起動時ギャップ検出 -----
+
+async function detectSyncGap(): Promise<void> {
+  const sb = getSupabase();
+  const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2時間
+
+  const { data: casts } = await sb
+    .from('registered_casts')
+    .select('account_id, cast_name')
+    .eq('is_active', true);
+
+  if (!casts || casts.length === 0) return;
+
+  for (const cast of casts) {
+    const { data: lastTx } = await sb
+      .from('coin_transactions')
+      .select('date, synced_at')
+      .eq('account_id', cast.account_id)
+      .eq('cast_name', cast.cast_name)
+      .order('synced_at', { ascending: false })
+      .limit(1);
+
+    if (!lastTx?.[0]?.synced_at) {
+      log.warn(`[${cast.cast_name}] 同期履歴なし — フル同期が必要`);
+      continue;
+    }
+
+    const lastSyncedAt = new Date(lastTx[0].synced_at);
+    const gapMs = Date.now() - lastSyncedAt.getTime();
+    const gapHours = Math.round(gapMs / 3600000 * 10) / 10;
+
+    if (gapMs > GAP_THRESHOLD_MS) {
+      log.warn(
+        `[${cast.cast_name}] 同期空白検出: 最終同期 ${lastSyncedAt.toISOString()} (${gapHours}h前) → 自動遡及取得で復旧予定`,
+      );
+    } else {
+      log.info(`[${cast.cast_name}] 最終同期: ${lastSyncedAt.toISOString()} (${gapHours}h前) — 正常`);
+    }
+  }
+}
+
 // ----- Entry point -----
 
 async function main(): Promise<void> {
@@ -606,6 +665,13 @@ async function main(): Promise<void> {
   log.info(`Interval: ${SYNC_INTERVAL_MS / 1000 / 60} minutes`);
   log.info('Cookie source: stripchat_sessions (DB only)');
   log.info('========================================');
+
+  // 起動時ギャップ検出
+  try {
+    await detectSyncGap();
+  } catch (err) {
+    log.error('ギャップ検出失敗:', err);
+  }
 
   // 即時実行
   try {
