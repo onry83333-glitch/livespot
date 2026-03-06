@@ -9,6 +9,9 @@ import {
   getUserHashColor,
   msgTypeLabel,
   COIN_RATE,
+  getTodayStartJST,
+  getWeekStartJST,
+  getMonthStartJST,
 } from './utils';
 
 // ============================================================
@@ -279,5 +282,99 @@ describe('msgTypeLabel', () => {
 
   it('不明な型はそのまま返す', () => {
     expect(msgTypeLabel('unknown_type')).toBe('unknown_type');
+  });
+});
+
+// ============================================================
+// 期間計算ユーティリティ
+// ============================================================
+describe('getTodayStartJST', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('JST 15:00 (UTC 06:00) → JST当日0:00 = UTC前日15:00', () => {
+    // 2026-03-06 06:00 UTC = 2026-03-06 15:00 JST
+    vi.setSystemTime(new Date('2026-03-06T06:00:00Z'));
+    const result = getTodayStartJST();
+    // JST 2026-03-06 00:00 = UTC 2026-03-05 15:00
+    expect(result.toISOString()).toBe('2026-03-05T15:00:00.000Z');
+  });
+
+  it('JST 02:00 (UTC 17:00前日) → JST当日0:00 = UTC前日15:00', () => {
+    // 2026-03-05 17:00 UTC = 2026-03-06 02:00 JST
+    vi.setSystemTime(new Date('2026-03-05T17:00:00Z'));
+    const result = getTodayStartJST();
+    // JST 2026-03-06 00:00 = UTC 2026-03-05 15:00
+    expect(result.toISOString()).toBe('2026-03-05T15:00:00.000Z');
+  });
+});
+
+describe('getWeekStartJST', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('水曜JST → 当週月曜03:00 JST', () => {
+    // 2026-03-04 Wed 10:00 JST = UTC 01:00
+    vi.setSystemTime(new Date('2026-03-04T01:00:00Z'));
+    const result = getWeekStartJST(0);
+    // 月曜 2026-03-02 03:00 JST = UTC 2026-03-01 18:00
+    expect(result.toISOString()).toBe('2026-03-01T18:00:00.000Z');
+  });
+
+  it('月曜02:00 JST → 前週月曜03:00 JST（月曜3時未満は前週扱い）', () => {
+    // 2026-03-02 Mon 02:00 JST = UTC 2026-03-01 17:00
+    vi.setSystemTime(new Date('2026-03-01T17:00:00Z'));
+    const result = getWeekStartJST(0);
+    // 前週月曜 2026-02-23 03:00 JST = UTC 2026-02-22 18:00
+    expect(result.toISOString()).toBe('2026-02-22T18:00:00.000Z');
+  });
+
+  it('月曜04:00 JST → 当週月曜03:00 JST', () => {
+    // 2026-03-02 Mon 04:00 JST = UTC 2026-03-01 19:00
+    vi.setSystemTime(new Date('2026-03-01T19:00:00Z'));
+    const result = getWeekStartJST(0);
+    // 当週月曜 2026-03-02 03:00 JST = UTC 2026-03-01 18:00
+    expect(result.toISOString()).toBe('2026-03-01T18:00:00.000Z');
+  });
+
+  it('offset=1 → 先週月曜03:00 JST', () => {
+    // 2026-03-04 Wed
+    vi.setSystemTime(new Date('2026-03-04T01:00:00Z'));
+    const result = getWeekStartJST(1);
+    // 先週月曜 2026-02-23 03:00 JST = UTC 2026-02-22 18:00
+    expect(result.toISOString()).toBe('2026-02-22T18:00:00.000Z');
+  });
+});
+
+describe('getMonthStartJST', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('3月中 → 3月1日0:00 JST', () => {
+    // 2026-03-15 10:00 JST = UTC 01:00
+    vi.setSystemTime(new Date('2026-03-15T01:00:00Z'));
+    const result = getMonthStartJST(0);
+    // 2026-03-01 00:00 JST = UTC 2026-02-28 15:00
+    expect(result.toISOString()).toBe('2026-02-28T15:00:00.000Z');
+  });
+
+  it('offset=1 → 先月1日0:00 JST', () => {
+    // 2026-03-15
+    vi.setSystemTime(new Date('2026-03-15T01:00:00Z'));
+    const result = getMonthStartJST(1);
+    // 2026-02-01 00:00 JST = UTC 2026-01-31 15:00
+    expect(result.toISOString()).toBe('2026-01-31T15:00:00.000Z');
   });
 });

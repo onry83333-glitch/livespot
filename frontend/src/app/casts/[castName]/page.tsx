@@ -8,7 +8,7 @@ import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
 import { isDmTestMode, DM_TEST_WHITELIST, getDmGuardStatus } from '@/lib/dm-guard';
 import { ChatMessage } from '@/components/chat-message';
-import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE } from '@/lib/utils';
+import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE, getWeekStartJST } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
 import { mapChatLog } from '@/lib/table-mappers';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
@@ -258,23 +258,7 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'settings',   icon: '⚙', label: '設定' },
 ];
 
-/* ============================================================
-   Helper: 週境界（月曜 03:00 JST = 送金サイクル区切り）
-   月曜 0:00〜2:59 JST の売上は前週に計上される
-   ============================================================ */
-function getWeekStart(offset = 0): Date {
-  const now = new Date();
-  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  const day = jst.getUTCDay();
-  const hour = jst.getUTCHours();
-  let diff = day === 0 ? 6 : day - 1;
-  // 月曜3時未満は前週扱い
-  if (day === 1 && hour < 3) diff = 7;
-  const monday = new Date(jst);
-  monday.setUTCDate(jst.getUTCDate() - diff - offset * 7);
-  monday.setUTCHours(3, 0, 0, 0);
-  return new Date(monday.getTime() - 9 * 60 * 60 * 1000);
-}
+/* getWeekStartJST is imported from @/lib/utils */
 
 /* ============================================================
    Inner Component
@@ -871,8 +855,8 @@ function CastDetailInner() {
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'overview') return;
-    const thisMonday = getWeekStart(0);
-    const lastMonday = getWeekStart(1);
+    const thisMonday = getWeekStartJST(0);
+    const lastMonday = getWeekStartJST(1);
 
     const thisStart = registeredAt && registeredAt > thisMonday.toISOString() ? registeredAt : thisMonday.toISOString();
     const lastStart = registeredAt && registeredAt > lastMonday.toISOString() ? registeredAt : lastMonday.toISOString();
@@ -1619,8 +1603,8 @@ function CastDetailInner() {
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
     setSalesLoading(true);
-    const thisMonday = getWeekStart(0);
-    const lastMonday = getWeekStart(1);
+    const thisMonday = getWeekStartJST(0);
+    const lastMonday = getWeekStartJST(1);
 
     // registeredAt以降のデータのみ表示（データ分離）
     const regFilter = registeredAt || null;

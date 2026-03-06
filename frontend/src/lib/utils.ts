@@ -78,6 +78,49 @@ export function getUserHashColor(userName: string | null | undefined): string {
   return `hsl(${hue}, 65%, 65%)`;
 }
 
+// ============================================================
+// 期間計算ユーティリティ（JST基準）
+// ============================================================
+
+/** JST今日0:00をUTCで返す */
+export function getTodayStartJST(): Date {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 3600000);
+  return new Date(
+    Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate()) - 9 * 3600000
+  );
+}
+
+/**
+ * 週境界をUTCで返す（月曜03:00 JST = 送金サイクル区切り）
+ * 月曜 0:00〜2:59 JST の売上は前週に計上される。
+ * offset=0: 今週、offset=1: 先週
+ */
+export function getWeekStartJST(offset = 0): Date {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 3600000);
+  const day = jst.getUTCDay();
+  const hour = jst.getUTCHours();
+  let diff = day === 0 ? 6 : day - 1;
+  if (day === 1 && hour < 3) diff = 7;
+  const monday = new Date(jst);
+  monday.setUTCDate(jst.getUTCDate() - diff - offset * 7);
+  monday.setUTCHours(3, 0, 0, 0);
+  return new Date(monday.getTime() - 9 * 3600000);
+}
+
+/**
+ * JST月初1日0:00をUTCで返す。
+ * offset=0: 今月、offset=1: 先月
+ */
+export function getMonthStartJST(offset = 0): Date {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 3600000);
+  const y = jst.getUTCFullYear();
+  const m = jst.getUTCMonth() - offset;
+  return new Date(Date.UTC(y, m, 1) - 9 * 3600000);
+}
+
 /** Message type to display */
 export function msgTypeLabel(type: string): string {
   const map: Record<string, string> = {

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { mapChatLog } from '@/lib/table-mappers';
+import { getTodayStartJST } from '@/lib/utils';
 import type { SpyMessage } from '@/types';
 
 interface UseRealtimeSpyOptions {
@@ -190,8 +191,7 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
   // キャストの今日のchat_logsを削除（account_idフィルタ付き）
   const deleteCastMessages = useCallback(async (targetCastName: string): Promise<string | null> => {
     if (!accountId) return 'account_id が不明です';
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    const todayStart = getTodayStartJST();
 
     const { error } = await supabaseRef.current
       .from('chat_logs')

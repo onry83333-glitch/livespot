@@ -4,22 +4,8 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
-import { formatTokens, tokensToJPY, timeAgo, COIN_RATE } from '@/lib/utils';
+import { formatTokens, tokensToJPY, timeAgo, COIN_RATE, getWeekStartJST, getTodayStartJST } from '@/lib/utils';
 import type { Account, RegisteredCast } from '@/types';
-
-/** 週境界: 月曜03:00 JST（送金サイクル区切り）をUTCで返す。月曜0-2時台は前週扱い。 */
-function getWeekStartJST(offset = 0): Date {
-  const now = new Date();
-  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  const day = jst.getUTCDay();
-  const hour = jst.getUTCHours();
-  let diff = day === 0 ? 6 : day - 1;
-  if (day === 1 && hour < 3) diff = 7;
-  const monday = new Date(jst);
-  monday.setUTCDate(jst.getUTCDate() - diff - offset * 7);
-  monday.setUTCHours(3, 0, 0, 0);
-  return new Date(monday.getTime() - 9 * 60 * 60 * 1000);
-}
 
 /** coin_transactions の週次集計を取得。RPC優先、未適用時はページネーションフォールバック */
 async function fetchWeeklyCoinStats(
@@ -219,11 +205,7 @@ export default function CastsPage() {
         const lastWeekStart = getWeekStartJST(1);
         const since30d = new Date(now.getTime() - 30 * 86400000).toISOString();
         const since7d = new Date(now.getTime() - 7 * 86400000).toISOString();
-        // JST今日0時をUTCに変換
-        const jstNow = new Date(now.getTime() + 9 * 3600000);
-        const todayStartUTC = new Date(
-          Date.UTC(jstNow.getUTCFullYear(), jstNow.getUTCMonth(), jstNow.getUTCDate()) - 9 * 3600000
-        );
+        const todayStartUTC = getTodayStartJST();
 
         // 全クエリを並列実行（週次コイン集計はRPC優先+ページネーションフォールバック）
         const [statsRes, coinStatsResult, spyLiveRes, rev30dRes, alertsRes, dmRes] = await Promise.all([
