@@ -350,12 +350,12 @@ async function pollStatus(state: CastState): Promise<void> {
     state.wsMessageCount = 0;
     state.wsTipTotal = 0;
 
-    log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId}, source=${target.source})`);
+    log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId}, source=${target.source})${result.topic ? ` topic="${result.topic.substring(0, 60)}"` : ''}`);
 
     // sessions テーブルにレコード作成（自社・他社共通）
     // 部分ユニーク制約で弾かれた場合、既存セッションIDを使う
     try {
-      state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime);
+      state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime, result.topic);
     } catch (err) {
       log.error(`Session open error [${target.source}]: ${err}`);
     }
@@ -457,10 +457,10 @@ async function pollStatus(state: CastState): Promise<void> {
       const startTime = new Date().toISOString();
       state.sessionStartTime = startTime;
       state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
-      log.info(`${target.castName}: already online (${result.status}), new session=${state.sessionId} (source=${target.source})`);
+      log.info(`${target.castName}: already online (${result.status}), new session=${state.sessionId} (source=${target.source})${result.topic ? ` topic="${result.topic.substring(0, 60)}"` : ''}`);
 
       try {
-        state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime);
+        state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime, result.topic);
       } catch (err) {
         log.error(`Session open error (first poll) [${target.source}]: ${err}`);
       }

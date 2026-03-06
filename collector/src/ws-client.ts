@@ -49,6 +49,7 @@ export interface StatusResult {
   status: CastStatus;
   viewerCount: number;
   modelId: string | null;
+  topic: string | null;
   rawData: Record<string, unknown> | null;
 }
 
@@ -308,16 +309,16 @@ export async function pollCastStatus(castName: string, cfClearance?: string): Pr
 
     if (res.status === 403) {
       log.warn(`${castName}: Cloudflare 403`);
-      return { status: 'unknown', viewerCount: 0, modelId: null, rawData: null };
+      return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, rawData: null };
     }
 
     if (res.status === 404) {
-      return { status: 'off', viewerCount: 0, modelId: null, rawData: null };
+      return { status: 'off', viewerCount: 0, modelId: null, topic: null, rawData: null };
     }
 
     if (!res.ok) {
       log.warn(`${castName}: HTTP ${res.status}`);
-      return { status: 'unknown', viewerCount: 0, modelId: null, rawData: null };
+      return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, rawData: null };
     }
 
     const data = (await res.json()) as Record<string, unknown>;
@@ -329,10 +330,16 @@ export async function pollCastStatus(castName: string, cfClearance?: string): Pr
     const viewerCount = Number(user?.viewersCount || user?.viewers || 0);
     const modelId = user?.id ? String(user.id) : null;
 
-    return { status, viewerCount, modelId, rawData: data };
+    // Extract broadcast topic from API response
+    const broadcastSettings = user?.broadcastSettings as Record<string, unknown> | undefined;
+    const topic = (broadcastSettings?.topic as string)
+      || (user?.topicText as string)
+      || null;
+
+    return { status, viewerCount, modelId, topic, rawData: data };
   } catch (err) {
     log.error(`${castName}: status poll failed`, err);
-    return { status: 'unknown', viewerCount: 0, modelId: null, rawData: null };
+    return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, rawData: null };
   }
 }
 

@@ -148,6 +148,7 @@ export async function openSession(
   castName: string,
   sessionId: string,
   startedAt: string,
+  broadcastTitle?: string | null,
 ): Promise<string> {
   // Normalizer: 必須フィールド + UUID形式 + ISO timestamp 検証
   const validated = normalizeSession({ sessionId, accountId, castName, startedAt });
@@ -157,13 +158,17 @@ export async function openSession(
   }
 
   const sb = getSupabase();
-  const { error } = await sb.from('sessions').insert({
+  const insertData: Record<string, unknown> = {
     session_id: validated.sessionId,
     account_id: validated.accountId,
     title: validated.castName,
     cast_name: validated.castName,
     started_at: validated.startedAt,
-  });
+  };
+  if (broadcastTitle) {
+    insertData.broadcast_title = broadcastTitle;
+  }
+  const { error } = await sb.from('sessions').insert(insertData);
   if (error) {
     // 部分ユニーク制約 idx_sessions_one_active_per_cast で弾かれた場合、
     // 既存のアクティブセッションIDを返す（複数インスタンス起動対策）
