@@ -273,6 +273,25 @@ export async function closeStaleSessionsForCast(
   return data?.length ?? 0;
 }
 
+/** プロセス再起動時: 最新の未閉鎖セッションを取得（セッション分割防止） */
+export async function resumeExistingSession(
+  accountId: string,
+  castName: string,
+): Promise<{ session_id: string; started_at: string } | null> {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('sessions')
+    .select('session_id, started_at')
+    .eq('account_id', accountId)
+    .eq('cast_name', castName)
+    .is('ended_at', null)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return { session_id: data.session_id, started_at: data.started_at };
+}
+
 export async function updateCastOnlineStatus(
   table: 'registered_casts' | 'spy_casts',
   accountId: string,

@@ -196,7 +196,7 @@ async function main() {
       },
       autorestart: true,
       watch: false,
-      max_memory_restart: '150M',
+      max_memory_restart: '300M',
       log_file: `${cwd}/logs/${cast.cast_name}.log`,
       error_file: `${cwd}/logs/${cast.cast_name}-error.log`,
       out_file: `${cwd}/logs/${cast.cast_name}-out.log`,

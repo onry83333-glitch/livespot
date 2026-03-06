@@ -16,7 +16,7 @@
 import 'dotenv/config';
 import { CastTarget, POLL_INTERVALS, BATCH_CONFIG, getSupabase } from './config.js';
 import { pollCastStatus, pollViewers, CastStatus, StripchatWsClient, WsMessage, isOnlineStatus } from './ws-client.js';
-import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast, startBatchFlush, stopBatchFlush, flushBuffer } from './storage/supabase.js';
+import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast, resumeExistingSession, startBatchFlush, stopBatchFlush, flushBuffer } from './storage/supabase.js';
 import { accumulateViewer, flushProfiles } from './storage/spy-profiles.js';
 import { parseCentrifugoChat } from './parsers/chat.js';
 import { RetryTracker, sleep } from './utils/reconnect.js';
@@ -329,26 +329,29 @@ async function doPollStatus(): Promise<void> {
     sessionStartTime = null;
   }
 
-  // --- First poll: already online ---
+  // --- First poll: already online (or process restart while online) ---
   if (isOnline && prevStatus === 'unknown' && modelId && !wsClient) {
-    try {
-      const closed = await closeStaleSessionsForCast(ACCOUNT_ID, CAST_NAME);
-      if (closed > 0) log.info(`Closed ${closed} stale session(s)`);
-    } catch (err) {
-      log.warn('Failed to close stale sessions', err);
-    }
+    // 再起動時: 既存の未閉鎖セッションを引き継ぐ（分割防止）
+    const existingSession = await resumeExistingSession(ACCOUNT_ID, CAST_NAME);
+    if (existingSession) {
+      sessionId = existingSession.session_id;
+      sessionStartTime = existingSession.started_at;
+      wsMessageCount = 0;
+      wsTipTotal = 0;
+      log.info(`Resuming session (${result.status}), session=${sessionId}`);
+    } else {
+      const startTime = new Date().toISOString();
+      sessionStartTime = startTime;
+      sessionId = generateSessionId(startTime);
+      wsMessageCount = 0;
+      wsTipTotal = 0;
+      log.info(`Already online (${result.status}), session=${sessionId}`);
 
-    const startTime = new Date().toISOString();
-    sessionStartTime = startTime;
-    sessionId = generateSessionId(startTime);
-    wsMessageCount = 0;
-    wsTipTotal = 0;
-    log.info(`Already online (${result.status}), session=${sessionId}`);
-
-    try {
-      sessionId = await openSession(ACCOUNT_ID, CAST_NAME, sessionId, startTime);
-    } catch (err) {
-      log.error(`Session open error (first poll): ${err}`);
+      try {
+        sessionId = await openSession(ACCOUNT_ID, CAST_NAME, sessionId, startTime);
+      } catch (err) {
+        log.error(`Session open error (first poll): ${err}`);
+      }
     }
 
     wsClient = new StripchatWsClient(CAST_NAME, modelId, onWsMessage, currentAuthToken, currentCfClearance, () => handleAuthError());
