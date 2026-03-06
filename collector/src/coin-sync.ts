@@ -453,13 +453,15 @@ async function refreshCookiesViaPlaywrightLogin(
 
     // stripchat_sessions + state.json を更新
     const sb = getSupabase();
+    const castName = accountCasts.find(c => String(c.stripchat_user_id) === userId || String(c.stripchat_model_id) === userId)?.cast_name || accountCasts[0]?.cast_name || null;
     await sb.from('stripchat_sessions').upsert({
       account_id: accountId,
+      cast_name: castName,
       cookies_json: cookiesJson,
       stripchat_user_id: userId,
       is_valid: true,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'account_id' });
+    }, { onConflict: 'account_id,cast_name' });
 
     try {
       const { STATE_FILE } = await import('./coin-auth.js');
@@ -491,6 +493,7 @@ async function refreshCookiesViaPlaywrightLogin(
  */
 async function refreshCookiesViaApi(
   accountId: string,
+  accountCasts?: RegisteredCast[],
 ): Promise<{ cookieHeader: string; userId: string } | null> {
   const { username, password } = PLAYWRIGHT_CONFIG;
   if (!username || !password) {
@@ -557,13 +560,15 @@ async function refreshCookiesViaApi(
 
     // stripchat_sessions更新
     const sb = getSupabase();
+    const castName = accountCasts?.find(c => String(c.stripchat_user_id) === userId || String(c.stripchat_model_id) === userId)?.cast_name || accountCasts?.[0]?.cast_name || null;
     await sb.from('stripchat_sessions').upsert({
       account_id: accountId,
+      cast_name: castName,
       cookies_json: cookiesJson,
       stripchat_user_id: userId,
       is_valid: true,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'account_id' });
+    }, { onConflict: 'account_id,cast_name' });
 
     return { cookieHeader, userId };
   } catch (err) {
@@ -609,7 +614,7 @@ export async function runCoinSync(): Promise<void> {
     if (result === 'auth_failed') {
       // 方式1: Login API直叩き（STRIPCHAT_USERNAME/PASSWORD設定時）
       log.info(`[${accountId}] Login APIでcookie自動取得を試行...`);
-      const fresh = await refreshCookiesViaApi(accountId);
+      const fresh = await refreshCookiesViaApi(accountId, accountCasts);
       if (fresh) {
         const retryResult = await syncAccountCasts(sb, accountId, accountCasts, fresh.userId, fresh.cookieHeader, true);
         if (retryResult === 'ok') {
@@ -729,13 +734,15 @@ async function syncAccount(
       : 'auth_failed' as const;
     if (result === 'ok') {
       // 成功 → stripchat_sessions も更新
+      const fileCastName = accountCasts.find(c => String(c.stripchat_user_id) === fileUserId || String(c.stripchat_model_id) === fileUserId)?.cast_name || accountCasts[0]?.cast_name || null;
       await sb.from('stripchat_sessions').upsert({
         account_id: accountId,
+        cast_name: fileCastName,
         cookies_json: cookiesFromFile.cookiesJson,
         stripchat_user_id: fileUserId,
         is_valid: true,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'account_id' });
+      }, { onConflict: 'account_id,cast_name' });
       return 'ok';
     }
     // 方式0c: Cloudflare tokenだけが期限切れの可能性 → Playwright headlessでリフレッシュ
@@ -746,13 +753,15 @@ async function syncAccount(
         const retryResult = await syncAccountCasts(sb, accountId, accountCasts, refreshed.userId, refreshed.cookieHeader, true);
         if (retryResult === 'ok') {
           // 成功 → stripchat_sessions + state.json を更新
+          const refreshCastName = accountCasts.find(c => String(c.stripchat_user_id) === refreshed.userId || String(c.stripchat_model_id) === refreshed.userId)?.cast_name || accountCasts[0]?.cast_name || null;
           await sb.from('stripchat_sessions').upsert({
             account_id: accountId,
+            cast_name: refreshCastName,
             cookies_json: refreshed.cookiesJson,
             stripchat_user_id: refreshed.userId,
             is_valid: true,
             updated_at: new Date().toISOString(),
-          }, { onConflict: 'account_id' });
+          }, { onConflict: 'account_id,cast_name' });
 
           // state.json にも保存（次回はPlaywrightなしで使える可能性）
           try {

@@ -138,16 +138,25 @@ async function main() {
       .eq('is_active', true)
       .limit(1);
     if (accounts?.[0]) {
+      const accountId = accounts[0].account_id;
       const cookiesJson: Record<string, string> = {};
       for (const c of allCookies) cookiesJson[c.name] = c.value;
+      // cast_name解決
+      const { data: castMatch } = await sb.from('registered_casts')
+        .select('cast_name')
+        .eq('account_id', accountId).eq('is_active', true)
+        .or(`stripchat_user_id.eq.${userId},stripchat_model_id.eq.${userId}`)
+        .limit(1);
+      const castName = castMatch?.[0]?.cast_name || null;
       await sb.from('stripchat_sessions').upsert({
-        account_id: accounts[0].account_id,
+        account_id: accountId,
+        cast_name: castName,
         cookies_json: cookiesJson,
         stripchat_user_id: userId,
         is_valid: true,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'account_id' });
-      console.log('Supabase stripchat_sessions 更新完了');
+      }, { onConflict: 'account_id,cast_name' });
+      console.log(`Supabase stripchat_sessions 更新完了 (cast=${castName})`);
     }
 
     console.log('\n=== リフレッシュ成功 — coin-syncが使えるようになりました ===');
