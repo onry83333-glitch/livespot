@@ -297,6 +297,50 @@ export async function resumeExistingSession(
   return { session_id: data.session_id, started_at: data.started_at };
 }
 
+/** セッションに配信情報（タイトル・価格）を保存 */
+export async function updateSessionBroadcastInfo(
+  sessionId: string,
+  accountId: string,
+  castName: string,
+  info: {
+    broadcastTitle?: string | null;
+    prices?: Record<string, unknown> | null;
+    goal?: Record<string, unknown> | null;
+  },
+): Promise<void> {
+  if (!sessionId) return;
+  const sb = getSupabase();
+  const updates: Record<string, unknown> = {};
+
+  if (info.broadcastTitle) {
+    updates.broadcast_title = info.broadcastTitle;
+  }
+  if (info.prices) {
+    updates.broadcast_prices = info.prices;
+  }
+  if (info.goal) {
+    updates.broadcast_goal = info.goal;
+  }
+
+  if (Object.keys(updates).length === 0) return;
+
+  const { error } = await sb
+    .from('sessions')
+    .update(updates)
+    .eq('session_id', sessionId)
+    .eq('account_id', accountId)
+    .eq('cast_name', castName);
+
+  if (error) {
+    // broadcast_prices/broadcast_goal カラムが未追加の場合は無視
+    if (error.message?.includes('broadcast_prices') || error.message?.includes('broadcast_goal')) {
+      log.debug(`Session broadcast info: column not yet added (apply migration)`);
+    } else {
+      log.error(`Failed to update session broadcast info ${sessionId}`, error);
+    }
+  }
+}
+
 export async function updateCastOnlineStatus(
   table: 'registered_casts' | 'spy_casts',
   accountId: string,

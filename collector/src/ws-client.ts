@@ -29,6 +29,7 @@ const WS_CHANNELS = [
   'goalChanged',
   'clearChatMessages',
   'userUpdated',
+  'modelStatusChanged',
 ];
 
 const FETCH_HEADERS = {
@@ -45,11 +46,30 @@ export function isOnlineStatus(status: CastStatus | string): boolean {
     || status === 'ticketShow' || status === 'groupShow';
 }
 
+/** Prices extracted from /cam API (revenue estimation) */
+export interface BroadcastPrices {
+  privatePrice: number;      // tokens/min for private show
+  cam2camPrice: number;      // tokens/min for cam2cam
+  ticketShowPrice: number;   // tokens for ticket show entry
+  groupShowPrice: number;    // tokens/min for group show
+  spyPrice: number;          // tokens/min for spy on private
+}
+
+/** Goal info extracted from /cam API */
+export interface GoalInfo {
+  amount: number;
+  currentAmount: number;
+  description: string;
+  isAchieved: boolean;
+}
+
 export interface StatusResult {
   status: CastStatus;
   viewerCount: number;
   modelId: string | null;
   topic: string | null;
+  prices: BroadcastPrices | null;
+  goal: GoalInfo | null;
   rawData: Record<string, unknown> | null;
 }
 
@@ -309,16 +329,16 @@ export async function pollCastStatus(castName: string, cfClearance?: string): Pr
 
     if (res.status === 403) {
       log.warn(`${castName}: Cloudflare 403`);
-      return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, rawData: null };
+      return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, prices: null, goal: null, rawData: null };
     }
 
     if (res.status === 404) {
-      return { status: 'off', viewerCount: 0, modelId: null, topic: null, rawData: null };
+      return { status: 'off', viewerCount: 0, modelId: null, topic: null, prices: null, goal: null, rawData: null };
     }
 
     if (!res.ok) {
       log.warn(`${castName}: HTTP ${res.status}`);
-      return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, rawData: null };
+      return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, prices: null, goal: null, rawData: null };
     }
 
     const data = (await res.json()) as Record<string, unknown>;
@@ -336,10 +356,37 @@ export async function pollCastStatus(castName: string, cfClearance?: string): Pr
       || (user?.topicText as string)
       || null;
 
-    return { status, viewerCount, modelId, topic, rawData: data };
+    // Extract prices for revenue estimation
+    // API returns flat fields: user.privateRate, user.ticketRate, user.groupRate, user.spyRate, user.p2pRate
+    const privateRate = Number(user?.privateRate || 0);
+    const ticketRate = Number(user?.ticketRate || 0);
+    const groupRate = Number(user?.groupRate || 0);
+    const spyRate = Number(user?.spyRate || 0);
+    const p2pRate = Number(user?.p2pRate || 0);
+    const prices: BroadcastPrices | null = (privateRate || ticketRate || groupRate) ? {
+      privatePrice: privateRate,
+      cam2camPrice: p2pRate,
+      ticketShowPrice: ticketRate,
+      groupShowPrice: groupRate,
+      spyPrice: spyRate,
+    } : null;
+
+    // Extract goal info for tip flow analysis (G-02)
+    let goal: GoalInfo | null = null;
+    const rawGoal = user?.goal as Record<string, unknown> | undefined;
+    if (rawGoal) {
+      goal = {
+        amount: Number(rawGoal.amount || rawGoal.goalAmount || 0),
+        currentAmount: Number(rawGoal.currentAmount || rawGoal.current || 0),
+        description: String(rawGoal.text || rawGoal.description || ''),
+        isAchieved: rawGoal.isAchieved === true || rawGoal.achieved === true,
+      };
+    }
+
+    return { status, viewerCount, modelId, topic, prices, goal, rawData: data };
   } catch (err) {
     log.error(`${castName}: status poll failed`, err);
-    return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, rawData: null };
+    return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, prices: null, goal: null, rawData: null };
   }
 }
 

@@ -16,9 +16,10 @@
 import 'dotenv/config';
 import { CastTarget, POLL_INTERVALS, BATCH_CONFIG, getSupabase } from './config.js';
 import { pollCastStatus, pollViewers, CastStatus, StripchatWsClient, WsMessage, isOnlineStatus } from './ws-client.js';
-import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast, resumeExistingSession, startBatchFlush, stopBatchFlush, flushBuffer } from './storage/supabase.js';
+import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast, resumeExistingSession, startBatchFlush, stopBatchFlush, flushBuffer, updateSessionBroadcastInfo } from './storage/supabase.js';
 import { accumulateViewer, flushProfiles } from './storage/spy-profiles.js';
 import { parseCentrifugoChat } from './parsers/chat.js';
+import { parseCentrifugoGoal } from './parsers/goal.js';
 import { RetryTracker, sleep } from './utils/reconnect.js';
 import { createLogger, setLogLevel } from './utils/logger.js';
 import { getAuth, invalidateAuth } from './auth/index.js';
@@ -223,6 +224,56 @@ function onWsMessage(msg: WsMessage): void {
       session_id: sessionId,
       metadata: { source: 'collector-ws', event: eventType, rawData: msg.data },
     });
+  } else if (msg.event === 'goalChanged') {
+    // G-07: ゴール進捗追跡（売上フロー分析用）
+    const parsed = parseCentrifugoGoal(msg.data);
+    if (parsed) {
+      log.info(`GOAL ${parsed.isAchieved ? 'ACHIEVED' : 'UPDATE'} ${parsed.currentAmount}/${parsed.goalAmount}tk "${parsed.goalText}"`);
+      enqueue('spy_messages', {
+        account_id: ACCOUNT_ID,
+        cast_name: CAST_NAME,
+        message_time: msg.receivedAt,
+        msg_type: 'goal',
+        user_name: 'collector',
+        message: parsed.message,
+        tokens: parsed.isAchieved ? parsed.goalAmount : 0,
+        is_vip: false,
+        session_id: sessionId,
+        metadata: {
+          source: 'collector-ws',
+          goalAmount: parsed.goalAmount,
+          currentAmount: parsed.currentAmount,
+          isAchieved: parsed.isAchieved,
+          goalText: parsed.goalText,
+        },
+      });
+    }
+  } else if (msg.event === 'modelStatusChanged') {
+    // G-12: リアルタイム状態遷移（ticketShow/groupShow/private検出）
+    const newStatus = String(msg.data.status || msg.data.newStatus || 'unknown');
+    const prevStatus = String(msg.data.previousStatus || msg.data.oldStatus || '');
+    log.info(`STATUS_CHANGE ${prevStatus} → ${newStatus}`);
+    enqueue('spy_messages', {
+      account_id: ACCOUNT_ID,
+      cast_name: CAST_NAME,
+      message_time: msg.receivedAt,
+      msg_type: 'status_change',
+      user_name: 'collector',
+      message: `配信状態変更: ${prevStatus || '?'} → ${newStatus}`,
+      tokens: 0,
+      is_vip: false,
+      session_id: sessionId,
+      metadata: {
+        source: 'collector-ws',
+        newStatus,
+        previousStatus: prevStatus || undefined,
+        rawData: msg.data,
+      },
+    });
+  } else if (msg.event === 'userUpdated') {
+    // G-09: ユーザー状態変化（視聴者数変動等）
+    const vc = Number(msg.data.viewersCount || msg.data.viewers || 0);
+    if (vc > 0) viewerCount = vc;
   }
 }
 
@@ -259,9 +310,17 @@ async function doPollStatus(): Promise<void> {
     log.info(`ONLINE (${result.status}, ${result.viewerCount} viewers, session=${sessionId})`);
 
     try {
-      sessionId = await openSession(ACCOUNT_ID, CAST_NAME, sessionId, startTime);
+      sessionId = await openSession(ACCOUNT_ID, CAST_NAME, sessionId, startTime, result.topic);
     } catch (err) {
       log.error(`Session open error: ${err}`);
+    }
+
+    // Save prices & goal to session (revenue estimation data)
+    if (sessionId && (result.prices || result.goal)) {
+      updateSessionBroadcastInfo(sessionId, ACCOUNT_ID, CAST_NAME, {
+        prices: result.prices,
+        goal: result.goal,
+      }).catch((err) => log.debug(`Broadcast info save: ${err}`));
     }
 
     enqueue('spy_messages', {
@@ -274,7 +333,7 @@ async function doPollStatus(): Promise<void> {
       tokens: 0,
       is_vip: false,
       session_id: sessionId,
-      metadata: { source: 'collector', modelId: result.modelId, viewerCount: result.viewerCount },
+      metadata: { source: 'collector', modelId: result.modelId, viewerCount: result.viewerCount, prices: result.prices },
     });
 
     if (modelId) {
@@ -348,10 +407,19 @@ async function doPollStatus(): Promise<void> {
       log.info(`Already online (${result.status}), session=${sessionId}`);
 
       try {
-        sessionId = await openSession(ACCOUNT_ID, CAST_NAME, sessionId, startTime);
+        sessionId = await openSession(ACCOUNT_ID, CAST_NAME, sessionId, startTime, result.topic);
       } catch (err) {
         log.error(`Session open error (first poll): ${err}`);
       }
+    }
+
+    // Save prices & goal to session (revenue estimation data)
+    if (sessionId && (result.prices || result.goal)) {
+      updateSessionBroadcastInfo(sessionId, ACCOUNT_ID, CAST_NAME, {
+        broadcastTitle: result.topic,
+        prices: result.prices,
+        goal: result.goal,
+      }).catch((err) => log.debug(`Broadcast info save: ${err}`));
     }
 
     wsClient = new StripchatWsClient(CAST_NAME, modelId, onWsMessage, currentAuthToken, currentCfClearance, () => handleAuthError());
