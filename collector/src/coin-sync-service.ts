@@ -100,13 +100,6 @@ async function getSessionFromDB(
 } | null> {
   const sb = getSupabase();
 
-  // キャスト別Cookie → 共通Cookie(cast_name=null) の順にフォールバック
-  let query = sb
-    .from('stripchat_sessions')
-    .select('account_id, cookies_json, stripchat_user_id, is_valid, cast_name')
-    .eq('account_id', accountId)
-    .eq('is_valid', true);
-
   // 3段フォールバック: キャスト専用 → 共通(null) → 同一アカウント内の任意セッション
   // Stripchatスタジオアカウントは認証共有のため、他キャストのCookieでもAPI呼出可能
   const { data: allSessions } = await sb
@@ -452,6 +445,7 @@ async function syncAccount(
   let totalTx = 0;
   let anyAuthOk = false;
   let firstAuth: { cookieHeader: string; userId: string; session: StripchatSession } | null = null;
+  const syncedUserIds = new Set<string>(); // スタジオAPI重複呼出防止
 
   for (const cast of casts) {
     // キャスト別にCookie取得（キャスト専用 → 共通セッション の順にフォールバック）
@@ -492,9 +486,23 @@ async function syncAccount(
       ? new Date(new Date(lastDate).getTime() - bufferMs)
       : null;
 
-    // 各キャストのmodel_idを使ってAPI呼び出し
-    const castUserId = cast.stripchat_model_id || cast.stripchat_user_id || auth.userId;
-    const authSource = auth.session.cast_name !== cast.cast_name ? ` auth=${auth.session.cast_name}` : '';
+    // API呼び出しのuserId決定:
+    // - 専用Cookieがある場合: キャスト自身のmodel_id
+    // - フォールバック(他キャストのCookie)の場合: Cookie所有者のuserId（スタジオAPI）
+    //   ※ 他モデルのmodel_idでAPI呼出すと403になるため
+    const isFallback = auth.session.cast_name !== cast.cast_name && auth.session.cast_name !== null;
+    const castUserId = isFallback
+      ? auth.userId  // スタジオ全体のトランザクションを取得
+      : (cast.stripchat_model_id || cast.stripchat_user_id || auth.userId);
+
+    // フォールバック(スタジオAPI)の場合、同じuserIdで既にsync済みならスキップ
+    // （スタジオAPIは全キャスト分を一括返却するため2回呼ぶ必要がない）
+    if (isFallback && syncedUserIds.has(String(castUserId))) {
+      log.info(`[${cast.cast_name}] スタジオAPI(userId=${castUserId})は同期済み — スキップ`);
+      continue;
+    }
+
+    const authSource = isFallback ? ` auth=${auth.session.cast_name}(studio)` : '';
     log.info(`[${cast.cast_name}] 差分同期 (userId=${castUserId}${authSource}, since=${sinceDate?.toISOString() || 'フル同期'})`);
 
     const { transactions, authFailed: txAuthFailed } = await fetchTransactions(
@@ -513,7 +521,10 @@ async function syncAccount(
       continue;
     }
 
+    syncedUserIds.add(String(castUserId));
+
     if (transactions.length > 0) {
+      // フォールバック時はスタジオ全体のTXが来る → cast_nameは各TX内で解決
       const count = await upsertTransactions(accountId, cast.cast_name, transactions, casts);
       totalTx += count;
       log.info(`[${cast.cast_name}] ${count}件 coin_transactions 保存`);
