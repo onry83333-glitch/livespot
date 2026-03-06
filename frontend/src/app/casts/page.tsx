@@ -59,6 +59,7 @@ async function fetchWeeklyCoinStats(
         .gte('date', lastWeekStart.toISOString())
         .gt('id', lastId)
         .gt('tokens', 0)
+        .neq('type', 'studio')
         .order('id', { ascending: true })
         .limit(PAGE_SIZE);
       if (fbErr) {
@@ -222,6 +223,7 @@ export default function CastsPage() {
             while (more) {
               const { data } = await supabase.from('coin_transactions').select('tokens')
                 .eq('account_id', selectedAccount).in('cast_name', castNames).gte('date', since30d)
+                .neq('type', 'studio')
                 .order('id', { ascending: true }).range(from, from + PS - 1);
               if (data && data.length > 0) {
                 total += data.reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0);

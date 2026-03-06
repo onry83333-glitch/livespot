@@ -800,6 +800,7 @@ function CastDetailInner() {
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
+        .neq('type', 'studio')
         .limit(50000),
     ]).then(([statsRes, fansRes, coinTotalRes]) => {
       const s = statsRes.data as CastStatsData[] | null;
@@ -866,12 +867,14 @@ function CastDetailInner() {
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
+        .neq('type', 'studio')
         .gte('date', thisStart)
         .limit(10000),
       sb.from('coin_transactions')
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
+        .neq('type', 'studio')
         .gte('date', lastStart)
         .lt('date', thisMonday.toISOString())
         .limit(10000),
