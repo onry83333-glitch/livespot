@@ -370,9 +370,10 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
 function SessionsTab({ castName, accountId }: { castName: string; accountId: string }) {
   const [sessions, setSessions] = useState<{
     session_id: string; started_at: string; ended_at: string;
-    total_messages: number; total_tip_revenue: number; total_ticket_revenue: number;
+    total_messages: number; total_tokens: number;
     peak_viewers: number; title: string | null;
     tip_count: number; unique_users: number;
+    ticket_estimated_revenue: number; ticket_show_count: number;
   }[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -403,37 +404,46 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
         return;
       }
 
-      // 2. spy_messagesからセッション別TIP件数・ユニークユーザー数を集計
+      // 2. chat_logsからセッション別TIP件数・ユニークユーザー数・チケットショー検出
       const sessionIds = sessionRows.map(s => s.session_id);
       const { data: msgs } = await supabase
         .from('chat_logs')
-        .select('session_id, message_type, username')
+        .select('session_id, message_type, username, tokens, timestamp')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
         .in('session_id', sessionIds)
         .limit(50000);
 
       // 3. Client-side集計
-      const aggMap = new Map<string, { tip_count: number; unique_users: Set<string> }>();
+      const aggMap = new Map<string, { tip_count: number; unique_users: Set<string>; tipMsgs: { tokens: number; message_time: string; user_name: string }[] }>();
       for (const m of (msgs || [])) {
         if (!m.session_id) continue;
         if (!aggMap.has(m.session_id)) {
-          aggMap.set(m.session_id, { tip_count: 0, unique_users: new Set() });
+          aggMap.set(m.session_id, { tip_count: 0, unique_users: new Set(), tipMsgs: [] });
         }
         const agg = aggMap.get(m.session_id)!;
-        if (m.message_type === 'tip' || m.message_type === 'gift') agg.tip_count++;
+        if (m.message_type === 'tip' || m.message_type === 'gift') {
+          agg.tip_count++;
+          if ((m.tokens || 0) > 0) {
+            agg.tipMsgs.push({ tokens: m.tokens, message_time: m.timestamp, user_name: m.username || '' });
+          }
+        }
         if (m.username) agg.unique_users.add(m.username);
       }
 
-      // 4. マージ
+      // 4. マージ（チケットショー推定売上を含む）
       const merged = sessionRows.map(s => {
         const agg = aggMap.get(s.session_id);
+        // チケットショー検出
+        const shows = agg?.tipMsgs?.length ? detectTicketShows(agg.tipMsgs) : [];
+        const ticketEstimated = shows.reduce((sum, sh) => sum + sh.ticket_revenue, 0);
         return {
           ...s,
-          total_tip_revenue: s.total_tip_revenue || 0,
-          total_ticket_revenue: s.total_ticket_revenue || 0,
+          total_tokens: s.total_tokens || 0,
           tip_count: agg?.tip_count || 0,
           unique_users: agg?.unique_users?.size || 0,
+          ticket_estimated_revenue: ticketEstimated,
+          ticket_show_count: shows.length,
         };
       });
 
@@ -460,6 +470,7 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>MSG</th>
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>TIP</th>
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>COINS</th>
+                <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>TICKET</th>
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>USERS</th>
               </tr>
             </thead>
@@ -468,7 +479,8 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                 const start = new Date(s.started_at);
                 const end = new Date(s.ended_at);
                 const durationMin = Math.round((end.getTime() - start.getTime()) / 60000);
-                const coins = s.total_tip_revenue;
+                const coins = s.total_tokens;
+                const ticketRev = s.ticket_estimated_revenue;
                 return (
                   <tr key={s.session_id} className="border-b hover:bg-white/[0.02] transition-colors" style={{ borderColor: 'rgba(56,189,248,0.05)' }}>
                     <td className="py-2.5 px-2 font-medium">
@@ -483,6 +495,16 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                     <td className="py-2.5 px-2 text-right tabular-nums" style={{ color: 'var(--accent-primary)' }}>{s.tip_count}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums font-semibold" style={{ color: 'var(--accent-amber)' }}>
                       {formatTokens(coins)}{coins > 0 && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(coins)})</span>}
+                    </td>
+                    <td className="py-2.5 px-2 text-right tabular-nums" style={{ color: ticketRev > 0 ? '#a78bfa' : 'var(--text-muted)' }}>
+                      {ticketRev > 0 ? (
+                        <span className="font-semibold">
+                          {formatTokens(ticketRev)}
+                          <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>
+                            ({s.ticket_show_count}回)
+                          </span>
+                        </span>
+                      ) : '-'}
                     </td>
                     <td className="py-2.5 px-2 text-right tabular-nums">{s.unique_users}</td>
                   </tr>
