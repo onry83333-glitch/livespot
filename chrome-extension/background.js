@@ -2973,11 +2973,12 @@ async function exportSessionCookie() {
       cookiesJson[c.name] = c.value;
     }
 
-    // 3.5. userId が Cookie から取れなかった場合、API で取得
-    if (!stripchatUserId) {
+    // 3.5. userId / username を API で取得（キャスト別Cookie保存に必要）
+    let stripchatUsername = null;
+    {
       const cookieStr = allCookies.map(c => `${c.name}=${c.value}`).join('; ');
       try {
-        // 方法A: /initial-dynamic API
+        // /initial-dynamic API からuserId + username取得
         const dynRes = await fetch('https://stripchat.com/api/front/v2/initial-dynamic?requestType=initial', {
           headers: {
             'Accept': 'application/json',
@@ -2986,16 +2987,46 @@ async function exportSessionCookie() {
         });
         if (dynRes.ok) {
           const dynData = await dynRes.json();
-          const dynUid = dynData?.initialDynamic?.user?.id || dynData?.user?.id;
-          if (dynUid && dynUid > 0) {
-            stripchatUserId = String(dynUid);
-            console.log('[LS-BG] SessionExport: /initial-dynamic からuserId取得:', stripchatUserId);
+          const dynUser = dynData?.initialDynamic?.user || dynData?.user;
+          if (dynUser) {
+            if (dynUser.id && dynUser.id > 0) {
+              stripchatUserId = stripchatUserId || String(dynUser.id);
+            }
+            if (dynUser.username) {
+              stripchatUsername = dynUser.username;
+              console.log('[LS-BG] SessionExport: username取得:', stripchatUsername);
+            }
           }
         }
       } catch (e) {
         console.warn('[LS-BG] SessionExport: /initial-dynamic 失敗:', e.message);
       }
     }
+
+    // 3.5.1. username → registered_casts照合でcast_name決定
+    let sessionCastName = null;
+    if (stripchatUsername && ownCastNamesCache && ownCastNamesCache.size > 0) {
+      // registered_castsのcast_nameと一致すればそのキャスト
+      if (ownCastNamesCache.has(stripchatUsername)) {
+        sessionCastName = stripchatUsername;
+      }
+    }
+    // フォールバック: userIdでregistered_castsを検索
+    if (!sessionCastName && stripchatUserId) {
+      try {
+        const rcRes = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&or=(stripchat_model_id.eq.${stripchatUserId},stripchat_user_id.eq.${stripchatUserId})&select=cast_name&limit=1`,
+          { headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` } }
+        );
+        if (rcRes.ok) {
+          const rcData = await rcRes.json();
+          if (rcData.length > 0) sessionCastName = rcData[0].cast_name;
+        }
+      } catch (e) {
+        console.warn('[LS-BG] SessionExport: registered_casts照合失敗:', e.message);
+      }
+    }
+    console.log('[LS-BG] SessionExport: cast_name=', sessionCastName || '(unknown)');
 
     // 3.6. Stripchatタブの content script 経由でuserIdを取得（最終フォールバック）
     if (!stripchatUserId) {
@@ -3054,6 +3085,7 @@ async function exportSessionCookie() {
 
     const body = {
       account_id: accountId,
+      cast_name: sessionCastName,
       session_cookie: sessionCookie.value,
       front_version: frontVersion,
       cookies_json: cookiesJson,
@@ -3069,7 +3101,7 @@ async function exportSessionCookie() {
     if (stripchatUserId) body.stripchat_user_id = stripchatUserId;
 
     const upsertRes = await fetch(
-      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?on_conflict=account_id`,
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?on_conflict=account_id,cast_name`,
       {
         method: 'POST',
         headers: {
@@ -3084,7 +3116,7 @@ async function exportSessionCookie() {
 
     if (upsertRes.ok) {
       console.log('[LS-BG] SessionExport: セッション同期完了',
-        `userId=${stripchatUserId}, csrf=${!!csrfToken}, expires=${expiresAt || 'unknown'}`);
+        `cast=${sessionCastName}, userId=${stripchatUserId}, csrf=${!!csrfToken}, expires=${expiresAt || 'unknown'}`);
     } else {
       const errText = await upsertRes.text().catch(() => '');
       console.warn('[LS-BG] SessionExport: upsert失敗:', upsertRes.status, errText);

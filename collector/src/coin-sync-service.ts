@@ -36,6 +36,7 @@ const BATCH_SIZE = 500;        // UPSERTバッチサイズ
 
 interface StripchatSession {
   account_id: string;
+  cast_name: string | null;
   cookies_json: Record<string, string> | null;
   stripchat_user_id: string | null;
   is_valid: boolean;
@@ -91,7 +92,7 @@ function sleep(ms: number): Promise<void> {
 
 async function getSessionFromDB(
   accountId: string,
-  casts: RegisteredCast[],
+  castName?: string,
 ): Promise<{
   cookieHeader: string;
   userId: string;
@@ -99,20 +100,49 @@ async function getSessionFromDB(
 } | null> {
   const sb = getSupabase();
 
-  const { data, error } = await sb
+  // キャスト別Cookie → 共通Cookie(cast_name=null) の順にフォールバック
+  let query = sb
     .from('stripchat_sessions')
-    .select('account_id, cookies_json, stripchat_user_id, is_valid')
+    .select('account_id, cookies_json, stripchat_user_id, is_valid, cast_name')
     .eq('account_id', accountId)
-    .eq('is_valid', true)
-    .limit(1)
-    .single();
+    .eq('is_valid', true);
+
+  if (castName) {
+    // キャスト専用セッションを優先、なければ共通セッション
+    query = query.or(`cast_name.eq.${castName},cast_name.is.null`);
+  }
+
+  const { data, error } = await query.order('cast_name', { ascending: false, nullsFirst: false }).limit(1).single();
 
   if (error || !data) {
+    // single()はmultiple rows errorを出す場合があるので、maybeSingleパターンも試す
+    if (error?.code === 'PGRST116') {
+      // 複数行ある場合: cast_name一致を優先取得
+      const { data: rows } = await sb
+        .from('stripchat_sessions')
+        .select('account_id, cookies_json, stripchat_user_id, is_valid, cast_name')
+        .eq('account_id', accountId)
+        .eq('is_valid', true)
+        .order('cast_name', { ascending: false, nullsFirst: false })
+        .limit(5);
+      const match = rows?.find((r: Record<string, unknown>) => r.cast_name === castName) || rows?.[0];
+      if (!match) {
+        log.warn(`[${accountId}] stripchat_sessions: 有効なセッションなし`);
+        return null;
+      }
+      return buildAuthResult(accountId, match as StripchatSession);
+    }
     log.warn(`[${accountId}] stripchat_sessions: 有効なセッションなし`);
     return null;
   }
 
-  const sess = data as StripchatSession;
+  return buildAuthResult(accountId, data as StripchatSession);
+}
+
+function buildAuthResult(
+  accountId: string,
+  sess: StripchatSession,
+): { cookieHeader: string; userId: string; session: StripchatSession } | null {
   if (!sess.cookies_json || Object.keys(sess.cookies_json).length === 0) {
     log.warn(`[${accountId}] cookies_jsonが空`);
     return null;
@@ -128,7 +158,7 @@ async function getSessionFromDB(
     return null;
   }
 
-  // userId解決（4段フォールバック）
+  // userId解決
   let userId = sess.stripchat_user_id
     ? String(sess.stripchat_user_id)
     : sess.cookies_json['stripchat_com_userId'] || '';
@@ -149,19 +179,6 @@ async function getSessionFromDB(
           log.info(`[${accountId}] AMP cookieからuserId取得: ${userId}`);
         }
       } catch { /* ignore */ }
-    }
-  }
-
-  // フォールバック: registered_casts.stripchat_user_id（全キャストを走査）
-  // NOTE: DBのstripchat_user_idは上書きしない（正しいオーナーIDが汚染されるのを防ぐ）
-  if (!userId) {
-    for (const cast of casts) {
-      const fallbackId = cast.stripchat_user_id || cast.stripchat_model_id;
-      if (fallbackId) {
-        userId = String(fallbackId);
-        log.info(`[${accountId}] registered_casts(${cast.cast_name})からuserId取得: ${userId}`);
-        break;
-      }
     }
   }
 
@@ -433,19 +450,23 @@ async function syncAccount(
   accountId: string,
   casts: RegisteredCast[],
 ): Promise<'ok' | 'auth_failed' | 'no_session'> {
-  // 1. Cookie取得（DBのみ）
-  const auth = await getSessionFromDB(accountId, casts);
-  if (!auth) return 'no_session';
-
-  log.info(`[${accountId}] 認証OK (userId=${auth.userId})`);
-
   const sb = getSupabase();
 
-  // 2. 各キャストのトランザクション同期
+  // 2. 各キャストのトランザクション同期（キャスト別Cookie対応）
   let totalTx = 0;
-  let authFailed = false;
+  let anyAuthOk = false;
+  let firstAuth: { cookieHeader: string; userId: string; session: StripchatSession } | null = null;
 
   for (const cast of casts) {
+    // キャスト別にCookie取得（キャスト専用 → 共通セッション の順にフォールバック）
+    const auth = await getSessionFromDB(accountId, cast.cast_name);
+    if (!auth) {
+      log.warn(`[${cast.cast_name}] Cookie未登録 — Chrome拡張で${cast.cast_name}にログインしてください`);
+      continue;
+    }
+    if (!firstAuth) firstAuth = auth;
+    anyAuthOk = true;
+
     // 差分同期: 最新トランザクション日時からバッファを引いて差分取得
     const { data: lastTx } = await sb
       .from('coin_transactions')
@@ -475,7 +496,7 @@ async function syncAccount(
       ? new Date(new Date(lastDate).getTime() - bufferMs)
       : null;
 
-    // 各キャストのmodel_idを使ってAPI呼び出し（アカウント共通のuserIdだと全TX混在する）
+    // 各キャストのmodel_idを使ってAPI呼び出し
     const castUserId = cast.stripchat_model_id || cast.stripchat_user_id || auth.userId;
     log.info(`[${cast.cast_name}] 差分同期 (userId=${castUserId}, since=${sinceDate?.toISOString() || 'フル同期'})`);
 
@@ -484,8 +505,13 @@ async function syncAccount(
     );
 
     if (txAuthFailed) {
-      authFailed = true;
-      break;
+      log.warn(`[${cast.cast_name}] Cookie期限切れ — is_valid=falseに更新`);
+      await sb
+        .from('stripchat_sessions')
+        .update({ is_valid: false, updated_at: new Date().toISOString() })
+        .eq('account_id', accountId)
+        .eq('cast_name', cast.cast_name);
+      continue;
     }
 
     if (transactions.length > 0) {
@@ -499,17 +525,10 @@ async function syncAccount(
     await sleep(1000); // キャスト間ディレイ
   }
 
-  if (authFailed) {
-    // Cookie期限切れ → is_valid=false にしてChrome拡張の更新を待つ
-    await sb
-      .from('stripchat_sessions')
-      .update({ is_valid: false, updated_at: new Date().toISOString() })
-      .eq('account_id', accountId);
-    log.error(`[${accountId}] Cookie期限切れ — Chrome拡張がCookie更新するまで待機`);
-    return 'auth_failed';
-  }
+  if (!anyAuthOk) return 'no_session';
 
-  // 3. 課金ユーザー一覧同期
+  // 3. 課金ユーザー一覧同期（いずれかの有効なauthを使用）
+  const auth = firstAuth!;
   const { users, authFailed: usersAuthFailed } = await fetchPayingUsers(
     auth.userId, auth.cookieHeader,
   );
