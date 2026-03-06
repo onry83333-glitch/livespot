@@ -44,7 +44,7 @@ const SYNC_TYPES: Record<string, SyncTypeInfo> = {
   screenshot:  { label: 'スクショ',     icon: '📸', description: '配信画面の定期キャプチャ' },
 };
 
-const STALE_THRESHOLD_HOURS = 60;
+const STALE_THRESHOLD_HOURS = 24;
 const STALE_THRESHOLD_MS = STALE_THRESHOLD_HOURS * 60 * 60 * 1000;
 
 function formatElapsed(minutes: number | null): string {
@@ -91,6 +91,7 @@ export default function DataSyncPanel({ supabase, accountId, castName }: Props) 
     coin_sync: null,
     spy_chat: null,
     spy_viewer: null,
+    screenshot: null,
   });
 
   // ============================================================
@@ -100,20 +101,20 @@ export default function DataSyncPanel({ supabase, accountId, castName }: Props) 
   const fetchSyncHealth = useCallback(async () => {
     setLoading(true);
 
-    // 1) Try sync_health RPC
-    const { data: healthData } = await supabase.rpc('get_sync_health', { p_account_id: accountId });
+    // 1) Try sync_health RPC (may not exist on all deployments)
+    const { data: healthData, error: rpcErr } = await supabase.rpc('get_sync_health', { p_account_id: accountId });
 
-    const castRows = ((healthData || []) as SyncHealthRow[]).filter(
-      (r) => r.cast_name === castName
-    );
+    const castRows = (!rpcErr && healthData)
+      ? ((healthData || []) as SyncHealthRow[]).filter((r) => r.cast_name === castName)
+      : [];
     setHealthRows(castRows);
 
-    // 2) Fallback: if sync_health has no data for this cast, query tables directly
-    const hasCoin = castRows.some((r) => r.sync_type === 'coin_sync');
-    const hasSpy = castRows.some((r) => r.sync_type === 'spy_chat');
-    const hasViewer = castRows.some((r) => r.sync_type === 'spy_viewer');
+    // 2) Always query actual tables for fresh timestamps (RPC may be missing or stale)
+    const hasCoin = castRows.some((r) => r.sync_type === 'coin_sync' && r.last_sync_at);
+    const hasSpy = castRows.some((r) => r.sync_type === 'spy_chat' && r.last_sync_at);
+    const hasViewer = castRows.some((r) => r.sync_type === 'spy_viewer' && r.last_sync_at);
 
-    const fb: Record<string, string | null> = { coin_sync: null, spy_chat: null, spy_viewer: null };
+    const fb: Record<string, string | null> = { coin_sync: null, spy_chat: null, spy_viewer: null, screenshot: null };
 
     if (!hasCoin) {
       const { data: coinData } = await supabase
@@ -127,14 +128,15 @@ export default function DataSyncPanel({ supabase, accountId, castName }: Props) 
     }
 
     if (!hasSpy) {
+      // Use spy_messages (primary chat data), not chat_logs (v2 table with minimal data)
       const { data: spyData } = await supabase
-        .from('chat_logs')
-        .select('timestamp')
+        .from('spy_messages')
+        .select('created_at')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
-        .order('timestamp', { ascending: false })
+        .order('created_at', { ascending: false })
         .limit(1);
-      fb.spy_chat = spyData?.[0]?.timestamp || null;
+      fb.spy_chat = spyData?.[0]?.created_at || null;
     }
 
     if (!hasViewer) {
@@ -146,6 +148,18 @@ export default function DataSyncPanel({ supabase, accountId, castName }: Props) 
         .order('last_seen_at', { ascending: false })
         .limit(1);
       fb.spy_viewer = viewerData?.[0]?.last_seen_at || null;
+    }
+
+    // Screenshot: check cast_screenshots for latest
+    {
+      const { data: ssData } = await supabase
+        .from('cast_screenshots')
+        .select('created_at')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      fb.screenshot = ssData?.[0]?.created_at || null;
     }
 
     setFallbackTimes(fb);
@@ -223,67 +237,23 @@ export default function DataSyncPanel({ supabase, accountId, castName }: Props) 
       setActionMessages((prev) => ({ ...prev, [t]: '' }));
     }
 
-    for (const syncType of types) {
-      try {
-        if (syncType === 'coin_sync') {
-          // Trigger coin sync via backend API
-          const res = await fetch('/api/sync/trigger', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              account_id: accountId,
-              cast_name: castName,
-              sync_type: 'coin_sync',
-            }),
-          });
+    const GUIDANCE: Record<string, string> = {
+      coin_sync: 'Chrome拡張のEarningsページでコイン同期を実行してください',
+      spy_chat: 'Collectorが自動収集中。Chrome拡張でSPY監視も可能です',
+      spy_viewer: 'Collectorが自動収集中。配信中のみ視聴者リストを取得します',
+    };
 
-          if (res.ok) {
-            const data = await res.json();
-            setActionStatus((prev) => ({ ...prev, [syncType]: 'done' }));
-            setActionMessages((prev) => ({
-              ...prev,
-              [syncType]: data.message || `${data.synced || 0}件同期完了`,
-            }));
-          } else {
-            // API route may not exist — fallback: update sync_health to trigger re-check
-            await supabase.rpc('upsert_sync_health', {
-              p_account_id: accountId,
-              p_cast_name: castName,
-              p_sync_type: syncType,
-              p_status: 'ok',
-            });
-            setActionStatus((prev) => ({ ...prev, [syncType]: 'done' }));
-            setActionMessages((prev) => ({
-              ...prev,
-              [syncType]: 'Chrome拡張のEarningsページでコイン同期を実行してください',
-            }));
-          }
-        } else {
-          // SPY types: just update sync_health status (actual data comes from Chrome extension)
-          await supabase.rpc('upsert_sync_health', {
-            p_account_id: accountId,
-            p_cast_name: castName,
-            p_sync_type: syncType,
-            p_status: 'ok',
-          });
-          setActionStatus((prev) => ({ ...prev, [syncType]: 'done' }));
-          setActionMessages((prev) => ({
-            ...prev,
-            [syncType]: 'ステータスを更新しました。Chrome拡張でSPY監視を開始してください',
-          }));
-        }
-      } catch (err) {
-        setActionStatus((prev) => ({ ...prev, [syncType]: 'error' }));
-        setActionMessages((prev) => ({
-          ...prev,
-          [syncType]: err instanceof Error ? err.message : '同期に失敗しました',
-        }));
-      }
+    for (const syncType of types) {
+      setActionStatus((prev) => ({ ...prev, [syncType]: 'done' }));
+      setActionMessages((prev) => ({
+        ...prev,
+        [syncType]: GUIDANCE[syncType] || '同期はバックグラウンドで実行されます',
+      }));
     }
 
-    // Refresh after all actions
-    setTimeout(() => fetchSyncHealth(), 1500);
-  }, [accountId, castName, supabase, fetchSyncHealth]);
+    // Refresh to show latest data
+    setTimeout(() => fetchSyncHealth(), 500);
+  }, [fetchSyncHealth]);
 
   // ============================================================
   // Render
@@ -447,7 +417,7 @@ export default function DataSyncPanel({ supabase, accountId, castName }: Props) 
               🔄 全データを一括同期
             </button>
             <p className="text-[9px] mt-1 text-center" style={{ color: 'var(--text-muted)' }}>
-              コイン同期はChrome拡張のEarningsページで実行。SPYはChrome拡張でSPY監視を開始。
+              コイン同期はChrome拡張で実行。SPYチャット/視聴者はCollectorが自動収集中。
             </p>
           </div>
         )}
