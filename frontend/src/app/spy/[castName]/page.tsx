@@ -366,6 +366,7 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
     peak_viewers: number; title: string | null; broadcast_title: string | null;
     tip_count: number;
     ticket_estimated_revenue: number; ticket_show_count: number;
+    show_estimated_revenue: number; show_transitions: { from: string; to: string; at: string; viewerCount: number }[];
   }[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -396,7 +397,7 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
         return;
       }
 
-      // 2. chat_logsからセッション別TIP件数・ユニークユーザー数・チケットショー検出
+      // 2. chat_logsからセッション別TIP件数・チケットショー検出
       const sessionIds = sessionRows.map(s => s.session_id);
       const { data: msgs } = await supabase
         .from('chat_logs')
@@ -405,6 +406,15 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
         .eq('cast_name', castName)
         .in('session_id', sessionIds)
         .limit(50000);
+
+      // 2b. spy_messagesからステータス遷移イベントを取得（売上推定用）
+      const { data: sysMsgs } = await supabase
+        .from('spy_messages')
+        .select('session_id, message, metadata')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .eq('msg_type', 'system')
+        .in('session_id', sessionIds);
 
       // 3. Client-side集計
       const aggMap = new Map<string, { tip_count: number; tipMsgs: { tokens: number; message_time: string; user_name: string }[] }>();
@@ -422,18 +432,74 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
         }
       }
 
-      // 4. マージ（チケットショー推定売上を含む）
+      // 3b. ステータス遷移データを集計（非公開ショーの売上推定）
+      type TransitionInfo = { from: string; to: string; at: string; viewerCount: number };
+      const transMap = new Map<string, { transitions: TransitionInfo[]; prices: Record<string, number> | null }>();
+      for (const m of (sysMsgs || [])) {
+        if (!m.session_id || !m.metadata) continue;
+        const meta = m.metadata as Record<string, unknown>;
+        // 配信終了メッセージからshowTransitionsを取得
+        if (meta.showTransitions && Array.isArray(meta.showTransitions)) {
+          transMap.set(m.session_id, {
+            transitions: meta.showTransitions as TransitionInfo[],
+            prices: (meta.prices as Record<string, number>) || null,
+          });
+        }
+        // 個別遷移メッセージからも取得
+        if (meta.event === 'status_transition') {
+          if (!transMap.has(m.session_id)) {
+            transMap.set(m.session_id, { transitions: [], prices: (meta.prices as Record<string, number>) || null });
+          }
+          const entry = transMap.get(m.session_id)!;
+          entry.transitions.push({
+            from: String(meta.from || ''),
+            to: String(meta.to || ''),
+            at: String((meta as Record<string, unknown>).at || m.message || ''),
+            viewerCount: Number(meta.viewerCount || 0),
+          });
+          if (meta.prices) entry.prices = meta.prices as Record<string, number>;
+        }
+      }
+
+      // 4. マージ（チケットショー + 非公開ショー推定売上を含む）
       const merged = sessionRows.map(s => {
         const agg = aggMap.get(s.session_id);
-        // チケットショー検出
+        // チケットショー検出（既存ロジック）
         const shows = agg?.tipMsgs?.length ? detectTicketShows(agg.tipMsgs) : [];
         const ticketEstimated = shows.reduce((sum, sh) => sum + sh.ticket_revenue, 0);
+
+        // ステータス遷移ベースの推定（新ロジック）
+        const transData = transMap.get(s.session_id);
+        const transitions = transData?.transitions || [];
+        const prices = transData?.prices || {};
+        let showEstimated = 0;
+
+        // 各遷移ペア（from→to→next）から非公開ショーの所要時間を推定
+        for (let i = 0; i < transitions.length; i++) {
+          const t = transitions[i];
+          const nextAt = transitions[i + 1]?.at || s.ended_at;
+          const durationMin = nextAt
+            ? Math.max(1, Math.round((new Date(nextAt).getTime() - new Date(t.at).getTime()) / 60000))
+            : 5; // デフォルト5分
+
+          if (t.to === 'private' && prices.privatePrice) {
+            showEstimated += prices.privatePrice * durationMin;
+          } else if (t.to === 'groupShow' && prices.groupShowPrice) {
+            showEstimated += prices.groupShowPrice * Math.max(1, t.viewerCount) * durationMin;
+          } else if (t.to === 'p2p' && prices.cam2camPrice) {
+            showEstimated += prices.cam2camPrice * durationMin;
+          }
+          // ticketShowはチップ検出で既にカバー済み（重複回避）
+        }
+
         return {
           ...s,
           total_tokens: s.total_tokens || 0,
           tip_count: agg?.tip_count || 0,
           ticket_estimated_revenue: ticketEstimated,
           ticket_show_count: shows.length,
+          show_estimated_revenue: showEstimated,
+          show_transitions: transitions,
         };
       });
 
@@ -470,7 +536,9 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                 const durationMin = Math.round((end.getTime() - start.getTime()) / 60000);
                 const chatCoins = s.total_tokens;
                 const ticketRev = s.ticket_estimated_revenue;
-                const totalCoins = chatCoins + ticketRev;
+                const showRev = s.show_estimated_revenue;
+                const totalCoins = chatCoins + ticketRev + showRev;
+                const hasBreakdown = ticketRev > 0 || showRev > 0;
                 return (
                   <tr key={s.session_id} className="border-b hover:bg-white/[0.02] transition-colors" style={{ borderColor: 'rgba(56,189,248,0.05)' }}>
                     <td className="py-2.5 px-2 font-medium">
@@ -483,17 +551,30 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                     </td>
                     <td className="py-2.5 px-2 max-w-[200px] truncate" style={{ color: s.broadcast_title ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
                       {s.broadcast_title || '-'}
+                      {s.show_transitions.length > 0 && (
+                        <div className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                          {s.show_transitions.map(t => t.to).filter(t => t !== 'public').map((t, i) => (
+                            <span key={i} className="inline-block mr-1 px-1 rounded" style={{
+                              background: t === 'ticketShow' ? 'rgba(167,139,250,0.15)' :
+                                t === 'groupShow' ? 'rgba(34,197,94,0.15)' :
+                                t === 'private' ? 'rgba(244,63,94,0.15)' : 'rgba(148,163,184,0.1)',
+                              color: t === 'ticketShow' ? '#a78bfa' :
+                                t === 'groupShow' ? '#22c55e' :
+                                t === 'private' ? '#f43f5e' : 'var(--text-muted)',
+                            }}>{t}</span>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="py-2.5 px-2 text-right tabular-nums">{(s.total_messages || 0).toLocaleString()}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums" style={{ color: 'var(--accent-primary)' }}>{s.tip_count}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums font-semibold" style={{ color: 'var(--accent-amber)' }}>
                       {formatTokens(totalCoins)}{totalCoins > 0 && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(totalCoins)})</span>}
-                      {ticketRev > 0 && (
+                      {hasBreakdown && (
                         <div className="text-[9px] font-normal mt-0.5" style={{ color: 'var(--text-muted)' }}>
                           <span style={{ color: 'var(--accent-primary)' }}>チップ {formatTokens(chatCoins)}</span>
-                          {' + '}
-                          <span style={{ color: '#a78bfa' }}>チケット {formatTokens(ticketRev)}</span>
-                          <span> ({s.ticket_show_count}回)</span>
+                          {ticketRev > 0 && <>{' + '}<span style={{ color: '#a78bfa' }}>チケット {formatTokens(ticketRev)}</span></>}
+                          {showRev > 0 && <>{' + '}<span style={{ color: '#22c55e' }}>ショー推定 {formatTokens(showRev)}</span></>}
                         </div>
                       )}
                     </td>

@@ -30,6 +30,14 @@ import { generatePostSessionReport } from './reports/post-session-report.js';
 
 const log = createLogger('collector');
 
+interface ShowTransition {
+  from: string;
+  to: string;
+  at: string;
+  viewerCount: number;
+  pricing: import("./ws-client.js").BroadcastPrices | null;
+}
+
 interface CastState {
   target: CastTarget;
   status: CastStatus;
@@ -43,6 +51,12 @@ interface CastState {
   running: boolean;
   wsMessageCount: number;
   wsTipTotal: number;
+  /** Show pricing from latest REST API poll */
+  lastPricing: import('./ws-client.js').BroadcastPrices | null;
+  /** Intra-session status transitions */
+  showTransitions: ShowTransition[];
+  /** Accumulated estimated revenue from non-public shows */
+  estimatedShowRevenue: number;
 }
 
 const castStates = new Map<string, CastState>();
@@ -251,6 +265,9 @@ export function registerTarget(target: CastTarget): void {
     running: true,
     wsMessageCount: 0,
     wsTipTotal: 0,
+    lastPricing: null,
+    showTransitions: [],
+    estimatedShowRevenue: 0,
   });
 
   log.info(`Registered: ${target.castName} (${target.source})`);
@@ -349,8 +366,11 @@ async function pollStatus(state: CastState): Promise<void> {
     state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
     state.wsMessageCount = 0;
     state.wsTipTotal = 0;
+    state.lastPricing = result.prices;
+    state.showTransitions = [];
+    state.estimatedShowRevenue = 0;
 
-    log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId}, source=${target.source})${result.topic ? ` topic="${result.topic.substring(0, 60)}"` : ''}`);
+    log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId}, source=${target.source})${result.topic ? ` topic="${result.topic.substring(0, 60)}"` : ''}${result.prices ? ` ticket=${result.prices.ticketShowPrice} group=${result.prices.groupShowPrice} pvt=${result.prices.privatePrice}` : ''}`);
 
     // sessions テーブルにレコード作成（自社・他社共通）
     // 部分ユニーク制約で弾かれた場合、既存セッションIDを使う
@@ -370,7 +390,12 @@ async function pollStatus(state: CastState): Promise<void> {
       tokens: 0,
       is_vip: false,
       session_id: state.sessionId,
-      metadata: { source: 'collector', modelId: result.modelId, viewerCount: result.viewerCount },
+      metadata: {
+        source: 'collector',
+        modelId: result.modelId,
+        viewerCount: result.viewerCount,
+        prices: result.prices,
+      },
     });
     if (startMsg) enqueue('spy_messages', startMsg);
 
@@ -397,9 +422,60 @@ async function pollStatus(state: CastState): Promise<void> {
     }
   }
 
+  // ------ Intra-session status transition (e.g. public → ticketShow) ------
+  if (isOnline && wasOnline && prevStatus !== result.status && state.sessionId) {
+    // Store pricing from latest poll
+    if (result.prices) state.lastPricing = result.prices;
+
+    const transition: ShowTransition = {
+      from: prevStatus,
+      to: result.status,
+      at: new Date().toISOString(),
+      viewerCount: result.viewerCount,
+      pricing: state.lastPricing,
+    };
+    state.showTransitions.push(transition);
+
+    // Estimate revenue for show transitions
+    let estimateNote = '';
+    if (result.status === 'ticketShow' && state.lastPricing?.ticketShowPrice) {
+      estimateNote = ` (ticket=${state.lastPricing.ticketShowPrice}tk)`;
+    } else if (result.status === 'groupShow' && state.lastPricing?.groupShowPrice) {
+      estimateNote = ` (group=${state.lastPricing.groupShowPrice}tk/min, ${result.viewerCount}人)`;
+    } else if (result.status === 'private' && state.lastPricing?.privatePrice) {
+      estimateNote = ` (pvt=${state.lastPricing.privatePrice}tk/min)`;
+    }
+
+    log.info(`${target.castName}: STATUS ${prevStatus} -> ${result.status} (${result.viewerCount} viewers)${estimateNote}`);
+
+    const transMsg = normalizeMessage({
+      account_id: target.accountId,
+      cast_name: target.castName,
+      message_time: transition.at,
+      msg_type: 'system',
+      user_name: 'collector',
+      message: `ステータス遷移: ${prevStatus} -> ${result.status} (${result.viewerCount}人)${estimateNote}`,
+      tokens: 0,
+      is_vip: false,
+      session_id: state.sessionId,
+      metadata: {
+        source: 'collector',
+        event: 'status_transition',
+        from: prevStatus,
+        to: result.status,
+        viewerCount: result.viewerCount,
+        prices: state.lastPricing,
+      },
+    });
+    if (transMsg) enqueue('spy_messages', transMsg);
+  }
+
+  // Update pricing on every poll (prices may change mid-session)
+  if (result.prices) state.lastPricing = result.prices;
+
   // ------ OFFLINE transition ------
   if (!isOnline && wasOnline) {
-    log.info(`${target.castName}: OFFLINE (${state.wsMessageCount} msgs, ${state.wsTipTotal}tk captured)`);
+    log.info(`${target.castName}: OFFLINE (${state.wsMessageCount} msgs, ${state.wsTipTotal}tk captured, ${state.showTransitions.length} show transitions)`);
 
     const endMsg = normalizeMessage({
       account_id: target.accountId,
@@ -411,7 +487,12 @@ async function pollStatus(state: CastState): Promise<void> {
       tokens: 0,
       is_vip: false,
       session_id: state.sessionId,
-      metadata: { source: 'collector', lastViewerCount: state.viewerCount },
+      metadata: {
+        source: 'collector',
+        lastViewerCount: state.viewerCount,
+        showTransitions: state.showTransitions,
+        prices: state.lastPricing,
+      },
     });
     if (endMsg) enqueue('spy_messages', endMsg);
 
@@ -441,6 +522,9 @@ async function pollStatus(state: CastState): Promise<void> {
     state.wsClient = null;
     state.sessionId = null;
     state.sessionStartTime = null;
+    state.lastPricing = null;
+    state.showTransitions = [];
+    state.estimatedShowRevenue = 0;
   }
 
   // ------ First poll: if already online, resume or create session ------
@@ -448,6 +532,11 @@ async function pollStatus(state: CastState): Promise<void> {
     // 再起動時: 未閉鎖セッションがあれば引き継ぐ（分割防止）
     const { resumeExistingSession } = await import('./storage/supabase.js');
     const existing = await resumeExistingSession(target.accountId, target.castName);
+
+    // Initialize pricing and transitions for session
+    state.lastPricing = result.prices;
+    state.showTransitions = [];
+    state.estimatedShowRevenue = 0;
 
     if (existing) {
       state.sessionId = existing.session_id;
