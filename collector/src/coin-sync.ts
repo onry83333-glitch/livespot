@@ -661,7 +661,7 @@ export async function runCoinSync(): Promise<void> {
 
   // 5. pipeline_status 更新（実際の結果を反映）
   try {
-    await sb.from('pipeline_status').upsert(
+    const { error: pipeErr } = await sb.from('pipeline_status').upsert(
       {
         pipeline_name: 'CoinSync',
         status: 'auto',
@@ -676,8 +676,9 @@ export async function runCoinSync(): Promise<void> {
       },
       { onConflict: 'pipeline_name' },
     );
-  } catch {
-    log.debug('pipeline_status更新スキップ');
+    if (pipeErr) log.warn(`pipeline_status更新失敗: ${pipeErr.message}`);
+  } catch (err) {
+    log.warn(`pipeline_status更新エラー: ${err}`);
   }
 
   if (overallSuccess) {
@@ -965,29 +966,47 @@ async function syncCastCoins(
   // NOTE: synced_atではなくdateを使う（ignoreDuplicates=trueでsynced_atが更新されないため）
   const { data: lastTx } = await sb
     .from('coin_transactions')
-    .select('date')
+    .select('date, synced_at')
     .eq('account_id', accountId)
     .eq('cast_name', castName)
     .order('date', { ascending: false })
     .limit(1);
 
   const lastDate = lastTx?.[0]?.date;
-  // 差分: 最終トランザクションから1日バッファ引き
+  const lastSyncedAt = lastTx?.[0]?.synced_at;
+
+  // ギャップ検出: 前回同期から2時間以上経過していたら、バッファを拡張
+  const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2時間
+  let bufferMs = 24 * 60 * 60 * 1000; // デフォルト1日バッファ
+
+  if (lastSyncedAt) {
+    const sinceLast = Date.now() - new Date(lastSyncedAt).getTime();
+    if (sinceLast > GAP_THRESHOLD_MS) {
+      // ギャップ分 + 1日バッファ
+      bufferMs = sinceLast + 24 * 60 * 60 * 1000;
+      log.warn(
+        `[${castName}] 同期ギャップ検出: 前回同期から${Math.round(sinceLast / 3600000)}時間経過 → バッファ拡張 ${Math.round(bufferMs / 3600000)}時間`,
+      );
+    }
+  }
+
   const sinceDate = lastDate
-    ? new Date(new Date(lastDate).getTime() - 24 * 60 * 60 * 1000)
+    ? new Date(new Date(lastDate).getTime() - bufferMs)
     : null;
 
   log.info(
     `[${castName}] 差分同期開始 (since=${sinceDate?.toISOString() || 'フル同期'})`,
   );
 
-  // Earnings API呼び出し
+  // Earnings API呼び出し（offset-basedページネーション）
+  // NOTE: Stripchat APIは`page`パラメータを無視する。`offset`を使う必要がある。
   const allTx: Transaction[] = [];
-  let page = 1;
+  let offset = 0;
   let hitOldData = false;
+  const maxItems = MAX_PAGES * PAGE_SIZE;
 
-  while (page <= MAX_PAGES && !hitOldData) {
-    const url = `${EARNINGS_API}/${userId}/transactions?page=${page}&limit=${PAGE_SIZE}`;
+  while (offset < maxItems && !hitOldData) {
+    const url = `${EARNINGS_API}/${userId}/transactions?offset=${offset}&limit=${PAGE_SIZE}`;
 
     let resp: Response;
     try {
@@ -1000,7 +1019,7 @@ async function syncCastCoins(
         },
       });
     } catch (err) {
-      log.error(`[${castName}] API接続エラー page=${page}`, err);
+      log.error(`[${castName}] API接続エラー offset=${offset}`, err);
       break;
     }
 
@@ -1018,11 +1037,11 @@ async function syncCastCoins(
     if (resp.status === 429) {
       log.warn(`[${castName}] レート制限 — 10秒待機`);
       await sleep(10000);
-      continue; // 同じページをリトライ
+      continue; // 同じoffsetをリトライ
     }
 
     if (!resp.ok) {
-      log.error(`[${castName}] API ${resp.status} page=${page}`);
+      log.error(`[${castName}] API ${resp.status} offset=${offset}`);
       break;
     }
 
@@ -1030,7 +1049,7 @@ async function syncCastCoins(
     try {
       data = (await resp.json()) as typeof data;
     } catch {
-      log.error(`[${castName}] JSONパース失敗 page=${page}`);
+      log.error(`[${castName}] JSONパース失敗 offset=${offset}`);
       break;
     }
 
@@ -1048,7 +1067,7 @@ async function syncCastCoins(
     }
 
     if (items.length < PAGE_SIZE) break;
-    page++;
+    offset += PAGE_SIZE;
     await sleep(REQUEST_DELAY_MS);
   }
 
@@ -1100,6 +1119,6 @@ async function syncCastCoins(
     }
   }
 
-  log.info(`[${castName}] ${rows.length}件同期完了 (${page - 1}ページ取得)`);
+  log.info(`[${castName}] ${rows.length}件同期完了 (offset=${offset}まで取得)`);
   return 'ok';
 }

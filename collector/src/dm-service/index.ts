@@ -58,6 +58,7 @@ let running = true;
 let cycleCount = 0;
 let totalSent = 0;
 let totalErrors = 0;
+let lastPipelineUpdate = 0;
 
 // ============================================================
 // Logging
@@ -329,6 +330,29 @@ async function pollLoop(): Promise<void> {
       }
     } catch (err) {
       log('error', `ポーリングエラー: ${err}`);
+    }
+
+    // pipeline_status 更新（60秒ごと）
+    const now = Date.now();
+    if (now - lastPipelineUpdate > 60_000) {
+      lastPipelineUpdate = now;
+      try {
+        const { count: queueCount } = await sb
+          .from('dm_send_log')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'queued');
+        const { error: pipeErr } = await sb.from('pipeline_status').upsert({
+          pipeline_name: 'DmService',
+          status: 'auto',
+          source: 'dm_send_log',
+          destination: 'Stripchat DM API',
+          detail: `稼働中: 送信${totalSent} エラー${totalErrors} キュー${queueCount}件 test=${DM_TEST_MODE}`,
+          last_run_at: new Date().toISOString(),
+          last_success: true,
+          error_message: null,
+        }, { onConflict: 'pipeline_name' });
+        if (pipeErr) log('warn', `pipeline_status更新失敗: ${pipeErr.message}`);
+      } catch (err) { log('warn', `pipeline_status更新エラー: ${err}`); }
     }
 
     // 次のポーリングまで待機

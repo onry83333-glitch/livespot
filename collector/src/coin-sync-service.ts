@@ -601,7 +601,7 @@ async function runSync(): Promise<void> {
 async function updatePipelineStatus(success: boolean, failureReason: string): Promise<void> {
   try {
     const sb = getSupabase();
-    await sb.from('pipeline_status').upsert({
+    const { error: pipeErr } = await sb.from('pipeline_status').upsert({
       pipeline_name: 'CoinSync',
       status: 'auto',
       source: 'Stripchat Earnings API',
@@ -611,8 +611,9 @@ async function updatePipelineStatus(success: boolean, failureReason: string): Pr
       last_success: success,
       error_message: success ? null : failureReason,
     }, { onConflict: 'pipeline_name' });
-  } catch {
-    // ignore
+    if (pipeErr) log.warn(`pipeline_status更新失敗: ${pipeErr.message}`);
+  } catch (err) {
+    log.warn(`pipeline_status更新エラー: ${err}`);
   }
 }
 

@@ -159,6 +159,27 @@ export async function generateDailyBriefing(targetDate?: string): Promise<void> 
 
   // Telegram通知
   await sendTelegramNotification(metrics);
+
+  // pipeline_status 更新
+  try {
+    const { error: pipeErr } = await sb.from('pipeline_status').upsert({
+      pipeline_name: 'DailyBriefing',
+      status: 'auto',
+      source: 'cast_knowledge',
+      destination: 'cast_knowledge + Telegram',
+      detail: `${dateStr}: ${briefings.length}キャスト`,
+      last_run_at: new Date().toISOString(),
+      last_success: true,
+      error_message: null,
+    }, { onConflict: 'pipeline_name' });
+    if (pipeErr) {
+      log.warn(`pipeline_status更新失敗: ${pipeErr.message}`);
+    } else {
+      log.info('pipeline_status更新完了');
+    }
+  } catch (err) {
+    log.warn(`pipeline_status更新エラー: ${err}`);
+  }
 }
 
 // ============================================================

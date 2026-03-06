@@ -129,6 +129,8 @@ async function main() {
   });
 
   // daily-briefing: 日次ブリーフィング自動生成（毎朝09:00 JST = 00:00 UTC）
+  // TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID は .env から dotenv 経由で読み込む
+  // pm2 env に空文字を設定すると .env の値がオーバーライドされるため、ここでは設定しない
   apps.push({
     name: 'daily-briefing',
     script: 'src/reports/daily-briefing.ts',
@@ -137,8 +139,6 @@ async function main() {
     cwd,
     env: {
       NODE_ENV: 'production',
-      TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || '',
-      TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID || '8050153948',
     },
     autorestart: false,
     cron_restart: '0 0 * * *',  // 00:00 UTC = 09:00 JST
@@ -164,7 +164,7 @@ async function main() {
         CAST_SOURCE: 'registered_casts',
         CAST_DISPLAY: cast.display_name || '',
         MODEL_ID: cast.stripchat_model_id || '',
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+        ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}),
       },
       autorestart: true,
       watch: false,
