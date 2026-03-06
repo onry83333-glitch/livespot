@@ -1825,7 +1825,25 @@ async function getLoggedInCastFromCookies() {
     }
   }
 
-  // userId が取れない場合
+  // userId が取れない場合: AMP cookieフォールバック
+  if (userIdValues.size === 0) {
+    for (const c of allCookies) {
+      if (!c.name.startsWith('AMP_')) continue;
+      try {
+        let decoded = atob(c.value);
+        if (decoded.includes('%7B') || decoded.includes('%22')) {
+          decoded = decodeURIComponent(decoded);
+        }
+        const ampJson = JSON.parse(decoded);
+        if (ampJson.userId) {
+          userIdValues.add(String(ampJson.userId));
+          console.log('[LS-BG] getLoggedInCast: AMP cookieからuserId取得:', ampJson.userId);
+          break;
+        }
+      } catch { /* ignore non-JSON AMP cookies */ }
+    }
+  }
+
   if (userIdValues.size === 0) {
     return { userId: null, castName: null };
   }
@@ -2949,17 +2967,26 @@ async function exportSessionCookie() {
   }
 
   try {
-    // 1. Stripchat sessionId クッキー取得
-    const sessionCookie = await chrome.cookies.get({
+    // 1. Stripchat sessionId クッキー取得（chrome.cookies.get → getAll フォールバック）
+    let sessionCookie = await chrome.cookies.get({
       url: 'https://stripchat.com',
       name: 'stripchat_com_sessionId'
     });
+    // domain違いで取得できない場合、getAllからフォールバック
+    if (!sessionCookie || !sessionCookie.value) {
+      const fallbackCookies = await chrome.cookies.getAll({ domain: '.stripchat.com' });
+      const fbSession = fallbackCookies.find(c => c.name === 'stripchat_com_sessionId');
+      if (fbSession) {
+        sessionCookie = fbSession;
+        console.log('[LS-BG] SessionExport: getAll fallback でsessionId取得');
+      }
+    }
     if (!sessionCookie || !sessionCookie.value) {
       console.warn('[LS-BG] SessionExport: sessionId cookie not found');
       return;
     }
 
-    // 2. userId クッキー取得（Cookie → API /initial-dynamic フォールバック）
+    // 2. userId クッキー取得（Cookie → cookiesJson → AMP cookie → API フォールバック）
     const userIdCookie = await chrome.cookies.get({
       url: 'https://stripchat.com',
       name: 'stripchat_com_userId'
@@ -2971,6 +2998,31 @@ async function exportSessionCookie() {
     const cookiesJson = {};
     for (const c of allCookies) {
       cookiesJson[c.name] = c.value;
+    }
+
+    // 3.1. cookiesJsonからuserIdを再取得（domain違いで chrome.cookies.get が取れない場合）
+    if (!stripchatUserId && cookiesJson['stripchat_com_userId']) {
+      stripchatUserId = cookiesJson['stripchat_com_userId'];
+      console.log('[LS-BG] SessionExport: cookiesJsonからuserId取得:', stripchatUserId);
+    }
+
+    // 3.2. AMP cookie からuserIdを抽出（Stripchat仕様変更フォールバック）
+    if (!stripchatUserId) {
+      for (const ampKey of Object.keys(cookiesJson)) {
+        if (!ampKey.startsWith('AMP_')) continue;
+        try {
+          let decoded = atob(cookiesJson[ampKey]);
+          if (decoded.includes('%7B') || decoded.includes('%22')) {
+            decoded = decodeURIComponent(decoded);
+          }
+          const ampJson = JSON.parse(decoded);
+          if (ampJson.userId) {
+            stripchatUserId = String(ampJson.userId);
+            console.log('[LS-BG] SessionExport: AMP cookieからuserId取得:', stripchatUserId);
+            break;
+          }
+        } catch { /* ignore non-JSON AMP cookies */ }
+      }
     }
 
     // 3.5. userId / username を API で取得（キャスト別Cookie保存に必要）
@@ -2991,12 +3043,17 @@ async function exportSessionCookie() {
           if (dynUser) {
             if (dynUser.id && dynUser.id > 0) {
               stripchatUserId = stripchatUserId || String(dynUser.id);
+              console.log('[LS-BG] SessionExport: /initial-dynamic userId:', dynUser.id);
             }
             if (dynUser.username) {
               stripchatUsername = dynUser.username;
-              console.log('[LS-BG] SessionExport: username取得:', stripchatUsername);
+              console.log('[LS-BG] SessionExport: /initial-dynamic username:', stripchatUsername);
             }
+          } else {
+            console.warn('[LS-BG] SessionExport: /initial-dynamic user=null (isLogged=' + cookiesJson['isLogged'] + ')');
           }
+        } else {
+          console.warn('[LS-BG] SessionExport: /initial-dynamic HTTP', dynRes.status);
         }
       } catch (e) {
         console.warn('[LS-BG] SessionExport: /initial-dynamic 失敗:', e.message);
