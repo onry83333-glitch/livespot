@@ -470,7 +470,6 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>MSG</th>
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>TIP</th>
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>COINS</th>
-                <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>TICKET</th>
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>USERS</th>
               </tr>
             </thead>
@@ -479,8 +478,9 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                 const start = new Date(s.started_at);
                 const end = new Date(s.ended_at);
                 const durationMin = Math.round((end.getTime() - start.getTime()) / 60000);
-                const coins = s.total_tokens;
+                const chatCoins = s.total_tokens;
                 const ticketRev = s.ticket_estimated_revenue;
+                const totalCoins = chatCoins + ticketRev;
                 return (
                   <tr key={s.session_id} className="border-b hover:bg-white/[0.02] transition-colors" style={{ borderColor: 'rgba(56,189,248,0.05)' }}>
                     <td className="py-2.5 px-2 font-medium">
@@ -494,17 +494,15 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                     <td className="py-2.5 px-2 text-right tabular-nums">{(s.total_messages || 0).toLocaleString()}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums" style={{ color: 'var(--accent-primary)' }}>{s.tip_count}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums font-semibold" style={{ color: 'var(--accent-amber)' }}>
-                      {formatTokens(coins)}{coins > 0 && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(coins)})</span>}
-                    </td>
-                    <td className="py-2.5 px-2 text-right tabular-nums" style={{ color: ticketRev > 0 ? '#a78bfa' : 'var(--text-muted)' }}>
-                      {ticketRev > 0 ? (
-                        <span className="font-semibold">
-                          {formatTokens(ticketRev)}
-                          <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>
-                            ({s.ticket_show_count}回)
-                          </span>
-                        </span>
-                      ) : '-'}
+                      {formatTokens(totalCoins)}{totalCoins > 0 && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(totalCoins)})</span>}
+                      {ticketRev > 0 && (
+                        <div className="text-[9px] font-normal mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                          <span style={{ color: 'var(--accent-primary)' }}>チップ {formatTokens(chatCoins)}</span>
+                          {' + '}
+                          <span style={{ color: '#a78bfa' }}>チケット {formatTokens(ticketRev)}</span>
+                          <span> ({s.ticket_show_count}回)</span>
+                        </div>
+                      )}
                     </td>
                     <td className="py-2.5 px-2 text-right tabular-nums">{s.unique_users}</td>
                   </tr>
