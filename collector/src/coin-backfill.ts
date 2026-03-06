@@ -274,20 +274,16 @@ async function main() {
 
   // 8. refresh_paying_users + refresh_segments
   console.log('\nMV + セグメント更新中...');
-  try {
-    await sb.rpc('refresh_paying_users');
-    console.log('refresh_paying_users 完了');
-  } catch (e) {
-    console.error('refresh_paying_users エラー:', e);
+  {
+    const { error: rpErr } = await sb.rpc('refresh_paying_users');
+    if (rpErr) console.error('refresh_paying_users エラー:', rpErr.message);
+    else console.log('refresh_paying_users 完了');
   }
 
   for (const castName of castNames) {
-    try {
-      await sb.rpc('refresh_segments', { p_account_id: accountId, p_cast_name: castName });
-      console.log(`refresh_segments(${castName}) 完了`);
-    } catch (e) {
-      console.error(`refresh_segments(${castName}) エラー:`, e);
-    }
+    const { data: segCount, error: segErr } = await sb.rpc('refresh_segments', { p_account_id: accountId, p_cast_name: castName });
+    if (segErr) console.error(`refresh_segments(${castName}) エラー:`, segErr.message);
+    else console.log(`refresh_segments(${castName}) 完了: ${segCount}件更新`);
   }
 
   // 9. 復旧確認

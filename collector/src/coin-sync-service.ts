@@ -107,36 +107,32 @@ async function getSessionFromDB(
     .eq('account_id', accountId)
     .eq('is_valid', true);
 
-  if (castName) {
-    // キャスト専用セッションを優先、なければ共通セッション
-    query = query.or(`cast_name.eq.${castName},cast_name.is.null`);
-  }
+  // 3段フォールバック: キャスト専用 → 共通(null) → 同一アカウント内の任意セッション
+  // Stripchatスタジオアカウントは認証共有のため、他キャストのCookieでもAPI呼出可能
+  const { data: allSessions } = await sb
+    .from('stripchat_sessions')
+    .select('account_id, cookies_json, stripchat_user_id, is_valid, cast_name')
+    .eq('account_id', accountId)
+    .eq('is_valid', true)
+    .order('cast_name', { ascending: false, nullsFirst: false })
+    .limit(10);
 
-  const { data, error } = await query.order('cast_name', { ascending: false, nullsFirst: false }).limit(1).single();
-
-  if (error || !data) {
-    // single()はmultiple rows errorを出す場合があるので、maybeSingleパターンも試す
-    if (error?.code === 'PGRST116') {
-      // 複数行ある場合: cast_name一致を優先取得
-      const { data: rows } = await sb
-        .from('stripchat_sessions')
-        .select('account_id, cookies_json, stripchat_user_id, is_valid, cast_name')
-        .eq('account_id', accountId)
-        .eq('is_valid', true)
-        .order('cast_name', { ascending: false, nullsFirst: false })
-        .limit(5);
-      const match = rows?.find((r: Record<string, unknown>) => r.cast_name === castName) || rows?.[0];
-      if (!match) {
-        log.warn(`[${accountId}] stripchat_sessions: 有効なセッションなし`);
-        return null;
-      }
-      return buildAuthResult(accountId, match as StripchatSession);
-    }
+  if (!allSessions || allSessions.length === 0) {
     log.warn(`[${accountId}] stripchat_sessions: 有効なセッションなし`);
     return null;
   }
 
-  return buildAuthResult(accountId, data as StripchatSession);
+  // 優先度: 1. cast_name完全一致 → 2. cast_name=null(共通) → 3. 任意の有効セッション
+  const match =
+    (castName && allSessions.find((r) => r.cast_name === castName)) ||
+    allSessions.find((r) => r.cast_name === null) ||
+    allSessions[0];
+
+  if (match.cast_name !== castName && match.cast_name !== null) {
+    log.info(`[${castName || 'unknown'}] 専用Cookie未登録 → ${match.cast_name}のCookieをフォールバック使用`);
+  }
+
+  return buildAuthResult(accountId, match as StripchatSession);
 }
 
 function buildAuthResult(
@@ -498,19 +494,22 @@ async function syncAccount(
 
     // 各キャストのmodel_idを使ってAPI呼び出し
     const castUserId = cast.stripchat_model_id || cast.stripchat_user_id || auth.userId;
-    log.info(`[${cast.cast_name}] 差分同期 (userId=${castUserId}, since=${sinceDate?.toISOString() || 'フル同期'})`);
+    const authSource = auth.session.cast_name !== cast.cast_name ? ` auth=${auth.session.cast_name}` : '';
+    log.info(`[${cast.cast_name}] 差分同期 (userId=${castUserId}${authSource}, since=${sinceDate?.toISOString() || 'フル同期'})`);
 
     const { transactions, authFailed: txAuthFailed } = await fetchTransactions(
       String(castUserId), auth.cookieHeader, sinceDate,
     );
 
     if (txAuthFailed) {
-      log.warn(`[${cast.cast_name}] Cookie期限切れ — is_valid=falseに更新`);
+      // フォールバック使用時は実際のCookie所有者のセッションを無効化
+      const invalidCast = auth.session.cast_name || cast.cast_name;
+      log.warn(`[${cast.cast_name}] Cookie期限切れ — ${invalidCast}のセッションをis_valid=falseに更新`);
       await sb
         .from('stripchat_sessions')
         .update({ is_valid: false, updated_at: new Date().toISOString() })
         .eq('account_id', accountId)
-        .eq('cast_name', cast.cast_name);
+        .eq('cast_name', invalidCast);
       continue;
     }
 
@@ -550,18 +549,16 @@ async function syncAccount(
   }
 
   // 4. MV + セグメント更新
-  try {
-    await sb.rpc('refresh_paying_users');
-    log.info(`[${accountId}] refresh_paying_users 完了`);
-  } catch {
-    log.debug('refresh_paying_users スキップ');
+  {
+    const { error: rpErr } = await sb.rpc('refresh_paying_users');
+    if (rpErr) log.warn(`[${accountId}] refresh_paying_users エラー: ${rpErr.message}`);
+    else log.info(`[${accountId}] refresh_paying_users 完了`);
   }
 
-  try {
-    await sb.rpc('refresh_segments', { p_account_id: accountId });
-    log.info(`[${accountId}] refresh_segments 完了`);
-  } catch {
-    log.debug('refresh_segments スキップ');
+  {
+    const { data: segCount, error: segErr } = await sb.rpc('refresh_segments', { p_account_id: accountId });
+    if (segErr) log.warn(`[${accountId}] refresh_segments エラー: ${segErr.message}`);
+    else log.info(`[${accountId}] refresh_segments 完了: ${segCount}件更新`);
   }
 
   log.info(`[${accountId}] 同期完了: ${totalTx}件TX + ${users.length}人ユーザー`);

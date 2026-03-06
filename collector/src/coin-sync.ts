@@ -643,18 +643,16 @@ export async function runCoinSync(): Promise<void> {
 
     // MV + セグメント更新（成功時のみ実行）
     if (overallSuccess) {
-      try {
-        await sb.rpc('refresh_paying_users');
-        log.info(`[${accountId}] refresh_paying_users 完了`);
-      } catch {
-        log.debug('refresh_paying_users スキップ');
+      {
+        const { error: rpErr } = await sb.rpc('refresh_paying_users');
+        if (rpErr) log.warn(`[${accountId}] refresh_paying_users エラー: ${rpErr.message}`);
+        else log.info(`[${accountId}] refresh_paying_users 完了`);
       }
 
-      try {
-        await sb.rpc('refresh_segments', { p_account_id: accountId });
-        log.info(`[${accountId}] refresh_segments 完了`);
-      } catch {
-        log.debug('refresh_segments スキップ');
+      {
+        const { data: segCount, error: segErr } = await sb.rpc('refresh_segments', { p_account_id: accountId });
+        if (segErr) log.warn(`[${accountId}] refresh_segments エラー: ${segErr.message}`);
+        else log.info(`[${accountId}] refresh_segments 完了: ${segCount}件更新`);
       }
     }
   }
