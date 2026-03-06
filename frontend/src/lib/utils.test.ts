@@ -74,18 +74,18 @@ describe('tokensToJPY', () => {
 // formatCoinDual
 // ============================================================
 describe('formatCoinDual', () => {
-  it('デュアル表示: ¥yen (N tk)', () => {
+  it('デュアル表示: N tk (¥yen) — tk主表示', () => {
     const result = formatCoinDual(100);
-    expect(result).toBe('\u00A5770 (100 tk)');
+    expect(result).toBe('100 tk (\u00A5770)');
   });
 
   it('0 トークン', () => {
-    expect(formatCoinDual(0)).toBe('\u00A50 (0 tk)');
+    expect(formatCoinDual(0)).toBe('0 tk (\u00A50)');
   });
 
   it('大きな値', () => {
     const result = formatCoinDual(10000);
-    expect(result).toBe('\u00A577,000 (10,000 tk)');
+    expect(result).toBe('10,000 tk (\u00A577,000)');
   });
 });
 

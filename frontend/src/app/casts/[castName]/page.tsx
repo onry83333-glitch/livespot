@@ -2797,7 +2797,7 @@ function CastDetailInner() {
                                     {fan && (
                                       <span className="text-[9px] px-1.5 py-0.5 rounded font-bold tabular-nums"
                                         style={{ background: 'rgba(245,158,11,0.1)', color: 'var(--accent-amber)' }}>
-                                        {fan.total_tokens.toLocaleString()}tk
+                                        {formatTokens(fan.total_tokens)}
                                       </span>
                                     )}
                                     <span className="text-[9px] px-1.5 py-0.5 rounded"
@@ -3253,7 +3253,7 @@ function CastDetailInner() {
                                     <span className={`w-3 h-3 rounded-sm border ${checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'}`} />
                                     <span className="font-medium">{f.user_name}</span>
                                   </div>
-                                  <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{f.total_tokens.toLocaleString()} tk</span>
+                                  <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{formatTokens(f.total_tokens)}</span>
                                 </div>
                               </button>
                             );
@@ -3896,7 +3896,7 @@ function CastDetailInner() {
                           </div>
                           <div className="glass-panel p-3 rounded-xl text-center">
                             <p className="text-lg font-bold" style={{ color: 'var(--accent-green)' }}>
-                              {segments.reduce((s, seg) => s + seg.total_coins, 0).toLocaleString()} tk
+                              {formatTokens(segments.reduce((s, seg) => s + seg.total_coins, 0))}
                             </p>
                             <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>総コイン</p>
                           </div>
@@ -3925,7 +3925,7 @@ function CastDetailInner() {
                                       </span>
                                       <div className="flex items-center gap-2 flex-shrink-0">
                                         <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                          {(t.tokens || 0).toLocaleString()} tk
+                                          {formatTokens(t.tokens || 0)}
                                         </span>
                                         <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                                           {t.message_time ? new Date(t.message_time).toLocaleDateString('ja-JP') : '--'}
@@ -3950,7 +3950,7 @@ function CastDetailInner() {
                                       </span>
                                       <div className="flex items-center gap-2 flex-shrink-0">
                                         <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                          {(t.tokens || 0).toLocaleString()} tk
+                                          {formatTokens(t.tokens || 0)}
                                         </span>
                                         <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                                           {t.date ? new Date(t.date).toLocaleDateString('ja-JP') : '--'}
@@ -4075,13 +4075,13 @@ function CastDetailInner() {
                                   <div className="flex items-center gap-4 text-[11px]">
                                     <span className="tabular-nums">{seg.user_count.toLocaleString()}名</span>
                                     <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
-                                      {seg.total_coins.toLocaleString()} tk
+                                      {formatTokens(seg.total_coins)}
                                     </span>
                                     <span className="tabular-nums" style={{ color: 'var(--text-muted)' }}>
                                       ({coinPct}%)
                                     </span>
                                     <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                      平均 {Math.round(seg.avg_coins).toLocaleString()} tk
+                                      平均 {formatTokens(Math.round(seg.avg_coins))}
                                     </span>
                                   </div>
                                 </button>
@@ -4116,7 +4116,7 @@ function CastDetailInner() {
                                           </div>
                                           <div className="flex items-center gap-3 flex-shrink-0">
                                             <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
-                                              {u.total_coins.toLocaleString()} tk
+                                              {formatTokens(u.total_coins)}
                                             </span>
                                             <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                                               {u.last_payment_date ? new Date(u.last_payment_date).toLocaleDateString('ja-JP') : '--'}
@@ -4223,7 +4223,7 @@ function CastDetailInner() {
                                       {u.last_tip ? timeAgo(u.last_tip) : '--'}
                                     </td>
                                     <td className="text-right px-3 py-2 tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                      {u.total_tokens.toLocaleString()} tk
+                                      {formatTokens(u.total_tokens)}
                                     </td>
                                     <td className="text-right px-3 py-2" style={{ color: 'var(--text-muted)' }}>
                                       {timeAgo(u.last_seen)}
@@ -4352,7 +4352,7 @@ function CastDetailInner() {
                               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px] mb-2">
                                 <div>
                                   <span style={{ color: 'var(--text-muted)' }}>累計: </span>
-                                  <span className="font-bold" style={{ color: 'var(--accent-amber)' }}>{r.total_coins.toLocaleString()} tk</span>
+                                  <span className="font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(r.total_coins)}</span>
                                   <span style={{ color: 'var(--text-muted)' }}> ({r.tx_count}回)</span>
                                 </div>
                                 <div>
@@ -4395,7 +4395,7 @@ function CastDetailInner() {
                                             {new Date(tx.date).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                           </span>
                                           <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                            {tx.amount.toLocaleString()} tk
+                                            {formatTokens(tx.amount)}
                                           </span>
                                           <span className="text-[9px]" style={{ color: 'var(--text-secondary)' }}>
                                             {tx.type === 'ticketShow' ? 'チケットチャット' :
@@ -4563,7 +4563,7 @@ function CastDetailInner() {
                                     </span>
                                     <div className="flex items-center gap-2 flex-shrink-0">
                                       <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
-                                        {u.total_coins.toLocaleString()} tk
+                                        {formatTokens(u.total_coins)}
                                       </span>
                                       <span style={{ color: 'var(--text-muted)' }}>{u.tx_count}回</span>
                                     </div>
@@ -4957,7 +4957,7 @@ function CastDetailInner() {
                               </div>
                               <div className="flex-shrink-0 text-right">
                                 <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                  {u.total_coins.toLocaleString()} tk
+                                  {formatTokens(u.total_coins)}
                                 </span>
                                 <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                                   ({tokensToJPY(u.total_coins, coinRate)})
@@ -5108,7 +5108,7 @@ function CastDetailInner() {
                                 </div>
                                 <div className="flex-shrink-0 ml-2 text-right">
                                   <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                    {tx.tokens.toLocaleString()} tk
+                                    {formatTokens(tx.tokens)}
                                   </span>
                                   <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgo(tx.date)}</p>
                                 </div>
@@ -5333,7 +5333,7 @@ function CastDetailInner() {
                               <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>グロス売上</p>
                               <p className="text-lg font-bold font-mono">{fmtUsd(rsTotals.gross)}</p>
                               <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                                {rsTotals.tokens.toLocaleString()} tk × ${revenueShare[0]?.setting_token_to_usd ?? 0.05}
+                                {formatTokens(rsTotals.tokens)} × ${revenueShare[0]?.setting_token_to_usd ?? 0.05}
                               </p>
                             </div>
                             <div className="glass-panel p-3 rounded-xl text-center">

@@ -181,7 +181,7 @@ export default function ReportsPage() {
                   <>
                     <span>配信: {fmtDateShort(sess.started_at)}</span>
                     <span>{sess.unique_users}人</span>
-                    <span className="text-amber-400">{sess.total_coins.toLocaleString()}c</span>
+                    <span className="text-amber-400">{sess.total_coins.toLocaleString()} tk</span>
                   </>
                 )}
                 <span>Tokens: {report.tokens_used.toLocaleString()}</span>

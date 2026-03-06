@@ -799,7 +799,7 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
                           color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)' }}>{i + 1}</span>
                         <Link href={`/spy/users/${encodeURIComponent(t.name)}`} className="truncate font-medium hover:text-sky-400 transition-colors">{t.name}</Link>
                       </div>
-                      <span className="flex-shrink-0 font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{t.tokens.toLocaleString()} tk</span>
+                      <span className="flex-shrink-0 font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{formatTokens(t.tokens)}</span>
                     </div>
                   ))}
                 </div>

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
-import { timeAgo } from '@/lib/utils';
+import { timeAgo, formatTokens, tokensToJPY, COIN_RATE } from '@/lib/utils';
 
 // ---------- 型定義 ----------
 interface EnterAlert {
@@ -271,10 +271,8 @@ export default function AlertsPage() {
 
         <div className="glass-card p-5">
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>VIP累計コイン</p>
-          <div className="flex items-baseline gap-1 mt-1">
-            <p className="text-3xl font-bold text-emerald-400">{todayVipCoins.toLocaleString()}</p>
-            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>c</span>
-          </div>
+          <p className="text-2xl font-bold text-emerald-400 mt-1">{formatTokens(todayVipCoins)}</p>
+          <p className="text-[9px] mt-0.5 tabular-nums" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(todayVipCoins, COIN_RATE)})</p>
         </div>
 
         <div className="glass-card p-5">
@@ -283,7 +281,7 @@ export default function AlertsPage() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <p className="text-xs font-medium">CRITICAL閾値</p>
-                <span className="text-xs text-rose-400">{triggers.criticalThreshold.toLocaleString()}c</span>
+                <span className="text-xs text-rose-400">{formatTokens(triggers.criticalThreshold)}</span>
               </div>
               <input type="range" min="500" max="10000" step="100"
                 value={triggers.criticalThreshold}
@@ -293,7 +291,7 @@ export default function AlertsPage() {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <p className="text-xs font-medium">WARNING閾値</p>
-                <span className="text-xs text-amber-400">{triggers.warningThreshold.toLocaleString()}c</span>
+                <span className="text-xs text-amber-400">{formatTokens(triggers.warningThreshold)}</span>
               </div>
               <input type="range" min="10" max="1000" step="10"
                 value={triggers.warningThreshold}
@@ -367,7 +365,7 @@ export default function AlertsPage() {
                         {a.vipLevel === 'warning' && <span className="badge-warning text-[9px]">WARNING</span>}
                       </div>
                       <div className="flex items-center gap-3 mt-1">
-                        <span className="text-xs text-amber-400">💰 {a.total_coins.toLocaleString()}c</span>
+                        <span className="text-xs text-amber-400">💰 {formatTokens(a.total_coins)}</span>
                         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>📍 {a.cast_name}</span>
                         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>⏱ {timeAgo(a.message_time)}</span>
                       </div>
@@ -417,7 +415,7 @@ export default function AlertsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="glass-panel p-3 rounded-lg">
                   <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>累計コイン</p>
-                  <p className="text-sm font-bold text-amber-400">{selectedUser.total_coins.toLocaleString()}c</p>
+                  <p className="text-sm font-bold text-amber-400">{formatTokens(selectedUser.total_coins)}</p>
                 </div>
                 <div className="glass-panel p-3 rounded-lg">
                   <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>ユーザーLv</p>

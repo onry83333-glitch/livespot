@@ -493,7 +493,7 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
               名
             </span>
             <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-              {totalFilteredCoins.toLocaleString()}tk
+              {totalFilteredCoins.toLocaleString()} tk
             </span>
           </div>
         </div>
@@ -526,7 +526,7 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
                       {u.tx_count > 0 && `${u.tx_count}回`}
                     </span>
                     <span style={{ color: 'var(--accent-primary)' }}>
-                      {u.total_coins.toLocaleString()}tk
+                      {u.total_coins.toLocaleString()} tk
                     </span>
                     <button
                       onClick={(e) => { e.stopPropagation(); addToBlacklist(u.user_name); }}
@@ -741,7 +741,7 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
 
             {/* Filter summary */}
             <div className="glass-panel p-2 mb-4 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-              期間: {dateRange.start} 〜 {dateRange.end} ／ コイン: {minCoins.toLocaleString()}〜{maxCoins.toLocaleString()}tk
+              期間: {dateRange.start} 〜 {dateRange.end} ／ コイン: {minCoins.toLocaleString()}〜{maxCoins.toLocaleString()} tk
             </div>
 
             {/* Message preview */}
