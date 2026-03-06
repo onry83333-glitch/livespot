@@ -944,10 +944,20 @@ async function syncAccountCasts(
   isAuthenticated: boolean,
 ): Promise<'ok' | 'auth_failed' | 'skipped'> {
   let authFailed = false;
+  // 同一userIdのAPI重複呼出防止（スタジオアカウントでは全キャスト共通のuserIdで
+  // Transactions APIが返すため、同じuserIdで2回目以降の呼出は不要）
+  const syncedUserIds = new Set<string>();
 
   for (const cast of accountCasts) {
     try {
-      const result = await syncCastCoins(accountId, cast.cast_name, userId, cookieHeader, isAuthenticated);
+      // キャスト固有のmodel_idがあればそれを使う、なければ共通userId
+      const castUserId = cast.stripchat_model_id || cast.stripchat_user_id || userId;
+      if (syncedUserIds.has(String(castUserId))) {
+        log.info(`[${cast.cast_name}] userId=${castUserId} は同期済み — スキップ`);
+        continue;
+      }
+      const result = await syncCastCoins(accountId, cast.cast_name, String(castUserId), cookieHeader, isAuthenticated);
+      syncedUserIds.add(String(castUserId));
       if (result === 'auth_failed') authFailed = true;
     } catch (err) {
       log.error(`[${cast.cast_name}] コイン同期失敗`, err);
