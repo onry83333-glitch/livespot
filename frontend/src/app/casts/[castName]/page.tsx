@@ -45,7 +45,8 @@ interface SessionItem {
   session_end: string;
   message_count: number;
   tip_count: number;
-  total_coins: number;
+  total_coins: number;        // coin_transactions ベース（v2 RPC total_revenue）
+  chat_tokens: number;        // spy_messages ベース（参考値）
   unique_users: number;
   broadcast_title?: string | null;
 }
@@ -907,45 +908,40 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // ============================================================
-  // Sessions: RPC
+  // Sessions: v2 RPC（coin_transactionsベース売上）
   // ============================================================
   useEffect(() => {
     if (!accountId || (activeTab !== 'overview' && activeTab !== 'sessions')) return;
-    const since = registeredAt ? new Date(registeredAt).toISOString().split('T')[0] : '2026-01-01';
-    Promise.all([
-      sb.rpc('get_cast_sessions', {
-        p_account_id: accountId,
-        p_cast_name: castName,
-        p_since: since,
-      }),
-      sb.from('sessions')
-        .select('started_at, broadcast_title')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .gte('started_at', since)
-        .filter('broadcast_title', 'not.is', null)
-        .order('started_at', { ascending: false })
-        .limit(500),
-    ]).then(([rpcResult, titleResult]) => {
-      const rpcSessions = (rpcResult.data || []) as SessionItem[];
-      const titleRecords = (titleResult.data || []) as { started_at: string; broadcast_title: string }[];
-      // broadcast_title をマッチング: 最も近い開始時刻のセッションレコード(30分以内)
-      for (const sess of rpcSessions) {
-        const sessMs = new Date(sess.session_start).getTime();
-        let best: string | null = null;
-        let bestDiff = Infinity;
-        for (const tr of titleRecords) {
-          const diff = Math.abs(new Date(tr.started_at).getTime() - sessMs);
-          if (diff < 30 * 60 * 1000 && diff < bestDiff) {
-            bestDiff = diff;
-            best = tr.broadcast_title;
-          }
-        }
-        sess.broadcast_title = best;
+    sb.rpc('get_session_list_v2', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_limit: 100,
+      p_offset: 0,
+    }).then(({ data, error }) => {
+      if (error || !data) {
+        setSessions([]);
+        return;
       }
-      setSessions(rpcSessions);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mapped: SessionItem[] = (data as any[]).map(r => {
+        const d = new Date(r.started_at);
+        const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+        const sessionDate = `${jst.getUTCFullYear()}-${String(jst.getUTCMonth() + 1).padStart(2, '0')}-${String(jst.getUTCDate()).padStart(2, '0')}`;
+        return {
+          session_date: sessionDate,
+          session_start: r.started_at,
+          session_end: r.ended_at,
+          message_count: r.msg_count ?? 0,
+          tip_count: r.tip_count ?? 0,
+          total_coins: r.total_revenue ?? 0,   // coin_transactions ベース
+          chat_tokens: r.chat_tokens ?? 0,      // spy_messages ベース
+          unique_users: r.unique_users ?? 0,
+          broadcast_title: r.session_title ?? null,
+        };
+      });
+      setSessions(mapped);
     });
-  }, [accountId, castName, activeTab, registeredAt, sb]);
+  }, [accountId, castName, activeTab, sb]);
 
   // Session expand: load logs
   const handleExpandSession = useCallback(async (sessionKey: string, start: string, end: string) => {
@@ -1730,12 +1726,12 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, sb]);
 
   // ============================================================
-  // Broadcast analysis: セッション一覧取得
+  // Broadcast analysis: セッション一覧取得（v2 RPC — coin_transactionsベース売上）
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'sessions') return;
     setBroadcastLoading(true);
-    sb.rpc('get_session_list', {
+    sb.rpc('get_session_list_v2', {
       p_account_id: accountId,
       p_cast_name: castName,
       p_limit: 50,
@@ -1748,7 +1744,17 @@ function CastDetailInner() {
       }
       // 2/15以降のみ表示
       const cutoff = new Date('2026-02-15T00:00:00+09:00');
-      const filtered = (data as BroadcastSessionItem[]).filter(s => new Date(s.started_at) >= cutoff);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mapped: BroadcastSessionItem[] = (data as any[]).map(r => ({
+        session_id: r.broadcast_group_id ?? r.session_ids?.[0] ?? '',
+        title: r.session_title ?? '',
+        started_at: r.started_at,
+        ended_at: r.ended_at,
+        duration_minutes: r.duration_minutes ?? 0,
+        total_tokens: r.chat_tokens ?? 0,      // spy_messages ベース（参考値）
+        coin_revenue: r.total_revenue ?? 0,     // coin_transactions ベース
+      }));
+      const filtered = mapped.filter(s => new Date(s.started_at) >= cutoff);
       setBroadcastSessions(filtered);
       // 最新セッションを自動選択
       if (filtered.length > 0 && !broadcastSelectedDate) {
@@ -2404,7 +2410,7 @@ function CastDetailInner() {
                         {broadcastSessions.map(s => {
                           const d = new Date(s.started_at);
                           const dateStr = d.toISOString().split('T')[0];
-                          const label = `${d.toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short' })} — ${formatTokens(s.coin_revenue || s.total_tokens)}tk (${s.duration_minutes}分)`;
+                          const label = `${d.toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short' })} — ${formatTokens(s.coin_revenue)}tk (${s.duration_minutes}分)`;
                           return <option key={s.session_id} value={dateStr}>{label}</option>;
                         })}
                       </select>
