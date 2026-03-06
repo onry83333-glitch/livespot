@@ -20,6 +20,7 @@ const navSections: NavSection[] = [
   {
     title: '',
     items: [
+      { href: '/',        icon: '📊', label: 'ダッシュボード' },
       { href: '/casts',   icon: '👤', label: 'キャスト' },
       { href: '/spy',     icon: '🔍', label: 'SPY' },
       { href: '/alerts',  icon: '🔔', label: 'アラート' },
@@ -108,7 +109,7 @@ function SidebarInner() {
     >
       {/* Logo */}
       <div className="px-5 py-5">
-        <Link href="/casts" className="flex items-center gap-2.5 group">
+        <Link href="/" className="flex items-center gap-2.5 group">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg"
             style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple))' }}>
             🌐
