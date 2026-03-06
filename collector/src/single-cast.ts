@@ -358,6 +358,16 @@ async function doPollStatus(): Promise<void> {
     wsClient.connect();
   }
 
+  // --- First poll: OFFLINE → close any orphaned sessions from previous runs ---
+  if (!isOnline && prevStatus === 'unknown') {
+    try {
+      const closed = await closeStaleSessionsForCast(ACCOUNT_ID, CAST_NAME);
+      if (closed > 0) log.info(`Closed ${closed} stale session(s) (cast offline at startup)`);
+    } catch (err) {
+      log.warn('Stale session cleanup failed', err);
+    }
+  }
+
   if (isOnline) {
     await updateCastOnlineStatus(CAST_SOURCE, ACCOUNT_ID, CAST_NAME, true);
   }
@@ -460,13 +470,11 @@ async function main(): Promise<void> {
     log.warn('Auth pre-fetch failed — REST polling still works', err);
   }
 
-  // 2. Close stale sessions from previous runs
-  try {
-    const closed = await closeStaleSessionsForCast(ACCOUNT_ID, CAST_NAME);
-    if (closed > 0) log.info(`Closed ${closed} stale session(s)`);
-  } catch (err) {
-    log.warn('Stale session cleanup failed', err);
-  }
+  // 2. Stale session cleanup is deferred to first poll result:
+  //    - If cast is ONLINE: resumeExistingSession() reuses the open session (no split)
+  //    - If cast is OFFLINE: closeStaleSessionsForCast() closes orphaned sessions
+  //    Previously this ran unconditionally before polling, which closed sessions
+  //    that the first poll would then try to resume — causing 1-second splits.
 
   // 3. Start batch flush
   startBatchFlush();

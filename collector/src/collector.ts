@@ -443,29 +443,27 @@ async function pollStatus(state: CastState): Promise<void> {
     state.sessionStartTime = null;
   }
 
-  // ------ First poll: if already online, connect WS ------
+  // ------ First poll: if already online, resume or create session ------
   if (isOnline && prevStatus === 'unknown' && state.modelId && !state.wsClient) {
-    // 起動時: 前回の未閉鎖セッションをクローズしてから新セッション作成
-    try {
-      const closed = await closeStaleSessionsForCast(target.accountId, target.castName);
-      if (closed > 0) {
-        log.info(`${target.castName}: closed ${closed} stale session(s) on startup`);
+    // 再起動時: 未閉鎖セッションがあれば引き継ぐ（分割防止）
+    const { resumeExistingSession } = await import('./storage/supabase.js');
+    const existing = await resumeExistingSession(target.accountId, target.castName);
+
+    if (existing) {
+      state.sessionId = existing.session_id;
+      state.sessionStartTime = existing.started_at;
+      log.info(`${target.castName}: resuming session (${result.status}), session=${state.sessionId}`);
+    } else {
+      const startTime = new Date().toISOString();
+      state.sessionStartTime = startTime;
+      state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
+      log.info(`${target.castName}: already online (${result.status}), new session=${state.sessionId} (source=${target.source})`);
+
+      try {
+        state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime);
+      } catch (err) {
+        log.error(`Session open error (first poll) [${target.source}]: ${err}`);
       }
-    } catch (err) {
-      log.warn(`${target.castName}: failed to close stale sessions`, err);
-    }
-
-    const startTime = new Date().toISOString();
-    state.sessionStartTime = startTime;
-    state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
-    log.info(`${target.castName}: already online (${result.status}), connecting WS (session=${state.sessionId}, source=${target.source})`);
-
-    // sessions テーブルにレコード作成（起動時に既にオンラインのキャスト、自社・他社共通）
-    // 部分ユニーク制約で弾かれた場合、既存セッションIDを使う
-    try {
-      state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime);
-    } catch (err) {
-      log.error(`Session open error (first poll) [${target.source}]: ${err}`);
     }
 
     state.wsClient = new StripchatWsClient(
@@ -477,6 +475,16 @@ async function pollStatus(state: CastState): Promise<void> {
       () => handleAuthError(state),
     );
     state.wsClient.connect();
+  }
+
+  // First poll: OFFLINE → close orphaned sessions from previous runs
+  if (!isOnline && prevStatus === 'unknown') {
+    try {
+      const closed = await closeStaleSessionsForCast(target.accountId, target.castName);
+      if (closed > 0) log.info(`${target.castName}: closed ${closed} stale session(s) (offline at startup)`);
+    } catch (err) {
+      log.warn(`${target.castName}: stale session cleanup failed`, err);
+    }
   }
 
   if (isOnline) {
