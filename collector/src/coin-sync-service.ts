@@ -475,10 +475,12 @@ async function syncAccount(
       ? new Date(new Date(lastDate).getTime() - bufferMs)
       : null;
 
-    log.info(`[${cast.cast_name}] 差分同期 (since=${sinceDate?.toISOString() || 'フル同期'})`);
+    // 各キャストのmodel_idを使ってAPI呼び出し（アカウント共通のuserIdだと全TX混在する）
+    const castUserId = cast.stripchat_model_id || cast.stripchat_user_id || auth.userId;
+    log.info(`[${cast.cast_name}] 差分同期 (userId=${castUserId}, since=${sinceDate?.toISOString() || 'フル同期'})`);
 
     const { transactions, authFailed: txAuthFailed } = await fetchTransactions(
-      auth.userId, auth.cookieHeader, sinceDate,
+      String(castUserId), auth.cookieHeader, sinceDate,
     );
 
     if (txAuthFailed) {
