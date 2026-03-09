@@ -249,13 +249,28 @@ async function main() {
 
   if (accounts && accounts.length > 0) {
     const accountId = accounts[0].account_id;
+    // cast_name解決: registered_castsからuserIdで照合
+    let castName: string | null = null;
+    if (userId) {
+      const { data: castMatch } = await sb
+        .from('registered_casts')
+        .select('cast_name')
+        .eq('account_id', accountId)
+        .eq('is_active', true)
+        .or(`stripchat_user_id.eq.${userId},stripchat_model_id.eq.${userId}`)
+        .limit(1);
+      castName = castMatch?.[0]?.cast_name || null;
+    }
+
     await sb.from('stripchat_sessions').upsert({
       account_id: accountId,
+      cast_name: castName,
+      session_cookie: cookiesJson['stripchat_com_sessionId'] || '',
       cookies_json: cookiesJson,
       stripchat_user_id: userId,
       is_valid: true,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'account_id' });
+    }, { onConflict: 'account_id,cast_name' });
     console.log(`✓ Supabase stripchat_sessions 更新完了 (userId=${userId})`);
   }
 

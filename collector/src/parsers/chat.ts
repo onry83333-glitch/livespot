@@ -24,19 +24,22 @@ function str(v: any): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function num(v: any): number {
   if (v === null || v === undefined) return 0;
-  if (typeof v === 'number') return v;
+  if (typeof v === 'number') return Math.max(0, Math.floor(v));
   if (typeof v === 'string') {
     const n = parseInt(v, 10);
-    return isNaN(n) ? 0 : n;
+    return isNaN(n) ? 0 : Math.max(0, n);
   }
   return 0;
 }
+
+/** ゴール系キーワード（Chrome拡張 content_spy.js / background.js と同一パターン） */
+const GOAL_PATTERNS = [/ゴール/, /goal/i, /エピック/, /epic/i, /達成/, /残り.*コイン/, /新しいゴール/, /new goal/i];
 
 export interface CentrifugoChat {
   userName: string;
   message: string;
   tokens: number;
-  msgType: 'chat' | 'tip';
+  msgType: 'chat' | 'tip' | 'goal';
   messageTime: string;
   userLeague: string;
   userLevel: number;
@@ -81,9 +84,19 @@ export function parseCentrifugoChat(data: unknown): CentrifugoChat | null {
   // チップ額
   const tokens = num(details?.amount) || num(d.tokens) || 0;
 
-  // メッセージタイプ
+  // メッセージタイプ（ゴール検出: Chrome拡張と同一ロジック）
   const rawType = str(m.type);
-  const msgType: 'chat' | 'tip' = (rawType === 'tip' || tokens > 0) ? 'tip' : 'chat';
+  const messageText = str(details?.body) || str(details?.text) || str(d.message?.text) || '';
+  const isGoalMessage = GOAL_PATTERNS.some(p => p.test(messageText));
+
+  let msgType: 'chat' | 'tip' | 'goal';
+  if (isGoalMessage) {
+    msgType = 'goal';
+  } else if (rawType === 'tip' || tokens > 0) {
+    msgType = 'tip';
+  } else {
+    msgType = 'chat';
+  }
 
   // タイムスタンプ: createdAt → receivedAt フォールバック
   const messageTime = str(m.createdAt) || new Date().toISOString();
@@ -100,10 +113,13 @@ export function parseCentrifugoChat(data: unknown): CentrifugoChat | null {
   const fanClubMonths = num(details?.fanClubNumberMonthsOfSubscribed);
   const isFanClub = fanClubMonths > 0 || userData?.isFanClubMember === true;
 
+  // ゴールメッセージの tokens は偽チップ（ゴール進捗表示）なので 0 にリセット
+  const finalTokens = (msgType === 'goal') ? 0 : tokens;
+
   return {
     userName,
     message,
-    tokens,
+    tokens: finalTokens,
     msgType,
     messageTime,
     userLeague,

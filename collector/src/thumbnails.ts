@@ -165,6 +165,25 @@ export function startThumbnailCapture(getOnlineCasts: () => OnlineCast[]): void 
   log.info(`Thumbnail capture started (interval=${CAPTURE_INTERVAL_MS / 1000}s)`);
 }
 
+/**
+ * single-cast.ts用: 引数からOnlineCastを構築してサムネイル取得
+ */
+export async function captureThumbnailForCast(
+  castName: string,
+  castModelId: string,
+  accountId: string,
+  castSessionId: string | null,
+  source: 'registered_casts' | 'spy_casts',
+): Promise<boolean> {
+  return captureThumbnail({
+    castName,
+    modelId: castModelId,
+    accountId,
+    sessionId: castSessionId,
+    source,
+  });
+}
+
 export function stopThumbnailCapture(): void {
   if (captureTimer) {
     clearInterval(captureTimer);

@@ -35,6 +35,7 @@ def _get_cast_usernames(sb, account_id: str) -> set:
 async def receive_message(body: SpyMessageCreate, user=Depends(get_current_user)):
     """Chrome extension sends intercepted chat messages here."""
     sb = get_supabase_admin()
+    _verify_account(sb, body.account_id, user["user_id"])
 
     # Check VIP (paid_users テーブルが空でもエラーにしない)
     try:
@@ -107,6 +108,10 @@ async def receive_message(body: SpyMessageCreate, user=Depends(get_current_user)
 async def receive_messages_batch(messages: list[SpyMessageCreate], user=Depends(get_current_user)):
     """Batch insert for catching up or importing CSV logs"""
     sb = get_supabase_admin()
+    # 所有権チェック: バッチ内の全account_idがユーザーのものか確認
+    account_ids = set(m.account_id for m in messages if m.account_id)
+    for aid in account_ids:
+        _verify_account(sb, aid, user["user_id"])
 
     rows = [{
         "account_id": m.account_id,
@@ -290,17 +295,28 @@ async def update_cast_tags(cast_id: int, body: CastTagsUpdate, user=Depends(get_
     update_data["updated_at"] = datetime.utcnow().isoformat()
 
     # Try spy_casts first (BIGSERIAL id), then registered_casts
+    # 所有権チェック: cast_id のレコードが現在ユーザーの account に属しているか確認
     try:
-        result = sb.table("spy_casts").update(update_data).eq("id", cast_id).execute()
-        if result.data:
-            return result.data[0]
+        cast_row = sb.table("spy_casts").select("account_id").eq("id", cast_id).single().execute()
+        if cast_row.data:
+            _verify_account(sb, cast_row.data["account_id"], user["user_id"])
+            result = sb.table("spy_casts").update(update_data).eq("id", cast_id).execute()
+            if result.data:
+                return result.data[0]
+    except HTTPException:
+        raise
     except Exception:
         pass
 
     try:
-        result = sb.table("registered_casts").update(update_data).eq("id", cast_id).execute()
-        if result.data:
-            return result.data[0]
+        cast_row = sb.table("registered_casts").select("account_id").eq("id", cast_id).single().execute()
+        if cast_row.data:
+            _verify_account(sb, cast_row.data["account_id"], user["user_id"])
+            result = sb.table("registered_casts").update(update_data).eq("id", cast_id).execute()
+            if result.data:
+                return result.data[0]
+    except HTTPException:
+        raise
     except Exception:
         pass
 

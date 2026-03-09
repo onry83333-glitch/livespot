@@ -622,8 +622,7 @@ async def thank_dm(
             "template_name": batch_id,
             "image_sent": False,
         }
-        if body.cast_name:
-            row["cast_name"] = body.cast_name
+        row["cast_name"] = body.cast_name or ""
         rows.append(row)
 
     result = sb.table("dm_send_log").insert(rows).execute()

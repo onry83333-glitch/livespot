@@ -24,9 +24,9 @@ export function formatJST(dateStr: string): string {
   return new Date(dateStr).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
 }
 
-/** Format tokens as dual currency: ¥yen (N tk) */
-export function formatCoinDual(tokens: number): string {
-  return `${tokensToJPY(tokens)} (${tokens.toLocaleString()} tk)`;
+/** Format tokens as dual currency: N tk (¥yen) — tk主表示・円副表示 */
+export function formatCoinDual(tokens: number, coinRate: number = COIN_RATE): string {
+  return `${tokens.toLocaleString()} tk (${tokensToJPY(tokens, coinRate)})`;
 }
 
 /** Format relative time */
@@ -76,6 +76,49 @@ export function getUserHashColor(userName: string | null | undefined): string {
   // 彩度と明度を固定し、色相をハッシュで決定（暗い背景で読みやすい色）
   const hue = ((hash % 360) + 360) % 360;
   return `hsl(${hue}, 65%, 65%)`;
+}
+
+// ============================================================
+// 期間計算ユーティリティ（JST基準）
+// ============================================================
+
+/** JST今日0:00をUTCで返す */
+export function getTodayStartJST(): Date {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 3600000);
+  return new Date(
+    Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate()) - 9 * 3600000
+  );
+}
+
+/**
+ * 週境界をUTCで返す（月曜03:00 JST = 送金サイクル区切り）
+ * 月曜 0:00〜2:59 JST の売上は前週に計上される。
+ * offset=0: 今週、offset=1: 先週
+ */
+export function getWeekStartJST(offset = 0): Date {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 3600000);
+  const day = jst.getUTCDay();
+  const hour = jst.getUTCHours();
+  let diff = day === 0 ? 6 : day - 1;
+  if (day === 1 && hour < 3) diff = 7;
+  const monday = new Date(jst);
+  monday.setUTCDate(jst.getUTCDate() - diff - offset * 7);
+  monday.setUTCHours(3, 0, 0, 0);
+  return new Date(monday.getTime() - 9 * 3600000);
+}
+
+/**
+ * JST月初1日0:00をUTCで返す。
+ * offset=0: 今月、offset=1: 先月
+ */
+export function getMonthStartJST(offset = 0): Date {
+  const now = new Date();
+  const jst = new Date(now.getTime() + 9 * 3600000);
+  const y = jst.getUTCFullYear();
+  const m = jst.getUTCMonth() - offset;
+  return new Date(Date.UTC(y, m, 1) - 9 * 3600000);
 }
 
 /** Message type to display */

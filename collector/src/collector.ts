@@ -15,16 +15,28 @@ import {
   CastStatus,
   StripchatWsClient,
   WsMessage,
+  isOnlineStatus,
 } from './ws-client.js';
 import { upsertViewers, updateCastOnlineStatus, enqueue, openSession, closeSession, closeStaleSessionsForCast } from './storage/supabase.js';
 import { accumulateViewer } from './storage/spy-profiles.js';
 import { parseCentrifugoChat } from './parsers/chat.js';
+import { parseCentrifugoGoal } from './parsers/goal.js';
+import { normalizeMessage, normalizeViewers } from './normalizer/index.js';
 import { RetryTracker, sleep } from './utils/reconnect.js';
 import { createLogger } from './utils/logger.js';
 import { getAuth, invalidateAuth } from './auth/index.js';
 import type { TriggerEngine } from './triggers/index.js';
+import { generatePostSessionReport } from './reports/post-session-report.js';
 
 const log = createLogger('collector');
+
+interface ShowTransition {
+  from: string;
+  to: string;
+  at: string;
+  viewerCount: number;
+  pricing: import("./ws-client.js").BroadcastPrices | null;
+}
 
 interface CastState {
   target: CastTarget;
@@ -39,6 +51,12 @@ interface CastState {
   running: boolean;
   wsMessageCount: number;
   wsTipTotal: number;
+  /** Show pricing from latest REST API poll */
+  lastPricing: import('./ws-client.js').BroadcastPrices | null;
+  /** Intra-session status transitions */
+  showTransitions: ShowTransition[];
+  /** Accumulated estimated revenue from non-public shows */
+  estimatedShowRevenue: number;
 }
 
 const castStates = new Map<string, CastState>();
@@ -142,8 +160,8 @@ function createWsHandler(state: CastState) {
       const isVip = parsed.tokens >= 1000 || parsed.isKing || parsed.isKnight;
       if (parsed.tokens > 0) state.wsTipTotal += parsed.tokens;
 
-      // Write to spy_messages via batch
-      enqueue('spy_messages', {
+      // Normalize → validate → enqueue
+      const normalized = normalizeMessage({
         account_id: target.accountId,
         cast_name: target.castName,
         message_time: parsed.messageTime,
@@ -166,16 +184,50 @@ function createWsHandler(state: CastState) {
         },
       });
 
+      if (!normalized) {
+        log.debug(`${target.castName}: message rejected by normalizer (user=${parsed.userName})`);
+        return;
+      }
+
+      enqueue('spy_messages', normalized);
+
       if (parsed.tokens > 0) {
         log.info(`${target.castName}: TIP ${parsed.userName} ${parsed.tokens}tk "${parsed.message.substring(0, 40)}"`);
       } else {
         log.debug(`${target.castName}: CHAT ${parsed.userName}: ${parsed.message.substring(0, 60)}`);
       }
+    } else if (msg.event === 'goalChanged') {
+      // ゴール進捗/達成イベント
+      const goalEvent = parseCentrifugoGoal(msg.data);
+      if (goalEvent) {
+        log.info(`${target.castName}: GOAL ${goalEvent.isAchieved ? 'ACHIEVED' : 'PROGRESS'} ${goalEvent.currentAmount}/${goalEvent.goalAmount} "${goalEvent.goalText}"`);
+
+        const goalMsg = normalizeMessage({
+          account_id: target.accountId,
+          cast_name: target.castName,
+          message_time: msg.receivedAt,
+          msg_type: 'goal',
+          user_name: 'system',
+          message: goalEvent.message,
+          tokens: 0,
+          is_vip: false,
+          session_id: state.sessionId,
+          metadata: {
+            source: 'collector-ws',
+            channel: msg.channel,
+            goalAmount: goalEvent.goalAmount,
+            currentAmount: goalEvent.currentAmount,
+            isAchieved: goalEvent.isAchieved,
+            goalText: goalEvent.goalText,
+          },
+        });
+        if (goalMsg) enqueue('spy_messages', goalMsg);
+      }
     } else if (msg.event === 'newModelEvent') {
       const eventType = String(msg.data.event || msg.data.type || 'unknown');
       log.info(`${target.castName}: EVENT ${eventType}`);
 
-      enqueue('spy_messages', {
+      const sysMsg = normalizeMessage({
         account_id: target.accountId,
         cast_name: target.castName,
         message_time: msg.receivedAt,
@@ -187,6 +239,7 @@ function createWsHandler(state: CastState) {
         session_id: state.sessionId,
         metadata: { source: 'collector-ws', event: eventType, rawData: msg.data },
       });
+      if (sysMsg) enqueue('spy_messages', sysMsg);
     } else if (msg.event === 'userUpdated') {
       log.debug(`${target.castName}: USER_UPDATED ${JSON.stringify(msg.data).substring(0, 100)}`);
     }
@@ -212,6 +265,9 @@ export function registerTarget(target: CastTarget): void {
     running: true,
     wsMessageCount: 0,
     wsTipTotal: 0,
+    lastPricing: null,
+    showTransitions: [],
+    estimatedShowRevenue: 0,
   });
 
   log.info(`Registered: ${target.castName} (${target.source})`);
@@ -262,8 +318,7 @@ export function getOnlineCasts(): {
 }[] {
   return Array.from(castStates.values())
     .filter((s) => {
-      const isOnline = s.status === 'public' || s.status === 'private' || s.status === 'p2p';
-      return isOnline && s.modelId;
+      return isOnlineStatus(s.status) && s.modelId;
     })
     .map((s) => ({
       castName: s.target.castName,
@@ -301,8 +356,8 @@ async function pollStatus(state: CastState): Promise<void> {
     state.modelId = result.modelId;
   }
 
-  const isOnline = result.status === 'public' || result.status === 'private' || result.status === 'p2p';
-  const wasOnline = prevStatus === 'public' || prevStatus === 'private' || prevStatus === 'p2p';
+  const isOnline = isOnlineStatus(result.status);
+  const wasOnline = isOnlineStatus(prevStatus);
 
   // ------ ONLINE transition ------
   if (isOnline && !wasOnline && prevStatus !== 'unknown') {
@@ -311,18 +366,21 @@ async function pollStatus(state: CastState): Promise<void> {
     state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
     state.wsMessageCount = 0;
     state.wsTipTotal = 0;
+    state.lastPricing = result.prices;
+    state.showTransitions = [];
+    state.estimatedShowRevenue = 0;
 
-    log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId}, source=${target.source})`);
+    log.info(`${target.castName}: ONLINE (${result.status}, ${result.viewerCount} viewers, session=${state.sessionId}, source=${target.source})${result.topic ? ` topic="${result.topic.substring(0, 60)}"` : ''}${result.prices ? ` ticket=${result.prices.ticketShowPrice} group=${result.prices.groupShowPrice} pvt=${result.prices.privatePrice}` : ''}`);
 
     // sessions テーブルにレコード作成（自社・他社共通）
     // 部分ユニーク制約で弾かれた場合、既存セッションIDを使う
     try {
-      state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime);
+      state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime, result.topic);
     } catch (err) {
       log.error(`Session open error [${target.source}]: ${err}`);
     }
 
-    enqueue('spy_messages', {
+    const startMsg = normalizeMessage({
       account_id: target.accountId,
       cast_name: target.castName,
       message_time: startTime,
@@ -332,8 +390,14 @@ async function pollStatus(state: CastState): Promise<void> {
       tokens: 0,
       is_vip: false,
       session_id: state.sessionId,
-      metadata: { source: 'collector', modelId: result.modelId, viewerCount: result.viewerCount },
+      metadata: {
+        source: 'collector',
+        modelId: result.modelId,
+        viewerCount: result.viewerCount,
+        prices: result.prices,
+      },
     });
+    if (startMsg) enqueue('spy_messages', startMsg);
 
     // Connect WebSocket for live chat
     if (state.modelId) {
@@ -358,11 +422,62 @@ async function pollStatus(state: CastState): Promise<void> {
     }
   }
 
+  // ------ Intra-session status transition (e.g. public → ticketShow) ------
+  if (isOnline && wasOnline && prevStatus !== result.status && state.sessionId) {
+    // Store pricing from latest poll
+    if (result.prices) state.lastPricing = result.prices;
+
+    const transition: ShowTransition = {
+      from: prevStatus,
+      to: result.status,
+      at: new Date().toISOString(),
+      viewerCount: result.viewerCount,
+      pricing: state.lastPricing,
+    };
+    state.showTransitions.push(transition);
+
+    // Estimate revenue for show transitions
+    let estimateNote = '';
+    if (result.status === 'ticketShow' && state.lastPricing?.ticketShowPrice) {
+      estimateNote = ` (ticket=${state.lastPricing.ticketShowPrice}tk)`;
+    } else if (result.status === 'groupShow' && state.lastPricing?.groupShowPrice) {
+      estimateNote = ` (group=${state.lastPricing.groupShowPrice}tk/min, ${result.viewerCount}人)`;
+    } else if (result.status === 'private' && state.lastPricing?.privatePrice) {
+      estimateNote = ` (pvt=${state.lastPricing.privatePrice}tk/min)`;
+    }
+
+    log.info(`${target.castName}: STATUS ${prevStatus} -> ${result.status} (${result.viewerCount} viewers)${estimateNote}`);
+
+    const transMsg = normalizeMessage({
+      account_id: target.accountId,
+      cast_name: target.castName,
+      message_time: transition.at,
+      msg_type: 'system',
+      user_name: 'collector',
+      message: `ステータス遷移: ${prevStatus} -> ${result.status} (${result.viewerCount}人)${estimateNote}`,
+      tokens: 0,
+      is_vip: false,
+      session_id: state.sessionId,
+      metadata: {
+        source: 'collector',
+        event: 'status_transition',
+        from: prevStatus,
+        to: result.status,
+        viewerCount: result.viewerCount,
+        prices: state.lastPricing,
+      },
+    });
+    if (transMsg) enqueue('spy_messages', transMsg);
+  }
+
+  // Update pricing on every poll (prices may change mid-session)
+  if (result.prices) state.lastPricing = result.prices;
+
   // ------ OFFLINE transition ------
   if (!isOnline && wasOnline) {
-    log.info(`${target.castName}: OFFLINE (${state.wsMessageCount} msgs, ${state.wsTipTotal}tk captured)`);
+    log.info(`${target.castName}: OFFLINE (${state.wsMessageCount} msgs, ${state.wsTipTotal}tk captured, ${state.showTransitions.length} show transitions)`);
 
-    enqueue('spy_messages', {
+    const endMsg = normalizeMessage({
       account_id: target.accountId,
       cast_name: target.castName,
       message_time: new Date().toISOString(),
@@ -372,8 +487,14 @@ async function pollStatus(state: CastState): Promise<void> {
       tokens: 0,
       is_vip: false,
       session_id: state.sessionId,
-      metadata: { source: 'collector', lastViewerCount: state.viewerCount },
+      metadata: {
+        source: 'collector',
+        lastViewerCount: state.viewerCount,
+        showTransitions: state.showTransitions,
+        prices: state.lastPricing,
+      },
     });
+    if (endMsg) enqueue('spy_messages', endMsg);
 
     // sessions テーブルにセッション終了を記録
     if (state.sessionId) {
@@ -390,36 +511,48 @@ async function pollStatus(state: CastState): Promise<void> {
       }).catch((err) => log.error(`Trigger session end error: ${err}`));
     }
 
+    // 配信後レポート自動生成（registered_castsのみ）
+    if (state.sessionId && state.sessionStartTime && target.source === 'registered_casts') {
+      generatePostSessionReport(target.accountId, target.castName, state.sessionId, state.sessionStartTime)
+        .catch((err) => log.error(`Post-session report error: ${err}`));
+    }
+
     // Disconnect WebSocket
     state.wsClient?.disconnect();
     state.wsClient = null;
     state.sessionId = null;
     state.sessionStartTime = null;
+    state.lastPricing = null;
+    state.showTransitions = [];
+    state.estimatedShowRevenue = 0;
   }
 
-  // ------ First poll: if already online, connect WS ------
+  // ------ First poll: if already online, resume or create session ------
   if (isOnline && prevStatus === 'unknown' && state.modelId && !state.wsClient) {
-    // 起動時: 前回の未閉鎖セッションをクローズしてから新セッション作成
-    try {
-      const closed = await closeStaleSessionsForCast(target.accountId, target.castName);
-      if (closed > 0) {
-        log.info(`${target.castName}: closed ${closed} stale session(s) on startup`);
+    // 再起動時: 未閉鎖セッションがあれば引き継ぐ（分割防止）
+    const { resumeExistingSession } = await import('./storage/supabase.js');
+    const existing = await resumeExistingSession(target.accountId, target.castName);
+
+    // Initialize pricing and transitions for session
+    state.lastPricing = result.prices;
+    state.showTransitions = [];
+    state.estimatedShowRevenue = 0;
+
+    if (existing) {
+      state.sessionId = existing.session_id;
+      state.sessionStartTime = existing.started_at;
+      log.info(`${target.castName}: resuming session (${result.status}), session=${state.sessionId}`);
+    } else {
+      const startTime = new Date().toISOString();
+      state.sessionStartTime = startTime;
+      state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
+      log.info(`${target.castName}: already online (${result.status}), new session=${state.sessionId} (source=${target.source})${result.topic ? ` topic="${result.topic.substring(0, 60)}"` : ''}`);
+
+      try {
+        state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime, result.topic);
+      } catch (err) {
+        log.error(`Session open error (first poll) [${target.source}]: ${err}`);
       }
-    } catch (err) {
-      log.warn(`${target.castName}: failed to close stale sessions`, err);
-    }
-
-    const startTime = new Date().toISOString();
-    state.sessionStartTime = startTime;
-    state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
-    log.info(`${target.castName}: already online (${result.status}), connecting WS (session=${state.sessionId}, source=${target.source})`);
-
-    // sessions テーブルにレコード作成（起動時に既にオンラインのキャスト、自社・他社共通）
-    // 部分ユニーク制約で弾かれた場合、既存セッションIDを使う
-    try {
-      state.sessionId = await openSession(target.accountId, target.castName, state.sessionId, startTime);
-    } catch (err) {
-      log.error(`Session open error (first poll) [${target.source}]: ${err}`);
     }
 
     state.wsClient = new StripchatWsClient(
@@ -433,6 +566,16 @@ async function pollStatus(state: CastState): Promise<void> {
     state.wsClient.connect();
   }
 
+  // First poll: OFFLINE → close orphaned sessions from previous runs
+  if (!isOnline && prevStatus === 'unknown') {
+    try {
+      const closed = await closeStaleSessionsForCast(target.accountId, target.castName);
+      if (closed > 0) log.info(`${target.castName}: closed ${closed} stale session(s) (offline at startup)`);
+    } catch (err) {
+      log.warn(`${target.castName}: stale session cleanup failed`, err);
+    }
+  }
+
   if (isOnline) {
     await updateCastOnlineStatus(target.source, target.accountId, target.castName, true);
   }
@@ -442,8 +585,7 @@ async function pollViewerList(state: CastState): Promise<void> {
   const { target } = state;
   const now = Date.now();
 
-  const isOnline = state.status === 'public' || state.status === 'private' || state.status === 'p2p';
-  if (!isOnline) return;
+  if (!isOnlineStatus(state.status)) return;
 
   if (now - state.lastViewerPoll < POLL_INTERVALS.viewerSec * 1000) return;
   state.lastViewerPoll = now;
@@ -470,18 +612,22 @@ async function pollViewerList(state: CastState): Promise<void> {
 
   if (result.viewers.length === 0) return;
 
+  // Normalize: unknown除外、重複排除、型検証
+  const normalizedViewers = normalizeViewers(result.viewers);
+  if (normalizedViewers.length === 0) return;
+
   const upserted = await upsertViewers(
     target.accountId,
     target.castName,
     state.sessionId,
-    result.viewers,
+    normalizedViewers,
   );
 
-  for (const v of result.viewers) {
+  for (const v of normalizedViewers) {
     accumulateViewer(target.castName, v);
   }
 
-  log.debug(`${target.castName}: ${result.viewers.length} viewers, ${upserted} upserted`);
+  log.debug(`${target.castName}: ${result.viewers.length} raw → ${normalizedViewers.length} normalized, ${upserted} upserted`);
 
   // Trigger: viewer list update
   if (triggerEngineRef) {

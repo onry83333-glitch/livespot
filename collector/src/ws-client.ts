@@ -26,8 +26,10 @@ const KEEPALIVE_INTERVAL = 25000;
 const WS_CHANNELS = [
   'newChatMessage',
   'newModelEvent',
+  'goalChanged',
   'clearChatMessages',
   'userUpdated',
+  'modelStatusChanged',
 ];
 
 const FETCH_HEADERS = {
@@ -36,12 +38,38 @@ const FETCH_HEADERS = {
 };
 
 // ----- Types -----
-export type CastStatus = 'public' | 'private' | 'off' | 'p2p' | 'unknown';
+export type CastStatus = 'public' | 'private' | 'off' | 'p2p' | 'ticketShow' | 'groupShow' | 'unknown';
+
+/** ステータスが配信中（セッション継続）とみなせるか */
+export function isOnlineStatus(status: CastStatus | string): boolean {
+  return status === 'public' || status === 'private' || status === 'p2p'
+    || status === 'ticketShow' || status === 'groupShow';
+}
+
+/** Prices extracted from /cam API (revenue estimation) */
+export interface BroadcastPrices {
+  privatePrice: number;      // tokens/min for private show
+  cam2camPrice: number;      // tokens/min for cam2cam
+  ticketShowPrice: number;   // tokens for ticket show entry
+  groupShowPrice: number;    // tokens/min for group show
+  spyPrice: number;          // tokens/min for spy on private
+}
+
+/** Goal info extracted from /cam API */
+export interface GoalInfo {
+  amount: number;
+  currentAmount: number;
+  description: string;
+  isAchieved: boolean;
+}
 
 export interface StatusResult {
   status: CastStatus;
   viewerCount: number;
   modelId: string | null;
+  topic: string | null;
+  prices: BroadcastPrices | null;
+  goal: GoalInfo | null;
   rawData: Record<string, unknown> | null;
 }
 
@@ -301,16 +329,16 @@ export async function pollCastStatus(castName: string, cfClearance?: string): Pr
 
     if (res.status === 403) {
       log.warn(`${castName}: Cloudflare 403`);
-      return { status: 'unknown', viewerCount: 0, modelId: null, rawData: null };
+      return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, prices: null, goal: null, rawData: null };
     }
 
     if (res.status === 404) {
-      return { status: 'off', viewerCount: 0, modelId: null, rawData: null };
+      return { status: 'off', viewerCount: 0, modelId: null, topic: null, prices: null, goal: null, rawData: null };
     }
 
     if (!res.ok) {
       log.warn(`${castName}: HTTP ${res.status}`);
-      return { status: 'unknown', viewerCount: 0, modelId: null, rawData: null };
+      return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, prices: null, goal: null, rawData: null };
     }
 
     const data = (await res.json()) as Record<string, unknown>;
@@ -322,10 +350,43 @@ export async function pollCastStatus(castName: string, cfClearance?: string): Pr
     const viewerCount = Number(user?.viewersCount || user?.viewers || 0);
     const modelId = user?.id ? String(user.id) : null;
 
-    return { status, viewerCount, modelId, rawData: data };
+    // Extract broadcast topic from API response
+    const broadcastSettings = user?.broadcastSettings as Record<string, unknown> | undefined;
+    const topic = (broadcastSettings?.topic as string)
+      || (user?.topicText as string)
+      || null;
+
+    // Extract prices for revenue estimation
+    // API returns flat fields: user.privateRate, user.ticketRate, user.groupRate, user.spyRate, user.p2pRate
+    const privateRate = Number(user?.privateRate || 0);
+    const ticketRate = Number(user?.ticketRate || 0);
+    const groupRate = Number(user?.groupRate || 0);
+    const spyRate = Number(user?.spyRate || 0);
+    const p2pRate = Number(user?.p2pRate || 0);
+    const prices: BroadcastPrices | null = (privateRate || ticketRate || groupRate) ? {
+      privatePrice: privateRate,
+      cam2camPrice: p2pRate,
+      ticketShowPrice: ticketRate,
+      groupShowPrice: groupRate,
+      spyPrice: spyRate,
+    } : null;
+
+    // Extract goal info for tip flow analysis (G-02)
+    let goal: GoalInfo | null = null;
+    const rawGoal = user?.goal as Record<string, unknown> | undefined;
+    if (rawGoal) {
+      goal = {
+        amount: Number(rawGoal.amount || rawGoal.goalAmount || 0),
+        currentAmount: Number(rawGoal.currentAmount || rawGoal.current || 0),
+        description: String(rawGoal.text || rawGoal.description || ''),
+        isAchieved: rawGoal.isAchieved === true || rawGoal.achieved === true,
+      };
+    }
+
+    return { status, viewerCount, modelId, topic, prices, goal, rawData: data };
   } catch (err) {
     log.error(`${castName}: status poll failed`, err);
-    return { status: 'unknown', viewerCount: 0, modelId: null, rawData: null };
+    return { status: 'unknown', viewerCount: 0, modelId: null, topic: null, prices: null, goal: null, rawData: null };
   }
 }
 
@@ -333,12 +394,20 @@ export async function pollViewers(
   castName: string,
   authToken?: string,
   cfClearance?: string,
+  sessionCookies?: string,
 ): Promise<ViewerResult> {
   const url = STRIPCHAT.viewerUrl(castName);
   const headers: Record<string, string> = { ...FETCH_HEADERS };
 
-  // v2 /members API is public (no auth needed), but add cookies for compatibility
-  if (cfClearance) {
+  // /members API requires authenticated session cookies for reliable access
+  if (sessionCookies) {
+    let cookieStr = sessionCookies;
+    // Merge cf_clearance from Playwright if not already present
+    if (cfClearance && !cookieStr.includes('cf_clearance=')) {
+      cookieStr += `; cf_clearance=${cfClearance}`;
+    }
+    headers['Cookie'] = cookieStr;
+  } else if (cfClearance) {
     headers['Cookie'] = `cf_clearance=${cfClearance}`;
   }
 

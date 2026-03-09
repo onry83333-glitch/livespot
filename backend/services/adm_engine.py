@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from services.dm_guard import is_dm_test_mode, DM_TEST_WHITELIST
+
 logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -191,9 +193,19 @@ def fire_trigger(
     now = datetime.now(timezone.utc).isoformat()
     campaign = f"adm_{trigger['trigger_type']}_{datetime.now(timezone.utc).strftime('%Y%m%d')}"
 
+    # DM安全ゲート: テストモードチェック
+    test_mode = is_dm_test_mode()
+    if test_mode:
+        logger.info(f"[ADM] DM_TEST_MODE=ON: ホワイトリスト外はスキップ ({', '.join(sorted(DM_TEST_WHITELIST))})")
+
     for user in eligible_users:
         user_name = user["user_name"]
         user_cast = user.get("cast_name") or cast_name or ""
+
+        # DM安全ゲート: テストモード時ホワイトリスト外はスキップ
+        if test_mode and user_name not in DM_TEST_WHITELIST:
+            _log_trigger_skip(sb, trigger_id, account_id, user_cast, user_name, "skipped_test_mode")
+            continue
 
         # 日次上限チェック
         if daily_count + stats["queued"] >= daily_limit:

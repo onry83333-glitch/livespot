@@ -10,8 +10,8 @@
  *   npm start     — production (tsx)
  */
 
-import { loadTargets, getSupabase, POLL_INTERVALS, BATCH_CONFIG } from './config.js';
-import { registerTarget, startCollector, stopCollector, closeAllActiveSessions, getRegisteredCount, getStatus, getOnlineCasts, resetViewerRetries } from './collector.js';
+import { loadTargets, getSupabase, POLL_INTERVALS, BATCH_CONFIG, ROTATION_CONFIG } from './config.js';
+import { registerTarget, unregisterTarget, startCollector, stopCollector, closeAllActiveSessions, getRegisteredCount, getStatus, getOnlineCasts, resetViewerRetries } from './collector.js';
 import { startBatchFlush, stopBatchFlush, closeOrphanSessions } from './storage/supabase.js';
 import { startThumbnailCapture, stopThumbnailCapture } from './thumbnails.js';
 import { flushProfiles, getProfileCount } from './storage/spy-profiles.js';
@@ -20,6 +20,7 @@ import { getAuth } from './auth/index.js';
 import { TriggerEngine } from './triggers/index.js';
 import { evaluateAlerts } from './alerts/index.js';
 import { runCoinSync } from './coin-sync.js';
+import { SpyRotation } from './rotation.js';
 
 const log = createLogger('main');
 
@@ -67,12 +68,34 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 2. Register all targets
-  for (const t of targets) {
+  // 2. Register targets with spy rotation
+  const spyRotation = new SpyRotation();
+
+  // Always-on targets: registered_casts + spy_casts with auto_monitor=true
+  const alwaysOn = targets.filter(
+    (t) => t.source === 'registered_casts' || t.autoMonitor
+  );
+  const rotatableSpyCasts = targets.filter(
+    (t) => t.source === 'spy_casts' && !t.autoMonitor
+  );
+
+  // Register always-on targets
+  for (const t of alwaysOn) {
     registerTarget(t);
   }
 
-  log.info(`Registered ${getRegisteredCount()} targets`);
+  // Initialize rotation pool and select first batch
+  spyRotation.updatePool(rotatableSpyCasts);
+  const initialBatch = spyRotation.initialSelect();
+  for (const t of initialBatch) {
+    registerTarget(t);
+  }
+
+  log.info(
+    `Registered ${getRegisteredCount()} targets ` +
+    `(always-on=${alwaysOn.length}, rotation=${spyRotation.activeSize}/${spyRotation.poolSize}, ` +
+    `max=${ROTATION_CONFIG.maxConcurrent}, interval=${ROTATION_CONFIG.intervalMs / 1000}s)`
+  );
 
   // 2.5. Close orphan sessions from previous runs
   try {
@@ -91,13 +114,48 @@ async function main(): Promise<void> {
   setInterval(async () => {
     try {
       const freshTargets = await loadTargets();
-      for (const t of freshTargets) {
+
+      // Register new always-on targets
+      const freshAlwaysOn = freshTargets.filter(
+        (t) => t.source === 'registered_casts' || t.autoMonitor
+      );
+      for (const t of freshAlwaysOn) {
         registerTarget(t); // no-op if already registered
       }
+
+      // Update rotation pool (picks up new spy_casts)
+      const freshRotatable = freshTargets.filter(
+        (t) => t.source === 'spy_casts' && !t.autoMonitor
+      );
+      spyRotation.updatePool(freshRotatable);
     } catch (err) {
       log.error('Failed to reload targets', err);
     }
   }, 5 * 60 * 1000);
+
+  // 4.1. Spy rotation timer
+  setInterval(() => {
+    try {
+      // Build set of currently online cast names
+      const onlineNames = new Set(
+        getOnlineCasts().map((c) => c.castName)
+      );
+
+      const { toAdd, toRemove } = spyRotation.rotate(onlineNames);
+
+      // Unregister outgoing casts (closes WS, marks session)
+      for (const t of toRemove) {
+        unregisterTarget(t);
+      }
+
+      // Register incoming casts
+      for (const t of toAdd) {
+        registerTarget(t);
+      }
+    } catch (err) {
+      log.error('Spy rotation failed', err);
+    }
+  }, ROTATION_CONFIG.intervalMs);
 
   // 5. Periodic profile flush (every 10 minutes)
   setInterval(async () => {
@@ -199,6 +257,7 @@ async function main(): Promise<void> {
       await triggerEngine.initSnapshots(accountId);
     }
     log.info('TriggerEngine initialized');
+    log.info(`DM_TEST_MODE=${process.env.DM_TEST_MODE ?? 'true(default)'}, DM_TRIGGER_ENABLED=${process.env.DM_TRIGGER_ENABLED ?? 'true(default)'}`);
   } catch (err) {
     log.warn('TriggerEngine init failed (triggers disabled)', err);
   }

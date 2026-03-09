@@ -20,8 +20,8 @@ function buildThumbUrl(modelId: string): string {
 // GET: CDN画像をプロキシ返却
 export async function GET(request: NextRequest) {
   const modelId = request.nextUrl.searchParams.get('model_id');
-  if (!modelId) {
-    return NextResponse.json({ error: 'model_id required' }, { status: 400 });
+  if (!modelId || !/^[a-zA-Z0-9_\-]{1,100}$/.test(modelId)) {
+    return NextResponse.json({ error: 'model_id required (alphanumeric, max 100 chars)' }, { status: 400 });
   }
 
   const imageUrl = buildThumbUrl(modelId);

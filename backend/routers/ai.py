@@ -8,10 +8,17 @@ from services.llm_engine import generate_live_assist, generate_daily_report
 router = APIRouter()
 
 
+def _verify_account(sb, account_id: str, user_id: str):
+    result = sb.table("accounts").select("id").eq("id", account_id).eq("user_id", user_id).single().execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+
 @router.post("/live-assist")
 async def live_assist(body: AIAssistRequest, user=Depends(get_current_user)):
     """配信中AIアシスト（手動ボタン）"""
     sb = get_supabase_admin()
+    _verify_account(sb, body.account_id, user["user_id"])
 
     # Check AI usage limit
     profile = sb.table("profiles").select("ai_used_this_month, max_ai_per_month").eq("id", user["user_id"]).single().execute()
@@ -48,6 +55,7 @@ async def live_assist(body: AIAssistRequest, user=Depends(get_current_user)):
 async def daily_report(body: AIAssistRequest, user=Depends(get_current_user)):
     """日次レポート生成"""
     sb = get_supabase_admin()
+    _verify_account(sb, body.account_id, user["user_id"])
 
     profile = sb.table("profiles").select("ai_used_this_month, max_ai_per_month").eq("id", user["user_id"]).single().execute()
     if profile.data["max_ai_per_month"] > 0 and profile.data["ai_used_this_month"] >= profile.data["max_ai_per_month"]:
@@ -84,6 +92,7 @@ async def list_reports(
     user=Depends(get_current_user)
 ):
     sb = get_supabase_admin()
+    _verify_account(sb, account_id, user["user_id"])
     query = (sb.table("ai_reports")
              .select("*")
              .eq("account_id", account_id)

@@ -6,6 +6,7 @@ import { getSupabase } from '../config.js';
 import { createLogger } from '../utils/logger.js';
 import { isInCooldown, isDailyLimitReached, isSegmentAllowed } from './cooldown.js';
 import { renderTemplate } from './template.js';
+import { guardDmSend, DmGuardError } from './dm-guard.js';
 import type {
   DmTrigger,
   DmTriggerRow,
@@ -46,7 +47,7 @@ export class TriggerEngine {
     const { data, error } = await sb
       .from('dm_triggers')
       .select('*')
-      .eq('is_active', true);
+      .eq('enabled', true);
 
     if (error) {
       log.error(`Failed to load triggers: ${error.message}`);
@@ -295,9 +296,26 @@ export class TriggerEngine {
 
     // 4. Execute action
     if (trigger.action_type === 'direct_dm') {
-      const message = trigger.message_template
-        ? renderTemplate(trigger.message_template, ctx)
-        : `Hi ${ctx.userName}!`;
+      const campaign = `trigger_${trigger.trigger_type}_${trigger.id.substring(0, 8)}`;
+
+      // DM安全ゲート: テストモード時ホワイトリスト外はスキップ + campaign必須チェック
+      try {
+        guardDmSend(ctx.userName, campaign);
+      } catch (e) {
+        if (e instanceof DmGuardError) {
+          log.warn(`DM guard blocked: ${e.message}`);
+          await this.logTriggerAction(trigger, ctx, 'skipped_test_mode');
+          return;
+        }
+        throw e;
+      }
+
+      // Priority: RPC suggested template > trigger template > fallback
+      const message = ctx.suggestedTemplate
+        ? ctx.suggestedTemplate
+        : trigger.message_template
+          ? renderTemplate(trigger.message_template, ctx)
+          : `Hi ${ctx.userName}!`;
 
       // Insert into dm_send_log
       const { data: dmRow, error: dmError } = await sb
@@ -308,7 +326,7 @@ export class TriggerEngine {
           user_name: ctx.userName,
           message,
           status: 'queued',
-          campaign: `trigger_${trigger.trigger_type}_${trigger.id.substring(0, 8)}`,
+          campaign,
           template_name: trigger.trigger_name,
         })
         .select('id')
@@ -379,10 +397,16 @@ export class TriggerEngine {
       trigger_id: trigger.id,
       account_id: ctx.accountId,
       cast_name: ctx.castName,
-      user_id: 0,
-      username: ctx.userName,
-      status: actionTaken,
-      reason: errorMessage || `${trigger.trigger_type}: segment=${ctx.segment || 'any'}, tokens=${ctx.totalTokens || 0}`,
+      user_name: ctx.userName,
+      action_taken: actionTaken,
+      dm_send_log_id: dmSendLogId ?? null,
+      enrollment_id: enrollmentId ?? null,
+      error_message: errorMessage || null,
+      metadata: {
+        trigger_type: trigger.trigger_type,
+        segment: ctx.segment || null,
+        tokens: ctx.totalTokens || 0,
+      },
     });
 
     if (error) {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabase } from '@/lib/supabase/server';
 import { StripchatAPI } from '@/lib/stripchat-api';
 import { checkDailyDmLimit } from '@/lib/dm-safety';
+import { isDmTestMode, DM_TEST_WHITELIST } from '@/lib/dm-guard';
 
 // ============================================================
 // POST /api/dm/send — 単発DM送信
@@ -34,6 +35,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: 'target_username and message are required' },
       { status: 400 },
+    );
+  }
+
+  // DM安全ゲート: campaign必須チェック
+  if (!body.campaign && !dm_log_id) {
+    // dm_log_id がある場合は既存キューの実行なのでcampaignは登録済み
+    return NextResponse.json(
+      { error: 'campaign is required. campaign_idなしのDM送信は許可されていません。' },
+      { status: 400 },
+    );
+  }
+
+  // DM安全ゲート: テストモード時ホワイトリスト外ブロック
+  if (isDmTestMode() && !DM_TEST_WHITELIST.has(target_username)) {
+    return NextResponse.json(
+      {
+        error: `[DM_TEST_MODE] ${target_username} はホワイトリスト外のためブロック`,
+        test_mode: true,
+        whitelist: Array.from(DM_TEST_WHITELIST),
+      },
+      { status: 403 },
     );
   }
 
@@ -77,8 +99,22 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // P0-5: キャスト身元検証ゲート — cast_name→registered_casts.stripchat_user_id→session一致確認
-  if (body.cast_name && session.stripchat_user_id) {
+  // P0-5: キャスト身元検証ゲート — cast_name必須、stripchat_user_id照合
+  if (!body.cast_name) {
+    return NextResponse.json(
+      { error: 'cast_name is required. キャスト名なしのDM送信は許可されていません。' },
+      { status: 400 },
+    );
+  }
+
+  if (!session.stripchat_user_id) {
+    return NextResponse.json(
+      { error: 'セッションにstripchat_user_idがありません。Chrome拡張でセッションを再同期してください。' },
+      { status: 400 },
+    );
+  }
+
+  {
     const { data: rc } = await supabase
       .from('registered_casts')
       .select('stripchat_user_id')
@@ -87,7 +123,17 @@ export async function POST(req: NextRequest) {
       .eq('is_active', true)
       .maybeSingle();
 
-    if (rc?.stripchat_user_id && String(rc.stripchat_user_id) !== String(session.stripchat_user_id)) {
+    if (!rc?.stripchat_user_id) {
+      return NextResponse.json(
+        {
+          error: 'CAST_IDENTITY_UNREGISTERED',
+          detail: `cast=${body.cast_name} のstripchat_user_idが未登録です。キャスト設定でIDを登録してください。`,
+        },
+        { status: 403 },
+      );
+    }
+
+    if (String(rc.stripchat_user_id) !== String(session.stripchat_user_id)) {
       return NextResponse.json(
         {
           error: 'CAST_IDENTITY_MISMATCH',
@@ -137,7 +183,8 @@ export async function POST(req: NextRequest) {
           sent_at: new Date().toISOString(),
           error: null,
         })
-        .eq('id', dm_log_id);
+        .eq('id', dm_log_id)
+        .eq('account_id', account.id);
     }
 
     return NextResponse.json({
@@ -156,7 +203,8 @@ export async function POST(req: NextRequest) {
         sent_via: 'api',
         error: result.error,
       })
-      .eq('id', dm_log_id);
+      .eq('id', dm_log_id)
+      .eq('account_id', account.id);
   }
 
   if (result.sessionExpired) {

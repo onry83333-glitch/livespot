@@ -453,13 +453,15 @@ async function refreshCookiesViaPlaywrightLogin(
 
     // stripchat_sessions + state.json を更新
     const sb = getSupabase();
+    const castName = accountCasts.find(c => String(c.stripchat_user_id) === userId || String(c.stripchat_model_id) === userId)?.cast_name || accountCasts[0]?.cast_name || null;
     await sb.from('stripchat_sessions').upsert({
       account_id: accountId,
+      cast_name: castName,
       cookies_json: cookiesJson,
       stripchat_user_id: userId,
       is_valid: true,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'account_id' });
+    }, { onConflict: 'account_id,cast_name' });
 
     try {
       const { STATE_FILE } = await import('./coin-auth.js');
@@ -491,6 +493,7 @@ async function refreshCookiesViaPlaywrightLogin(
  */
 async function refreshCookiesViaApi(
   accountId: string,
+  accountCasts?: RegisteredCast[],
 ): Promise<{ cookieHeader: string; userId: string } | null> {
   const { username, password } = PLAYWRIGHT_CONFIG;
   if (!username || !password) {
@@ -557,13 +560,15 @@ async function refreshCookiesViaApi(
 
     // stripchat_sessions更新
     const sb = getSupabase();
+    const castName = accountCasts?.find(c => String(c.stripchat_user_id) === userId || String(c.stripchat_model_id) === userId)?.cast_name || accountCasts?.[0]?.cast_name || null;
     await sb.from('stripchat_sessions').upsert({
       account_id: accountId,
+      cast_name: castName,
       cookies_json: cookiesJson,
       stripchat_user_id: userId,
       is_valid: true,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'account_id' });
+    }, { onConflict: 'account_id,cast_name' });
 
     return { cookieHeader, userId };
   } catch (err) {
@@ -609,7 +614,7 @@ export async function runCoinSync(): Promise<void> {
     if (result === 'auth_failed') {
       // 方式1: Login API直叩き（STRIPCHAT_USERNAME/PASSWORD設定時）
       log.info(`[${accountId}] Login APIでcookie自動取得を試行...`);
-      const fresh = await refreshCookiesViaApi(accountId);
+      const fresh = await refreshCookiesViaApi(accountId, accountCasts);
       if (fresh) {
         const retryResult = await syncAccountCasts(sb, accountId, accountCasts, fresh.userId, fresh.cookieHeader, true);
         if (retryResult === 'ok') {
@@ -643,25 +648,23 @@ export async function runCoinSync(): Promise<void> {
 
     // MV + セグメント更新（成功時のみ実行）
     if (overallSuccess) {
-      try {
-        await sb.rpc('refresh_paying_users');
-        log.info(`[${accountId}] refresh_paying_users 完了`);
-      } catch {
-        log.debug('refresh_paying_users スキップ');
+      {
+        const { error: rpErr } = await sb.rpc('refresh_paying_users');
+        if (rpErr) log.warn(`[${accountId}] refresh_paying_users エラー: ${rpErr.message}`);
+        else log.info(`[${accountId}] refresh_paying_users 完了`);
       }
 
-      try {
-        await sb.rpc('refresh_segments', { p_account_id: accountId });
-        log.info(`[${accountId}] refresh_segments 完了`);
-      } catch {
-        log.debug('refresh_segments スキップ');
+      {
+        const { data: segCount, error: segErr } = await sb.rpc('refresh_segments', { p_account_id: accountId });
+        if (segErr) log.warn(`[${accountId}] refresh_segments エラー: ${segErr.message}`);
+        else log.info(`[${accountId}] refresh_segments 完了: ${segCount}件更新`);
       }
     }
   }
 
   // 5. pipeline_status 更新（実際の結果を反映）
   try {
-    await sb.from('pipeline_status').upsert(
+    const { error: pipeErr } = await sb.from('pipeline_status').upsert(
       {
         pipeline_name: 'CoinSync',
         status: 'auto',
@@ -676,8 +679,9 @@ export async function runCoinSync(): Promise<void> {
       },
       { onConflict: 'pipeline_name' },
     );
-  } catch {
-    log.debug('pipeline_status更新スキップ');
+    if (pipeErr) log.warn(`pipeline_status更新失敗: ${pipeErr.message}`);
+  } catch (err) {
+    log.warn(`pipeline_status更新エラー: ${err}`);
   }
 
   if (overallSuccess) {
@@ -730,13 +734,15 @@ async function syncAccount(
       : 'auth_failed' as const;
     if (result === 'ok') {
       // 成功 → stripchat_sessions も更新
+      const fileCastName = accountCasts.find(c => String(c.stripchat_user_id) === fileUserId || String(c.stripchat_model_id) === fileUserId)?.cast_name || accountCasts[0]?.cast_name || null;
       await sb.from('stripchat_sessions').upsert({
         account_id: accountId,
+        cast_name: fileCastName,
         cookies_json: cookiesFromFile.cookiesJson,
         stripchat_user_id: fileUserId,
         is_valid: true,
         updated_at: new Date().toISOString(),
-      }, { onConflict: 'account_id' });
+      }, { onConflict: 'account_id,cast_name' });
       return 'ok';
     }
     // 方式0c: Cloudflare tokenだけが期限切れの可能性 → Playwright headlessでリフレッシュ
@@ -747,13 +753,15 @@ async function syncAccount(
         const retryResult = await syncAccountCasts(sb, accountId, accountCasts, refreshed.userId, refreshed.cookieHeader, true);
         if (retryResult === 'ok') {
           // 成功 → stripchat_sessions + state.json を更新
+          const refreshCastName = accountCasts.find(c => String(c.stripchat_user_id) === refreshed.userId || String(c.stripchat_model_id) === refreshed.userId)?.cast_name || accountCasts[0]?.cast_name || null;
           await sb.from('stripchat_sessions').upsert({
             account_id: accountId,
+            cast_name: refreshCastName,
             cookies_json: refreshed.cookiesJson,
             stripchat_user_id: refreshed.userId,
             is_valid: true,
             updated_at: new Date().toISOString(),
-          }, { onConflict: 'account_id' });
+          }, { onConflict: 'account_id,cast_name' });
 
           // state.json にも保存（次回はPlaywrightなしで使える可能性）
           try {
@@ -936,10 +944,20 @@ async function syncAccountCasts(
   isAuthenticated: boolean,
 ): Promise<'ok' | 'auth_failed' | 'skipped'> {
   let authFailed = false;
+  // 同一userIdのAPI重複呼出防止（スタジオアカウントでは全キャスト共通のuserIdで
+  // Transactions APIが返すため、同じuserIdで2回目以降の呼出は不要）
+  const syncedUserIds = new Set<string>();
 
   for (const cast of accountCasts) {
     try {
-      const result = await syncCastCoins(accountId, cast.cast_name, userId, cookieHeader, isAuthenticated);
+      // キャスト固有のmodel_idがあればそれを使う、なければ共通userId
+      const castUserId = cast.stripchat_model_id || cast.stripchat_user_id || userId;
+      if (syncedUserIds.has(String(castUserId))) {
+        log.info(`[${cast.cast_name}] userId=${castUserId} は同期済み — スキップ`);
+        continue;
+      }
+      const result = await syncCastCoins(accountId, cast.cast_name, String(castUserId), cookieHeader, isAuthenticated);
+      syncedUserIds.add(String(castUserId));
       if (result === 'auth_failed') authFailed = true;
     } catch (err) {
       log.error(`[${cast.cast_name}] コイン同期失敗`, err);
@@ -961,32 +979,51 @@ async function syncCastCoins(
 ): Promise<'ok' | 'auth_failed'> {
   const sb = getSupabase();
 
-  // 最終同期日を取得（差分同期用）
+  // 最終トランザクション日時を取得（差分同期用）
+  // NOTE: synced_atではなくdateを使う（ignoreDuplicates=trueでsynced_atが更新されないため）
   const { data: lastTx } = await sb
     .from('coin_transactions')
-    .select('synced_at')
+    .select('date, synced_at')
     .eq('account_id', accountId)
     .eq('cast_name', castName)
-    .order('synced_at', { ascending: false })
+    .order('date', { ascending: false })
     .limit(1);
 
+  const lastDate = lastTx?.[0]?.date;
   const lastSyncedAt = lastTx?.[0]?.synced_at;
-  // 差分: 最終同期から1日バッファ引き
-  const sinceDate = lastSyncedAt
-    ? new Date(new Date(lastSyncedAt).getTime() - 24 * 60 * 60 * 1000)
+
+  // ギャップ検出: 前回同期から2時間以上経過していたら、バッファを拡張
+  const GAP_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2時間
+  let bufferMs = 24 * 60 * 60 * 1000; // デフォルト1日バッファ
+
+  if (lastSyncedAt) {
+    const sinceLast = Date.now() - new Date(lastSyncedAt).getTime();
+    if (sinceLast > GAP_THRESHOLD_MS) {
+      // ギャップ分 + 1日バッファ
+      bufferMs = sinceLast + 24 * 60 * 60 * 1000;
+      log.warn(
+        `[${castName}] 同期ギャップ検出: 前回同期から${Math.round(sinceLast / 3600000)}時間経過 → バッファ拡張 ${Math.round(bufferMs / 3600000)}時間`,
+      );
+    }
+  }
+
+  const sinceDate = lastDate
+    ? new Date(new Date(lastDate).getTime() - bufferMs)
     : null;
 
   log.info(
     `[${castName}] 差分同期開始 (since=${sinceDate?.toISOString() || 'フル同期'})`,
   );
 
-  // Earnings API呼び出し
+  // Earnings API呼び出し（offset-basedページネーション）
+  // NOTE: Stripchat APIは`page`パラメータを無視する。`offset`を使う必要がある。
   const allTx: Transaction[] = [];
-  let page = 1;
+  let offset = 0;
   let hitOldData = false;
+  const maxItems = MAX_PAGES * PAGE_SIZE;
 
-  while (page <= MAX_PAGES && !hitOldData) {
-    const url = `${EARNINGS_API}/${userId}/transactions?page=${page}&limit=${PAGE_SIZE}`;
+  while (offset < maxItems && !hitOldData) {
+    const url = `${EARNINGS_API}/${userId}/transactions?offset=${offset}&limit=${PAGE_SIZE}`;
 
     let resp: Response;
     try {
@@ -999,7 +1036,7 @@ async function syncCastCoins(
         },
       });
     } catch (err) {
-      log.error(`[${castName}] API接続エラー page=${page}`, err);
+      log.error(`[${castName}] API接続エラー offset=${offset}`, err);
       break;
     }
 
@@ -1017,11 +1054,11 @@ async function syncCastCoins(
     if (resp.status === 429) {
       log.warn(`[${castName}] レート制限 — 10秒待機`);
       await sleep(10000);
-      continue; // 同じページをリトライ
+      continue; // 同じoffsetをリトライ
     }
 
     if (!resp.ok) {
-      log.error(`[${castName}] API ${resp.status} page=${page}`);
+      log.error(`[${castName}] API ${resp.status} offset=${offset}`);
       break;
     }
 
@@ -1029,7 +1066,7 @@ async function syncCastCoins(
     try {
       data = (await resp.json()) as typeof data;
     } catch {
-      log.error(`[${castName}] JSONパース失敗 page=${page}`);
+      log.error(`[${castName}] JSONパース失敗 offset=${offset}`);
       break;
     }
 
@@ -1047,7 +1084,7 @@ async function syncCastCoins(
     }
 
     if (items.length < PAGE_SIZE) break;
-    page++;
+    offset += PAGE_SIZE;
     await sleep(REQUEST_DELAY_MS);
   }
 
@@ -1090,7 +1127,7 @@ async function syncCastCoins(
     const { error } = await sb
       .from('coin_transactions')
       .upsert(batch, {
-        onConflict: 'account_id,user_name,cast_name,tokens,date',
+        onConflict: 'account_id,stripchat_tx_id',
         ignoreDuplicates: true,
       });
 
@@ -1099,6 +1136,6 @@ async function syncCastCoins(
     }
   }
 
-  log.info(`[${castName}] ${rows.length}件同期完了 (${page - 1}ページ取得)`);
+  log.info(`[${castName}] ${rows.length}件同期完了 (offset=${offset}まで取得)`);
   return 'ok';
 }

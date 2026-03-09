@@ -150,14 +150,22 @@ async function main() {
 
   if (accounts && accounts.length > 0) {
     const accountId = accounts[0].account_id;
+    // cast_name解決: userIdからregistered_castsでマッチ
+    const { data: castMatch } = await sb.from('registered_casts')
+      .select('cast_name')
+      .eq('account_id', accountId).eq('is_active', true)
+      .or(`stripchat_user_id.eq.${resolvedUserId},stripchat_model_id.eq.${resolvedUserId}`)
+      .limit(1);
+    const castName = castMatch?.[0]?.cast_name || null;
     await sb.from('stripchat_sessions').upsert({
       account_id: accountId,
+      cast_name: castName,
       cookies_json: cookiesJson,
       stripchat_user_id: resolvedUserId,
       is_valid: true,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'account_id' });
-    console.log(`✓ Supabase stripchat_sessions 更新完了`);
+    }, { onConflict: 'account_id,cast_name' });
+    console.log(`✓ Supabase stripchat_sessions 更新完了 (cast=${castName})`);
   }
 
   console.log('\n=== インポート完了 ===');

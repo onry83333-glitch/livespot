@@ -24,8 +24,18 @@ export default function NewCastPage() {
   const [revenueShareRate, setRevenueShareRate] = useState('50');
   const [notes, setNotes] = useState('');
 
+  const [genre, setGenre] = useState('');
+  const [benchmark, setBenchmark] = useState('');
+  const [category, setCategory] = useState('');
+  const [screenshotInterval, setScreenshotInterval] = useState('5');
+  const [gcRatePerMinute, setGcRatePerMinute] = useState('12');
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const GENRE_PRESETS = ['女性単体', '絡み配信', 'カップル', 'レズ', '3P+', '男性単体'];
+  const BENCHMARK_PRESETS = ['新人', '中堅', 'ランカー', 'ベテラン'];
+  const CATEGORY_PRESETS = ['人妻', '女子大生', 'ギャル', 'お姉さん', '清楚系', '熟女', 'コスプレ', 'その他'];
 
   // アカウント取得
   useEffect(() => {
@@ -64,6 +74,8 @@ export default function NewCastPage() {
         return;
       }
       // 無効化されたキャストを復活
+      const siVal = parseInt(screenshotInterval);
+      const gcVal = parseFloat(gcRatePerMinute);
       const { error: reactivateErr } = await sb
         .from('registered_casts')
         .update({
@@ -73,6 +85,11 @@ export default function NewCastPage() {
           stripchat_model_id: stripchatModelId.trim() || null,
           stripchat_url: platform === 'stripchat' ? `https://stripchat.com/${name}` : null,
           notes: notes.trim() || null,
+          genre: genre || null,
+          benchmark: benchmark || null,
+          category: category || null,
+          screenshot_interval: !isNaN(siVal) ? siVal : 5,
+          gc_rate_per_minute: !isNaN(gcVal) ? gcVal : 12,
           updated_at: new Date().toISOString(),
         })
         .eq('id', existing.id);
@@ -80,6 +97,8 @@ export default function NewCastPage() {
       if (reactivateErr) { setError(reactivateErr.message); setSaving(false); return; }
     } else {
       // 新規INSERT
+      const siVal2 = parseInt(screenshotInterval);
+      const gcVal2 = parseFloat(gcRatePerMinute);
       const { error: insertErr } = await sb
         .from('registered_casts')
         .insert({
@@ -90,6 +109,11 @@ export default function NewCastPage() {
           stripchat_model_id: stripchatModelId.trim() || null,
           stripchat_url: platform === 'stripchat' ? `https://stripchat.com/${name}` : null,
           notes: notes.trim() || null,
+          genre: genre || null,
+          benchmark: benchmark || null,
+          category: category || null,
+          screenshot_interval: !isNaN(siVal2) ? siVal2 : 5,
+          gc_rate_per_minute: !isNaN(gcVal2) ? gcVal2 : 12,
         });
 
       if (insertErr) {
@@ -201,6 +225,71 @@ export default function NewCastPage() {
               placeholder="数字またはID文字列" />
             <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
               API連携に使用（後から設定可）
+            </p>
+          </div>
+        </div>
+
+        {/* タグ */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+              ジャンル
+            </label>
+            <select value={genre} onChange={e => setGenre(e.target.value)}
+              className="input-glass text-sm py-2.5 px-3 w-full">
+              <option value="">未設定</option>
+              {GENRE_PRESETS.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+              ランク
+            </label>
+            <select value={benchmark} onChange={e => setBenchmark(e.target.value)}
+              className="input-glass text-sm py-2.5 px-3 w-full">
+              <option value="">未設定</option>
+              {BENCHMARK_PRESETS.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+              カテゴリ
+            </label>
+            <select value={category} onChange={e => setCategory(e.target.value)}
+              className="input-glass text-sm py-2.5 px-3 w-full">
+              <option value="">未設定</option>
+              {CATEGORY_PRESETS.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* 運用設定 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+              スクリーンショット間隔
+            </label>
+            <select value={screenshotInterval} onChange={e => setScreenshotInterval(e.target.value)}
+              className="input-glass text-sm py-2.5 px-3 w-full">
+              <option value="0">OFF</option>
+              <option value="1">1分</option>
+              <option value="3">3分</option>
+              <option value="5">5分（デフォルト）</option>
+              <option value="10">10分</option>
+              <option value="15">15分</option>
+              <option value="30">30分</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+              GCレート (tk/分)
+            </label>
+            <input type="number" min="0" step="0.1"
+              value={gcRatePerMinute} onChange={e => setGcRatePerMinute(e.target.value)}
+              className="input-glass text-sm py-2.5 px-3 w-full"
+              placeholder="12" />
+            <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+              グループチャット1分あたりのトークン消費（デフォルト12）
             </p>
           </div>
         </div>

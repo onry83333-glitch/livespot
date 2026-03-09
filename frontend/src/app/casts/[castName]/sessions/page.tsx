@@ -278,12 +278,12 @@ export default function SessionListPage() {
   /* ------ Fallback: spy_messages直接クエリ ------ */
   const loadFallback = useCallback(async () => {
     const { data: rawData } = await sb
-      .from('spy_messages')
-      .select('session_id, cast_name, session_title, message_time, user_name, tokens')
+      .from('chat_logs')
+      .select('session_id, cast_name, session_title, timestamp, username, tokens')
       .eq('account_id', accountId!)
       .eq('cast_name', castName)
       .not('session_id', 'is', null)
-      .order('message_time', { ascending: false })
+      .order('timestamp', { ascending: false })
       .limit(5000);
 
     if (!rawData || rawData.length === 0) {
@@ -301,7 +301,7 @@ export default function SessionListPage() {
       if (!sessionMap.has(r.session_id)) {
         sessionMap.set(r.session_id, { session_id: r.session_id, cast_name: r.cast_name, session_title: r.session_title, messages: [] });
       }
-      sessionMap.get(r.session_id)!.messages.push({ time: r.message_time, user_name: r.user_name, tokens: r.tokens || 0 });
+      sessionMap.get(r.session_id)!.messages.push({ time: r.timestamp, user_name: r.username, tokens: r.tokens || 0 });
     }
 
     const rows: SessionRow[] = [];

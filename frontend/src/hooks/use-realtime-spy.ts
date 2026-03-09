@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
+import { mapChatLog } from '@/lib/table-mappers';
+import { getTodayStartJST } from '@/lib/utils';
 import type { SpyMessage } from '@/types';
 
 interface UseRealtimeSpyOptions {
@@ -22,10 +24,10 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
   // 既知のメッセージIDセット（重複防止）
   const knownIdsRef = useRef(new Set<number>());
 
-  // キャスト一覧を取得（spy_messagesのdistinct cast_name — 直近のみ）
+  // キャスト一覧を取得（chat_logsのdistinct cast_name — 直近のみ）
   const loadCastNames = useCallback(async () => {
     let query = supabaseRef.current
-      .from('spy_messages')
+      .from('chat_logs')
       .select('cast_name')
       .order('created_at', { ascending: false })
       .limit(2000);
@@ -45,9 +47,9 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
   // DBからメッセージを取得（既存データとマージ）
   const loadMessages = useCallback(async () => {
     let query = supabaseRef.current
-      .from('spy_messages')
+      .from('chat_logs')
       .select('*')
-      .order('message_time', { ascending: false })
+      .order('timestamp', { ascending: false })
       .limit(INITIAL_LOAD_LIMIT);
     if (accountId) query = query.eq('account_id', accountId);
 
@@ -57,7 +59,7 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
       return;
     }
     if (data) {
-      const sorted = data.reverse(); // 古い順に並べる
+      const sorted = data.map(mapChatLog).reverse(); // chat_logs→SpyMessageに変換 + 古い順に並べる
 
       // 既知IDセットを更新
       const newIds = new Set<number>();
@@ -92,15 +94,15 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
   const insertDemoData = useCallback(async (accountId: string): Promise<string | null> => {
     const now = new Date();
     const demoMessages = [
-      { account_id: accountId, cast_name: 'サクラ', message_time: new Date(now.getTime() - 4000).toISOString(), msg_type: 'chat', user_name: 'BigSpender88', message: 'サクラちゃん今日もかわいいね！', tokens: 0, is_vip: false, metadata: {} },
-      { account_id: accountId, cast_name: 'サクラ', message_time: new Date(now.getTime() - 3000).toISOString(), msg_type: 'tip', user_name: 'VIP_Dragon', message: 'いつも応援してるよ！', tokens: 500, is_vip: true, metadata: {} },
-      { account_id: accountId, cast_name: 'サクラ', message_time: new Date(now.getTime() - 2000).toISOString(), msg_type: 'enter', user_name: 'NewUser_001', message: null, tokens: 0, is_vip: false, metadata: {} },
-      { account_id: accountId, cast_name: 'ミキ', message_time: new Date(now.getTime() - 1000).toISOString(), msg_type: 'tip', user_name: 'WhaleKing', message: 'ミキちゃんにプレゼント！', tokens: 2000, is_vip: true, metadata: {} },
-      { account_id: accountId, cast_name: 'サクラ', message_time: now.toISOString(), msg_type: 'chat', user_name: 'Regular_Fan', message: '今日の配信何時まで？', tokens: 0, is_vip: false, metadata: {} },
+      { account_id: accountId, cast_name: 'サクラ', timestamp: new Date(now.getTime() - 4000).toISOString(), message_type: 'chat', username: 'BigSpender88', message: 'サクラちゃん今日もかわいいね！', tokens: 0, is_vip: false, metadata: {} },
+      { account_id: accountId, cast_name: 'サクラ', timestamp: new Date(now.getTime() - 3000).toISOString(), message_type: 'tip', username: 'VIP_Dragon', message: 'いつも応援してるよ！', tokens: 500, is_vip: true, metadata: {} },
+      { account_id: accountId, cast_name: 'サクラ', timestamp: new Date(now.getTime() - 2000).toISOString(), message_type: 'enter', username: 'NewUser_001', message: null, tokens: 0, is_vip: false, metadata: {} },
+      { account_id: accountId, cast_name: 'ミキ', timestamp: new Date(now.getTime() - 1000).toISOString(), message_type: 'tip', username: 'WhaleKing', message: 'ミキちゃんにプレゼント！', tokens: 2000, is_vip: true, metadata: {} },
+      { account_id: accountId, cast_name: 'サクラ', timestamp: now.toISOString(), message_type: 'chat', username: 'Regular_Fan', message: '今日の配信何時まで？', tokens: 0, is_vip: false, metadata: {} },
     ];
 
     const { error } = await supabaseRef.current
-      .from('spy_messages')
+      .from('chat_logs')
       .insert(demoMessages);
 
     if (error) {
@@ -131,11 +133,11 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
         {
           event: 'INSERT',
           schema: 'public',
-          table: 'spy_messages',
+          table: 'chat_logs',
           ...(accountId ? { filter: `account_id=eq.${accountId}` } : {}),
         },
         (payload) => {
-          const msg = payload.new as SpyMessage;
+          const msg = mapChatLog(payload.new) as SpyMessage;
 
           // 重複防止: 既にDBロードで取得済みのメッセージはスキップ
           if (knownIdsRef.current.has(msg.id)) return;
@@ -186,16 +188,17 @@ export function useRealtimeSpy({ castName, accountId, enabled = true }: UseRealt
     ? allMessages.filter(m => m.cast_name === castName)
     : allMessages;
 
-  // キャストの今日のspy_messagesを削除（account_idフィルタ付き）
+  // キャストの今日のchat_logsを削除（account_idフィルタ付き）
   const deleteCastMessages = useCallback(async (targetCastName: string): Promise<string | null> => {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    if (!accountId) return 'account_id が不明です';
+    const todayStart = getTodayStartJST();
 
     const { error } = await supabaseRef.current
-      .from('spy_messages')
+      .from('chat_logs')
       .delete()
+      .eq('account_id', accountId)
       .eq('cast_name', targetCastName)
-      .gte('message_time', todayStart.toISOString());
+      .gte('timestamp', todayStart.toISOString());
 
     if (error) {
       return error.message;

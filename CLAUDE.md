@@ -375,6 +375,7 @@ migrations/
   059_fix_dm_batch_cast_name.sql  # create_dm_batch RPC cast_name パラメータ追加
   064_dm_triggers.sql           # DMトリガーエンジン（dm_triggers + dm_trigger_logs + デフォルト7件）
   065_spy_analysis_rpcs.sql      # SPY集計・トレンド分析RPC 5関数（配信/課金パターン/成長曲線/ゴール/マーケットトレンド）
+  098_v2_schema.sql              # SLS v2 新テーブル（chat_logs + viewer_snapshots + user_profiles）+ sessions補強
 ```
 
 ---
@@ -419,6 +420,9 @@ migrations/
 | stripchat_sessions | id (UUID) | Stripchatセッション同期 |
 | dm_triggers | id (UUID) | DM自動トリガー定義（7種） |
 | dm_trigger_logs | id (BIGSERIAL) | トリガー発火ログ（クールダウン管理） |
+| chat_logs | id (BIGSERIAL) | v2チャットログ（session_id UUID FK、Realtime有効） |
+| viewer_snapshots | id (BIGSERIAL) | v2視聴者スナップショット（viewers JSONB） |
+| user_profiles | id (UUID) | v2ユーザープロフィール（UNIQUE(account_id, cast_name, username)） |
 
 ### spy_messages カラム
 ```
@@ -1023,7 +1027,7 @@ claude
 ## Known Issues
 
 - SPYログベースの売上表示はchat内tip/giftのみ（private/cam2cam/GC/ticket未計上）→ セッション詳細にコインAPI集計を並列表示する改善が必要
-- テストDMデータ（campaign LIKE 'bulk_%', 'pipe3_bulk_%', '20250217_test_%'）が本番DBに残留 → 手動DELETE待ち
+- ~~テストDMデータ~~ → ✅ 2026-03-05 削除済み（Migration 100: 464件全削除）
 - dm_scenarios の CHECK制約にCR文字混入の可能性（Supabase SQL Editor経由のコピペ問題）
 
 ### Production Hardening（品質巡回で発見）

@@ -132,7 +132,12 @@ async def sync_coins(body: CoinSyncRequest, user=Depends(get_current_user)):
     tx_rows = []
     for tx in all_transactions:
         user_name = tx.get("userName") or tx.get("user_name") or tx.get("username") or ""
-        tokens = int(tx.get("tokens") or tx.get("amount") or 0)
+        try:
+            tokens_raw = tx.get("tokens") or tx.get("amount") or 0
+            tokens = int(float(str(tokens_raw)))
+        except (ValueError, TypeError):
+            logger.warning(f"Token parse error: {tx.get('tokens')}/{tx.get('amount')}, skipping")
+            continue
         tx_type = tx.get("type") or tx.get("source") or "unknown"
         tx_date = tx.get("date") or tx.get("createdAt") or tx.get("created_at") or datetime.now(timezone.utc).isoformat()
         source_detail = tx.get("description") or tx.get("sourceDetail") or ""
@@ -145,7 +150,7 @@ async def sync_coins(body: CoinSyncRequest, user=Depends(get_current_user)):
         tx_rows.append(
             {
                 "account_id": body.account_id,
-                "cast_name": getattr(body, "cast_name", None),
+                "cast_name": body.cast_name or "",
                 "user_name": user_name,
                 "tokens": tokens,
                 "type": tx_type,
@@ -413,19 +418,24 @@ async def upload_coin_transactions(
     _verify_account_ownership(sb, account_id, user["user_id"])
 
     tx_list = json.loads(transactions)
-    rows = [
-        {
+    rows = []
+    for tx in tx_list:
+        try:
+            tokens = int(float(str(tx.get("tokens", 0))))
+        except (ValueError, TypeError):
+            logger.warning(f"Token parse error in coin-transactions: {tx.get('tokens')}, skipping")
+            continue
+        if tokens <= 0:
+            continue
+        rows.append({
             "account_id": account_id,
             "user_name": tx["user_name"],
-            "cast_name": tx.get("cast_name", ""),
-            "tokens": tx["tokens"],
+            "cast_name": tx.get("cast_name") or "",
+            "tokens": tokens,
             "type": tx["type"],
             "date": tx["date"],
             "source_detail": tx.get("source_detail", ""),
-        }
-        for tx in tx_list
-        if int(tx.get("tokens", 0)) > 0
-    ]
+        })
 
     if rows:
         sb.table("coin_transactions").upsert(

@@ -1,7 +1,7 @@
 'use client';
 
 import type { SpyMessage } from '@/types';
-import { getUserHashColor, tokensToJPY } from '@/lib/utils';
+import { getUserHashColor, formatTokens, tokensToJPY } from '@/lib/utils';
 
 /** Stripchat league color mapping (7 tiers, extracted from DOM color-league-{name} class) */
 const LEAGUE_COLORS: Record<string, string> = {
@@ -82,7 +82,7 @@ export function ChatMessage({ message: msg }: { message: SpyMessage }) {
       {/* トークン (B.2: 大きめ + 円換算) */}
       {msg.tokens > 0 && (
         <span className={`font-bold mr-2 ${isTip ? 'text-sm' : 'text-[11px]'}`} style={{ color: 'var(--accent-amber)' }}>
-          [{msg.tokens.toLocaleString()} tk / {tokensToJPY(msg.tokens)}]
+          [{formatTokens(msg.tokens)} / {tokensToJPY(msg.tokens)}]
         </span>
       )}
 

@@ -1,4 +1,5 @@
 import { getSupabase, BATCH_CONFIG } from '../config.js';
+import { normalizeSession } from '../normalizer/index.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('storage');
@@ -37,7 +38,7 @@ export function enqueue(table: string, row: Record<string, unknown>, onConflict?
   }
 }
 
-async function flushBuffer(): Promise<void> {
+export async function flushBuffer(): Promise<void> {
   if (buffer.length === 0) return;
 
   const items = buffer.splice(0);
@@ -87,7 +88,7 @@ export async function upsertViewers(
   accountId: string,
   castName: string,
   sessionId: string | null,
-  viewers: { userName: string; userIdStripchat: string; league: string; level: number; isFanClub: boolean }[],
+  viewers: { userName: string; userIdStripchat: string; league: string; level: number; isFanClub: boolean; isNew?: boolean }[],
 ): Promise<number> {
   const sb = getSupabase();
   const now = new Date().toISOString();
@@ -147,15 +148,27 @@ export async function openSession(
   castName: string,
   sessionId: string,
   startedAt: string,
+  broadcastTitle?: string | null,
 ): Promise<string> {
+  // Normalizer: 必須フィールド + UUID形式 + ISO timestamp 検証
+  const validated = normalizeSession({ sessionId, accountId, castName, startedAt });
+  if (!validated) {
+    log.error(`Session rejected by normalizer: ${castName} (session=${sessionId})`);
+    return sessionId;
+  }
+
   const sb = getSupabase();
-  const { error } = await sb.from('sessions').insert({
-    session_id: sessionId,
-    account_id: accountId,
-    title: castName,
-    cast_name: castName,
-    started_at: startedAt,
-  });
+  const insertData: Record<string, unknown> = {
+    session_id: validated.sessionId,
+    account_id: validated.accountId,
+    title: validated.castName,
+    cast_name: validated.castName,
+    started_at: validated.startedAt,
+  };
+  if (broadcastTitle) {
+    insertData.broadcast_title = broadcastTitle;
+  }
+  const { error } = await sb.from('sessions').insert(insertData);
   if (error) {
     // 部分ユニーク制約 idx_sessions_one_active_per_cast で弾かれた場合、
     // 既存のアクティブセッションIDを返す（複数インスタンス起動対策）
@@ -263,6 +276,69 @@ export async function closeStaleSessionsForCast(
     return 0;
   }
   return data?.length ?? 0;
+}
+
+/** プロセス再起動時: 最新の未閉鎖セッションを取得（セッション分割防止） */
+export async function resumeExistingSession(
+  accountId: string,
+  castName: string,
+): Promise<{ session_id: string; started_at: string } | null> {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from('sessions')
+    .select('session_id, started_at')
+    .eq('account_id', accountId)
+    .eq('cast_name', castName)
+    .is('ended_at', null)
+    .order('started_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return { session_id: data.session_id, started_at: data.started_at };
+}
+
+/** セッションに配信情報（タイトル・価格）を保存 */
+export async function updateSessionBroadcastInfo(
+  sessionId: string,
+  accountId: string,
+  castName: string,
+  info: {
+    broadcastTitle?: string | null;
+    prices?: Record<string, unknown> | null;
+    goal?: Record<string, unknown> | null;
+  },
+): Promise<void> {
+  if (!sessionId) return;
+  const sb = getSupabase();
+  const updates: Record<string, unknown> = {};
+
+  if (info.broadcastTitle) {
+    updates.broadcast_title = info.broadcastTitle;
+  }
+  if (info.prices) {
+    updates.broadcast_prices = info.prices;
+  }
+  if (info.goal) {
+    updates.broadcast_goal = info.goal;
+  }
+
+  if (Object.keys(updates).length === 0) return;
+
+  const { error } = await sb
+    .from('sessions')
+    .update(updates)
+    .eq('session_id', sessionId)
+    .eq('account_id', accountId)
+    .eq('cast_name', castName);
+
+  if (error) {
+    // broadcast_prices/broadcast_goal カラムが未追加の場合は無視
+    if (error.message?.includes('broadcast_prices') || error.message?.includes('broadcast_goal')) {
+      log.debug(`Session broadcast info: column not yet added (apply migration)`);
+    } else {
+      log.error(`Failed to update session broadcast info ${sessionId}`, error);
+    }
+  }
 }
 
 export async function updateCastOnlineStatus(

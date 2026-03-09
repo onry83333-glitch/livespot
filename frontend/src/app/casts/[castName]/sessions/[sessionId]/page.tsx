@@ -6,10 +6,11 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
-import { formatTokens, tokensToJPY, formatJST, COIN_RATE } from '@/lib/utils';
+import { formatTokens, tokensToJPY, formatCoinDual, formatJST, COIN_RATE } from '@/lib/utils';
 import Link from 'next/link';
 import { queueDmBatch } from '@/lib/dm-sender';
 import { checkAndEnroll } from '@/lib/scenario-engine';
+import { mapChatLog, mapUserProfile } from '@/lib/table-mappers';
 
 /* ============================================================
    Types
@@ -638,22 +639,24 @@ export default function SessionDetailPage() {
   }, [accountId, sessionId, sb]);
 
   const loadFallback = async () => {
-    const { data: msgs } = await sb
-      .from('spy_messages')
-      .select('session_id, cast_name, session_title, message_time, user_name, tokens, msg_type')
+    const { data: rawFallbackMsgs } = await sb
+      .from('chat_logs')
+      .select('session_id, cast_name, session_title, timestamp, username, tokens, message_type')
       .eq('account_id', accountId!)
       .eq('session_id', sessionId)
-      .order('message_time', { ascending: true })
+      .order('timestamp', { ascending: true })
       .limit(10000);
 
-    if (!msgs || msgs.length === 0) {
+    const msgs = (rawFallbackMsgs || []).map(mapChatLog);
+
+    if (msgs.length === 0) {
       setError(`${LABELS.sessionNotFound} (session_id: ${sessionId.slice(0, 8)}...)`);
       setLoading(false);
       return;
     }
 
     const times = msgs.map(m => new Date(m.message_time).getTime());
-    const users = new Set(msgs.filter(m => m.user_name).map(m => m.user_name));
+    const uniqueUsers = new Set(msgs.filter(m => m.user_name).map(m => m.user_name));
     const totalTk = msgs.reduce((s, m) => s + (m.tokens > 0 ? m.tokens : 0), 0);
     const tips = msgs.filter(m => m.tokens > 0);
     const typeMap: Record<string, number> = {};
@@ -675,10 +678,10 @@ export default function SessionDetailPage() {
 
     setSummary({
       broadcast_group_id: sessionId, session_ids: [sessionId],
-      cast_name: msgs[0].cast_name, session_title: msgs[0].session_title,
+      cast_name: msgs[0].cast_name ?? null, session_title: msgs[0].session_title ?? null,
       started_at: new Date(Math.min(...times)).toISOString(), ended_at: new Date(Math.max(...times)).toISOString(),
       duration_minutes: Math.round((Math.max(...times) - Math.min(...times)) / 60000),
-      msg_count: msgs.length, unique_users: users.size, chat_tokens: totalTk, tip_count: tips.length,
+      msg_count: msgs.length, unique_users: uniqueUsers.size, chat_tokens: totalTk, tip_count: tips.length,
       tokens_by_type: typeMap, top_chatters: top5,
       coin_tokens: 0, coin_by_type: {}, coin_top_users: [],
       coin_new_users: 0, coin_returning_users: 0,
@@ -789,7 +792,7 @@ export default function SessionDetailPage() {
       setPreLoading(true);
       // Load segment counts
       const { data: segData } = await sb
-        .from('paid_users')
+        .from('user_profiles')
         .select('segment')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
@@ -930,14 +933,15 @@ export default function SessionDetailPage() {
     const msg = dmText.trim() + '\n' + LABELS.byafText;
 
     // Fetch users for confirmation list
-    const { data: users } = await sb
-      .from('paid_users')
-      .select('user_name, segment')
+    const { data: rawPreUsers } = await sb
+      .from('user_profiles')
+      .select('username, segment')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
       .in('segment', selectedSegments)
       .limit(50000);
-    if (!users || users.length === 0) {
+    const users = (rawPreUsers || []).map(mapUserProfile);
+    if (users.length === 0) {
       setToast('対象ユーザーが見つかりませんでした');
       return;
     }
@@ -1116,13 +1120,13 @@ export default function SessionDetailPage() {
         }].sort((a, b) => b.lifetime_tokens - a.lifetime_tokens);
       });
 
-      // Async: fetch segment for new viewer from paid_users
+      // Async: fetch segment for new viewer from user_profiles
       supabaseRef.current
-        .from('paid_users')
+        .from('user_profiles')
         .select('segment')
         .eq('account_id', accountId!)
         .eq('cast_name', castName)
-        .or(`username.eq.${msg.user_name},user_name.eq.${msg.user_name}`)
+        .eq('username', msg.user_name!)
         .limit(1)
         .single()
         .then(({ data: puData }) => {
@@ -1142,16 +1146,18 @@ export default function SessionDetailPage() {
     setLiveLoading(true);
 
     // 1. Load messages
-    const { data: msgs } = await sb
-      .from('spy_messages')
-      .select('id, message_time, msg_type, user_name, message, tokens, user_color, is_vip')
+    const { data: rawLiveMsgs } = await sb
+      .from('chat_logs')
+      .select('id, timestamp, message_type, username, message, tokens, user_color, is_vip')
       .eq('session_id', sessionId)
       .eq('account_id', accountId)
-      .order('message_time', { ascending: true })
+      .order('timestamp', { ascending: true })
       .limit(500);
 
-    if (msgs && msgs.length > 0) {
-      setLiveMessages(msgs as LiveMessage[]);
+    const msgs = (rawLiveMsgs || []).map(mapChatLog) as unknown as LiveMessage[];
+
+    if (msgs.length > 0) {
+      setLiveMessages(msgs);
       lastMessageTimeRef.current = msgs[msgs.length - 1].message_time;
       if (msgs.length >= 500) setMessageLimitHit(true);
 
@@ -1192,33 +1198,34 @@ export default function SessionDetailPage() {
     const lifetimeMap = new Map<string, number>();
     if (userNames.length > 0) {
       const { data: ltData } = await sb
-        .from('spy_messages')
-        .select('user_name, tokens')
+        .from('chat_logs')
+        .select('username, tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
-        .in('user_name', userNames.slice(0, 200))
+        .in('username', userNames.slice(0, 200))
         .gt('tokens', 0)
         .limit(50000);
       if (ltData) {
-        for (const row of ltData) {
+        const mappedLt = ltData.map(mapChatLog);
+        for (const row of mappedLt) {
           if (row.user_name) lifetimeMap.set(row.user_name, (lifetimeMap.get(row.user_name) || 0) + row.tokens);
         }
       }
     }
 
-    // 4. Get segments from paid_users
+    // 4. Get segments from user_profiles
     const segmentMap = new Map<string, string>();
     if (userNames.length > 0) {
       const { data: puData } = await sb
-        .from('paid_users')
+        .from('user_profiles')
         .select('username, segment')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
         .limit(50000);
       if (puData) {
-        for (const row of puData as { username?: string; user_name?: string; segment: string }[]) {
-          const uname = row.username || row.user_name;
-          if (uname && row.segment) segmentMap.set(uname, row.segment);
+        const mappedPu = puData.map(mapUserProfile);
+        for (const row of mappedPu) {
+          if (row.user_name && row.segment) segmentMap.set(row.user_name, row.segment);
         }
       }
     }
@@ -1267,16 +1274,17 @@ export default function SessionDetailPage() {
 
   const pollNewMessages = useCallback(async () => {
     if (!accountId || !lastMessageTimeRef.current) return;
-    const { data } = await sb
-      .from('spy_messages')
-      .select('id, message_time, msg_type, user_name, message, tokens, user_color, is_vip')
+    const { data: rawPollData } = await sb
+      .from('chat_logs')
+      .select('id, timestamp, message_type, username, message, tokens, user_color, is_vip')
       .eq('session_id', sessionId)
       .eq('account_id', accountId)
-      .gt('message_time', lastMessageTimeRef.current)
-      .order('message_time', { ascending: true })
+      .gt('timestamp', lastMessageTimeRef.current)
+      .order('timestamp', { ascending: true })
       .limit(50);
-    if (data && data.length > 0) {
-      for (const msg of data) handleNewMessageRef.current({ new: msg as unknown as Record<string, unknown> });
+    if (rawPollData && rawPollData.length > 0) {
+      const mapped = rawPollData.map(mapChatLog);
+      for (const msg of mapped) handleNewMessageRef.current({ new: msg as unknown as Record<string, unknown> });
     }
   }, [accountId, sessionId, sb]);
 
@@ -1301,10 +1309,11 @@ export default function SessionDetailPage() {
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
-        table: 'spy_messages',
-        filter: `session_id=eq.${sessionId}`,
+        table: 'chat_logs',
+        filter: accountId ? `session_id=eq.${sessionId},account_id=eq.${accountId}` : `session_id=eq.${sessionId}`,
       }, (payload: { new: Record<string, unknown> }) => {
-        handleNewMessageRef.current(payload);
+        const mapped = mapChatLog(payload.new);
+        handleNewMessageRef.current({ new: mapped as unknown as Record<string, unknown> });
       });
     subscribeWithRetry(channel, (status) => {
       setRealtimeConnected(status === 'SUBSCRIBED');
@@ -1501,7 +1510,7 @@ export default function SessionDetailPage() {
                   </h2>
                   <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs" style={{ color: 'var(--text-secondary)' }}>
                     <span>{`${LABELS.prevBroadcast}: ${formatDateCompact(summary.started_at)}~${formatDateCompact(summary.ended_at).split(' ')[1]}`}</span>
-                    <span>{`${LABELS.sales}: ${tokensToJPY(summary.total_revenue, COIN_RATE)}`}</span>
+                    <span>{`${LABELS.sales}: ${formatCoinDual(summary.total_revenue, COIN_RATE)}`}</span>
                     <span>{`${LABELS.prevAttendance}: ${summary.unique_users}${LABELS.personSuffix}`}</span>
                     <span>{`${LABELS.prevNewUsers}: ${actions ? actions.first_time_payers.length : '-'}${LABELS.personSuffix}`}</span>
                   </div>
@@ -1752,7 +1761,8 @@ export default function SessionDetailPage() {
                   <div className="grid grid-cols-3 gap-4 text-center mb-4">
                     <div>
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.sales}</p>
-                      <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(summary.total_revenue, COIN_RATE)}</p>
+                      <p className="text-sm font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(summary.total_revenue)}</p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(summary.total_revenue, COIN_RATE)})</p>
                       {summary.change_pct !== null && (
                         <p className="text-[10px]" style={{ color: summary.change_pct >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
                           {`(${LABELS.prevCompare} ${summary.change_pct >= 0 ? '+' : ''}${summary.change_pct}%) ${summary.change_pct >= 0 ? '⇑' : '⇓'}`}
@@ -1805,7 +1815,7 @@ export default function SessionDetailPage() {
                     </div>
                     <div className="flex items-center gap-4 text-xs" style={{ color: 'var(--text-secondary)' }}>
                       <span>{`${LABELS.viewerCount}: ${liveViewers.length}${LABELS.personSuffix}`}</span>
-                      <span style={{ color: 'var(--accent-amber)' }}>{`${LABELS.revenueLabel}: ${tokensToJPY(liveTotalTokens, COIN_RATE)}`}</span>
+                      <span style={{ color: 'var(--accent-amber)' }}>{`${LABELS.revenueLabel}: ${formatCoinDual(liveTotalTokens, COIN_RATE)}`}</span>
                       <span style={{ color: 'var(--accent-green)' }}>{`${LABELS.newUsersLabel}: ${liveNewPayerCount}${LABELS.personSuffix}`}</span>
                       <span className="text-[10px] px-2 py-0.5 rounded" style={{
                         background: realtimeConnected ? 'rgba(34,197,94,0.15)' : 'rgba(245,158,11,0.15)',
@@ -1891,7 +1901,7 @@ export default function SessionDetailPage() {
                                   <div className="flex items-center gap-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
                                     <span>{getSegmentLabel(v.segment)}</span>
                                     {v.lifetime_tokens > 0 && (
-                                      <span style={{ color: 'var(--accent-amber)' }}>{`${LABELS.lifetimeLabel}${tokensToJPY(v.lifetime_tokens, COIN_RATE)}`}</span>
+                                      <span style={{ color: 'var(--accent-amber)' }}>{`${LABELS.lifetimeLabel}${formatCoinDual(v.lifetime_tokens, COIN_RATE)}`}</span>
                                     )}
                                   </div>
                                   <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgoText(v.first_seen)}</p>
@@ -1992,7 +2002,7 @@ export default function SessionDetailPage() {
                                     <div className="flex-1 h-3 rounded-sm overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)' }}>
                                       <div className="h-full rounded-sm transition-all" style={{ width: `${pct}%`, background: 'linear-gradient(90deg, var(--accent-amber), var(--accent-green))' }} />
                                     </div>
-                                    <span className="text-[9px] w-16 text-right shrink-0" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(b.cumulative, COIN_RATE)}</span>
+                                    <span className="text-[9px] w-20 text-right shrink-0" style={{ color: 'var(--accent-amber)' }}>{formatTokens(b.cumulative)}</span>
                                   </div>
                                 );
                               })}
@@ -2013,7 +2023,7 @@ export default function SessionDetailPage() {
                                     <div key={type} className="flex items-center justify-between">
                                       <span className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>{type}</span>
                                       <div className="flex items-center gap-2">
-                                        <span className="text-[10px] font-bold" style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(tokens, COIN_RATE)}</span>
+                                        <span className="text-[10px] font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(tokens)}</span>
                                         <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{pct}%</span>
                                       </div>
                                     </div>
@@ -2036,7 +2046,7 @@ export default function SessionDetailPage() {
                           <div className="flex items-center justify-between">
                             <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{LABELS.avgPaymentLabel}</span>
                             <span className="text-xs font-bold" style={{ color: 'var(--accent-amber)' }}>
-                              {livePayingCount > 0 ? `${tokensToJPY(Math.round(liveTotalTokens / livePayingCount), COIN_RATE)}${LABELS.perPerson}` : '-'}
+                              {livePayingCount > 0 ? `${formatCoinDual(Math.round(liveTotalTokens / livePayingCount), COIN_RATE)}${LABELS.perPerson}` : '-'}
                             </span>
                           </div>
                           <div className="flex items-center justify-between">
@@ -2153,7 +2163,7 @@ export default function SessionDetailPage() {
                     <div className="grid grid-cols-3 gap-3 mt-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
                       <span>時給: {'\u00A5'}{sessionPL.hourly_rate.toLocaleString()}</span>
                       <span>1tk = {'\u00A5'}{sessionPL.token_to_jpy}</span>
-                      <span>{sessionPL.duration_minutes}分 / {sessionPL.total_tokens.toLocaleString()}tk</span>
+                      <span>{sessionPL.duration_minutes}分 / {formatTokens(sessionPL.total_tokens)}</span>
                     </div>
                   </div>
                 )}
@@ -2213,7 +2223,7 @@ export default function SessionDetailPage() {
                           )}
                           <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>{u.types?.join(', ')}</span>
                           <span className="text-xs font-bold min-w-[80px] text-right" style={{ color: 'var(--accent-pink)' }}>{formatTokens(u.tokens)}</span>
-                          <span className="text-[10px] min-w-[60px] text-right" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.tokens, COIN_RATE)}</span>
+                          <span className="text-[10px] min-w-[60px] text-right" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(u.tokens, COIN_RATE)})</span>
                         </div>
                       ))}
                     </div>
@@ -2265,7 +2275,7 @@ export default function SessionDetailPage() {
                           >💬</Link>
                           <span className="text-[10px] ml-auto" style={{ color: 'var(--text-muted)' }}>{u.tip_count} tips</span>
                           <span className="text-xs font-bold min-w-[80px] text-right" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.tokens)}</span>
-                          <span className="text-[10px] min-w-[60px] text-right" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.tokens, COIN_RATE)}</span>
+                          <span className="text-[10px] min-w-[60px] text-right" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(u.tokens, COIN_RATE)})</span>
                         </div>
                       ))}
                     </div>
@@ -2339,7 +2349,7 @@ export default function SessionDetailPage() {
                                   <div className="flex items-center gap-3 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
                                     <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
                                     <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
-                                    <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
+                                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(u.session_tokens, COIN_RATE)})</span>
                                     {u.dm_sent ? (
                                       <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(34,197,94,0.15)', color: 'rgb(74,222,128)' }}>{`✅${LABELS.dmSentBadge}`}</span>
                                     ) : (
@@ -2441,7 +2451,7 @@ export default function SessionDetailPage() {
                                 <div key={u.user_name} className="flex items-center gap-3 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(0,0,0,0.15)' }}>
                                   <Link href={`/users/${encodeURIComponent(u.user_name)}`} className="text-xs font-semibold hover:underline" style={{ color: 'var(--accent-primary)' }}>{u.user_name}</Link>
                                   <span className="text-xs font-bold ml-auto" style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.session_tokens)}</span>
-                                  <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.session_tokens, COIN_RATE)}</span>
+                                  <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(u.session_tokens, COIN_RATE)})</span>
                                 </div>
                               ))}
                             </div>

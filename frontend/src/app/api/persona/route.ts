@@ -413,38 +413,59 @@ async function buildUserPrompt(
       const scenarioType = context.scenario_type as string || 'thankyou_regular';
       const stepNumber = context.step_number as number || 1;
 
-      const { data: spyMsgs } = await supabase
-        .from('spy_messages')
-        .select('message, message_time, msg_type, tokens')
-        .eq('user_name', userName)
+      // chat_logs (v2) → spy_messages (v1) フォールバック
+      const { data: rawChatLogs } = await supabase
+        .from('chat_logs')
+        .select('message, timestamp, message_type, tokens')
+        .eq('username', userName)
         .eq('cast_name', castName)
-        .order('message_time', { ascending: false })
+        .order('timestamp', { ascending: false })
         .limit(10);
 
-      const { data: coinTx } = await supabase
+      let spyMsgs: { message: string; message_time: string; msg_type: string; tokens: number }[];
+
+      if (rawChatLogs && rawChatLogs.length > 0) {
+        spyMsgs = rawChatLogs.map(r => ({ message: r.message, message_time: r.timestamp, msg_type: r.message_type, tokens: r.tokens }));
+      } else {
+        // フォールバック: spy_messages (v1)
+        const { data: rawSpyMsgs } = await supabase
+          .from('spy_messages')
+          .select('message, message_time, msg_type, tokens')
+          .eq('user_name', userName)
+          .eq('cast_name', castName)
+          .order('message_time', { ascending: false })
+          .limit(10);
+        spyMsgs = (rawSpyMsgs || []).map(r => ({ message: r.message, message_time: r.message_time, msg_type: r.msg_type, tokens: r.tokens }));
+      }
+
+      const accountId = context.account_id as string | undefined;
+
+      let coinTxQuery = supabase
         .from('coin_transactions')
         .select('tokens, type, date')
         .eq('user_name', userName)
         .eq('cast_name', castName)
         .order('date', { ascending: false })
         .limit(20);
+      if (accountId) coinTxQuery = coinTxQuery.eq('account_id', accountId);
+      const { data: coinTx } = await coinTxQuery;
 
       const totalCoins = coinTx?.reduce((s, t) => s + (t.tokens || 0), 0) || 0;
       const avgCoins = coinTx && coinTx.length > 0 ? Math.round(totalCoins / coinTx.length) : 0;
       const lastTxDate = coinTx?.[0]?.date || '不明';
-
-      const { data: paidUser } = await supabase
-        .from('paid_users')
-        .select('total_coins, last_seen')
-        .eq('user_name', userName)
-        .eq('cast_name', castName)
-        .single();
+      let paidUserQuery = supabase
+        .from('user_profiles')
+        .select('total_tokens, last_seen')
+        .eq('username', userName)
+        .eq('cast_name', castName);
+      if (accountId) paidUserQuery = paidUserQuery.eq('account_id', accountId);
+      const { data: paidUser } = await paidUserQuery.single();
 
       const segment = paidUser
-        ? getSegmentLabel(paidUser.total_coins, paidUser.last_seen)
+        ? getSegmentLabel(paidUser.total_tokens, paidUser.last_seen)
         : 'S10:単発';
 
-      const { data: lastDms } = await supabase
+      let lastDmsQuery = supabase
         .from('dm_send_log')
         .select('message, sent_at, template_name')
         .eq('user_name', userName)
@@ -452,6 +473,8 @@ async function buildUserPrompt(
         .eq('status', 'success')
         .order('sent_at', { ascending: false })
         .limit(3);
+      if (accountId) lastDmsQuery = lastDmsQuery.eq('account_id', accountId);
+      const { data: lastDms } = await lastDmsQuery;
 
       const spyLog = spyMsgs?.map(m =>
         `[${m.message_time?.slice(11, 16) || '??:??'}] ${m.msg_type}: ${m.message || ''} ${m.tokens ? `(${m.tokens}tk)` : ''}`
@@ -461,31 +484,58 @@ async function buildUserPrompt(
         `- ${d.message || '?'} (${d.sent_at?.slice(0, 10) || '?'}, ${d.template_name || ''})`
       ).join('\n') || 'なし';
 
+      const scenarioPurpose = context.scenario_purpose as string || '';
+      const stepToneGuide = context.step_tone_guide as string || '';
+
+      // シナリオ内の過去ステップDM取得（同じユーザーへの前ステップメッセージ）
+      const scenarioEnrollmentId = context.scenario_enrollment_id as string | undefined;
+      let scenarioDmLog = '';
+      if (scenarioEnrollmentId) {
+        const { data: scenarioDms } = await supabase
+          .from('dm_send_log')
+          .select('message, sent_at, campaign')
+          .eq('scenario_enrollment_id', scenarioEnrollmentId)
+          .in('status', ['success', 'queued', 'sending'])
+          .order('sent_at', { ascending: true })
+          .limit(10);
+        if (scenarioDms && scenarioDms.length > 0) {
+          scenarioDmLog = scenarioDms.map((d, i) =>
+            `- Step${i + 1}: ${d.message || '?'} (${d.sent_at?.slice(0, 10) || '?'})`
+          ).join('\n');
+        }
+      }
+
       return `ユーザー名: ${userName}
 セグメント: ${segment}
 累計コイン: ${totalCoins}tk / 平均: ${avgCoins}tk / 最終: ${lastTxDate}
 シナリオ: ${scenarioType} (Step ${stepNumber})
+${scenarioPurpose ? `\nシナリオ目的: ${scenarioPurpose}` : ''}
+${stepToneGuide ? `ステップ指示: ${stepToneGuide}` : ''}
 
 前回DM履歴（直近3件）:
 ${lastDmLog}
+${scenarioDmLog ? `\nこのシナリオで送信済みのDM:\n${scenarioDmLog}\n↑ 上記と異なるトーン・話題で書くこと。同じ表現の繰り返し禁止。` : ''}
 
 直近の発言ログ:
 ${spyLog}
 
 上記の情報をもとに、このユーザーに最適なDMを生成してください。
 - 前回DMと異なるトーンにしてください（感情→事実→感情の交互）。
-- ユーザーの発言内容に触れて個別感を出してください。`;
+- ユーザーの発言内容に触れて個別感を出してください。
+- シナリオ目的に沿った文面にしてください。
+${scenarioDmLog ? '- このシナリオの前ステップで送った内容と重複しないこと。' : ''}`;
     }
 
     case 'fb_report': {
       const sessionId = context.session_id as string;
 
-      const { data: messages } = await supabase
-        .from('spy_messages')
-        .select('user_name, message, msg_type, tokens, message_time')
+      const { data: rawMessages } = await supabase
+        .from('chat_logs')
+        .select('username, message, message_type, tokens, timestamp')
         .eq('session_id', sessionId)
-        .order('message_time', { ascending: true })
+        .order('timestamp', { ascending: true })
         .limit(50000);
+      const messages = (rawMessages || []).map(r => ({ user_name: r.username, message: r.message, msg_type: r.message_type, tokens: r.tokens, message_time: r.timestamp }));
 
       const msgs = messages || [];
       const uniqueUsers = new Set(msgs.map(m => m.user_name).filter(Boolean)).size;
@@ -1053,7 +1103,7 @@ ${lastDmTone ? `前回DMトーン: ${lastDmTone}（今回は異なるトーン�
       mode === 'recruitment' ? `\n${RECRUITMENT_AXIS_TRANSFORM}` : '',
     ].filter(Boolean).join('\n');
 
-    const userPrompt = await buildUserPrompt(task_type, { ...context, cast_name }, auth.token);
+    const userPrompt = await buildUserPrompt(task_type, { ...context, cast_name, account_id: reqAccountId }, auth.token);
 
     const maxTokens = task_type === 'dm_generate' || task_type === 'realtime_coach' ? 500 : 1000;
 

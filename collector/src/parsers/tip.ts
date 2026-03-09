@@ -28,7 +28,8 @@ export function parseTipEvent(raw: unknown): TipEvent | null {
 
   const obj = raw as Record<string, unknown>;
   const userName = String(obj.userName || obj.user_name || obj.username || '');
-  const tokens = Number(obj.tokens || obj.amount || 0);
+  const tokensRaw = Number(obj.tokens || obj.amount || 0);
+  const tokens = isFinite(tokensRaw) ? Math.floor(tokensRaw) : 0;
 
   if (!userName || tokens <= 0) return null;
 

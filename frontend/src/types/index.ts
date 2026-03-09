@@ -433,6 +433,19 @@ export interface DmGenerateResponse {
 }
 
 // ============================================================
+// Blacklist
+// ============================================================
+export interface BlacklistedUser {
+  id: string;
+  account_id: string;
+  cast_name: string;
+  user_name: string;
+  reason: string | null;
+  blocked_by: 'manual' | 'auto' | 'system';
+  created_at: string;
+}
+
+// ============================================================
 // Sync
 // ============================================================
 export interface SyncStatus {

@@ -6,18 +6,23 @@ import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { subscribeWithRetry } from '@/lib/realtime-helpers';
 import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
+import { isDmTestMode, DM_TEST_WHITELIST, getDmGuardStatus } from '@/lib/dm-guard';
 import { ChatMessage } from '@/components/chat-message';
-import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE } from '@/lib/utils';
+import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE, getWeekStartJST } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
+import { mapChatLog } from '@/lib/table-mappers';
 import { getUserColorFromCoins } from '@/lib/stripchat-levels';
 import DmSegmentSender from '@/components/dm-segment-sender';
+import DataSyncPanel from '@/components/data-sync-panel';
+import { Accordion } from '@/components/accordion';
+import CastReportsTab from '@/components/cast-reports-tab';
 
 
 /* ============================================================
    Types
    ============================================================ */
 // M-6: screenshots タブはデータ0件のため非表示。SPY基盤安定後に再表示
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'settings';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'reports' | 'settings';
 
 interface CastStatsData {
   total_messages: number;
@@ -40,7 +45,8 @@ interface SessionItem {
   session_end: string;
   message_count: number;
   tip_count: number;
-  total_coins: number;
+  total_coins: number;        // coin_transactions ベース（v2 RPC total_revenue）
+  chat_tokens: number;        // spy_messages ベース（参考値）
   unique_users: number;
   broadcast_title?: string | null;
 }
@@ -248,26 +254,11 @@ const TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'sessions',   icon: '📺', label: 'セッション' },
   { key: 'dm',         icon: '💬', label: 'DM' },
   { key: 'analytics',  icon: '📈', label: 'アナリティクス' },
+  { key: 'reports',    icon: '📋', label: '配信レポート' },
   { key: 'settings',   icon: '⚙', label: '設定' },
 ];
 
-/* ============================================================
-   Helper: 週境界（月曜 03:00 JST = 送金サイクル区切り）
-   月曜 0:00〜2:59 JST の売上は前週に計上される
-   ============================================================ */
-function getWeekStart(offset = 0): Date {
-  const now = new Date();
-  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-  const day = jst.getUTCDay();
-  const hour = jst.getUTCHours();
-  let diff = day === 0 ? 6 : day - 1;
-  // 月曜3時未満は前週扱い
-  if (day === 1 && hour < 3) diff = 7;
-  const monday = new Date(jst);
-  monday.setUTCDate(jst.getUTCDate() - diff - offset * 7);
-  monday.setUTCHours(3, 0, 0, 0);
-  return new Date(monday.getTime() - 9 * 60 * 60 * 1000);
-}
+/* getWeekStartJST is imported from @/lib/utils */
 
 /* ============================================================
    Inner Component
@@ -334,6 +325,10 @@ function CastDetailInner() {
   const [dmDeliveryMode, setDmDeliveryMode] = useState<'fast_text' | 'image_pipeline'>('fast_text');
   const [dmSendOrder, setDmSendOrder] = useState<'text_only' | 'image_only' | 'text_then_image' | 'image_then_text'>('text_only');
 
+  // DM安全ゲート: 送信先プレビュー確認
+  const [dmShowPreview, setDmShowPreview] = useState(false);
+  const [dmPreviewConfirmed, setDmPreviewConfirmed] = useState(false);
+
   // DM Safety: 3-step confirmation
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [sendUnlocked, setSendUnlocked] = useState(false);
@@ -375,10 +370,17 @@ function CastDetailInner() {
   }
   const [scenarios, setScenarios] = useState<ScenarioItem[]>([]);
   const [scenarioEnrollCounts, setScenarioEnrollCounts] = useState<Map<string, number>>(new Map());
+  interface EnrollmentDetail { scenario_id: string; user_name: string; current_step: number; status: string; enrolled_at: string; }
+  const [scenarioEnrollDetails, setScenarioEnrollDetails] = useState<Map<string, EnrollmentDetail[]>>(new Map());
   const [scenariosLoading, setScenariosLoading] = useState(false);
   const [scenarioExpanded, setScenarioExpanded] = useState<string | null>(null);
+  const [enrollExpanded, setEnrollExpanded] = useState<Set<string>>(new Set());
   const [scenarioCreating, setScenarioCreating] = useState(false);
   const [newScenario, setNewScenario] = useState({ name: '', triggerType: 'first_payment', config: '{}' });
+  const [scenarioProcessing, setScenarioProcessing] = useState(false);
+  const [scenarioProcessResult, setScenarioProcessResult] = useState<{
+    processed: number; errors: number; skipped: number; aiGenerated: number; aiErrors: number;
+  } | null>(null);
 
   // Sales state
   const [coinTxs, setCoinTxs] = useState<CoinTxItem[]>([]);
@@ -411,8 +413,7 @@ function CastDetailInner() {
   const [refreshingSegments, setRefreshingSegments] = useState(false);
   const [refreshResult, setRefreshResult] = useState<string | null>(null);
 
-  // H5: Segment legend
-  const [showSegmentLegend, setShowSegmentLegend] = useState(true);
+  // H5: Segment legend — now managed by Accordion component (localStorage)
 
   // M3: Segment user list expand
   const [segmentUserExpanded, setSegmentUserExpanded] = useState<Set<string>>(new Set());
@@ -799,6 +800,7 @@ function CastDetailInner() {
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
+        .neq('type', 'studio')
         .limit(50000),
     ]).then(([statsRes, fansRes, coinTotalRes]) => {
       const s = statsRes.data as CastStatsData[] | null;
@@ -834,16 +836,16 @@ function CastDetailInner() {
   // ============================================================
   useEffect(() => {
     if (activeTab !== 'sessions' || !accountId) return;
-    sb.from('paid_users')
-      .select('user_name, total_coins')
+    sb.from('user_profiles')
+      .select('username, total_tokens')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .order('total_coins', { ascending: false })
+      .order('total_tokens', { ascending: false })
       .limit(500)
       .then(({ data }) => {
         const map = new Map<string, number>();
-        (data || []).forEach((u: { user_name: string; total_coins: number }) => {
-          map.set(u.user_name, u.total_coins);
+        (data || []).forEach((u: { username: string; total_tokens: number }) => {
+          map.set(u.username, u.total_tokens);
         });
         setPaidUserCoins(map);
       });
@@ -854,8 +856,8 @@ function CastDetailInner() {
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'overview') return;
-    const thisMonday = getWeekStart(0);
-    const lastMonday = getWeekStart(1);
+    const thisMonday = getWeekStartJST(0);
+    const lastMonday = getWeekStartJST(1);
 
     const thisStart = registeredAt && registeredAt > thisMonday.toISOString() ? registeredAt : thisMonday.toISOString();
     const lastStart = registeredAt && registeredAt > lastMonday.toISOString() ? registeredAt : lastMonday.toISOString();
@@ -865,12 +867,14 @@ function CastDetailInner() {
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
+        .neq('type', 'studio')
         .gte('date', thisStart)
         .limit(10000),
       sb.from('coin_transactions')
         .select('tokens')
         .eq('account_id', accountId)
         .eq('cast_name', castName)
+        .neq('type', 'studio')
         .gte('date', lastStart)
         .lt('date', thisMonday.toISOString())
         .limit(10000),
@@ -891,60 +895,55 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // ============================================================
-  // Sessions: RPC
+  // Sessions: v2 RPC（coin_transactionsベース売上）
   // ============================================================
   useEffect(() => {
     if (!accountId || (activeTab !== 'overview' && activeTab !== 'sessions')) return;
-    const since = registeredAt ? new Date(registeredAt).toISOString().split('T')[0] : '2026-01-01';
-    Promise.all([
-      sb.rpc('get_cast_sessions', {
-        p_account_id: accountId,
-        p_cast_name: castName,
-        p_since: since,
-      }),
-      sb.from('sessions')
-        .select('started_at, broadcast_title')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .gte('started_at', since)
-        .filter('broadcast_title', 'not.is', null)
-        .order('started_at', { ascending: false })
-        .limit(500),
-    ]).then(([rpcResult, titleResult]) => {
-      const rpcSessions = (rpcResult.data || []) as SessionItem[];
-      const titleRecords = (titleResult.data || []) as { started_at: string; broadcast_title: string }[];
-      // broadcast_title をマッチング: 最も近い開始時刻のセッションレコード(30分以内)
-      for (const sess of rpcSessions) {
-        const sessMs = new Date(sess.session_start).getTime();
-        let best: string | null = null;
-        let bestDiff = Infinity;
-        for (const tr of titleRecords) {
-          const diff = Math.abs(new Date(tr.started_at).getTime() - sessMs);
-          if (diff < 30 * 60 * 1000 && diff < bestDiff) {
-            bestDiff = diff;
-            best = tr.broadcast_title;
-          }
-        }
-        sess.broadcast_title = best;
+    sb.rpc('get_session_list_v2', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_limit: 100,
+      p_offset: 0,
+    }).then(({ data, error }) => {
+      if (error || !data) {
+        setSessions([]);
+        return;
       }
-      setSessions(rpcSessions);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mapped: SessionItem[] = (data as any[]).map(r => {
+        const d = new Date(r.started_at);
+        const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
+        const sessionDate = `${jst.getUTCFullYear()}-${String(jst.getUTCMonth() + 1).padStart(2, '0')}-${String(jst.getUTCDate()).padStart(2, '0')}`;
+        return {
+          session_date: sessionDate,
+          session_start: r.started_at,
+          session_end: r.ended_at,
+          message_count: r.msg_count ?? 0,
+          tip_count: r.tip_count ?? 0,
+          total_coins: r.total_revenue ?? 0,   // coin_transactions ベース
+          chat_tokens: r.chat_tokens ?? 0,      // spy_messages ベース
+          unique_users: r.unique_users ?? 0,
+          broadcast_title: r.session_title ?? null,
+        };
+      });
+      setSessions(mapped);
     });
-  }, [accountId, castName, activeTab, registeredAt, sb]);
+  }, [accountId, castName, activeTab, sb]);
 
   // Session expand: load logs
   const handleExpandSession = useCallback(async (sessionKey: string, start: string, end: string) => {
     if (expandedSession === sessionKey) { setExpandedSession(null); return; }
     setExpandedSession(sessionKey);
     setSessionLogsLoading(true);
-    const { data } = await sb.from('spy_messages')
+    const { data } = await sb.from('chat_logs')
       .select('*')
       .eq('account_id', accountId!)
       .eq('cast_name', castName)
-      .gte('message_time', start)
-      .lte('message_time', end)
-      .order('message_time', { ascending: true })
+      .gte('timestamp', start)
+      .lte('timestamp', end)
+      .order('timestamp', { ascending: true })
       .limit(1000);
-    setSessionLogs((data || []) as SpyMessage[]);
+    setSessionLogs((data || []).map(mapChatLog) as SpyMessage[]);
     setSessionLogsLoading(false);
   }, [expandedSession, accountId, castName, sb]);
 
@@ -991,20 +990,25 @@ function CastDetailInner() {
       .then(async ({ data: scData }) => {
         const items = (scData || []) as ScenarioItem[];
         setScenarios(items);
-        // エンロール数を取得
+        // エンロール数+詳細を取得
         if (items.length > 0) {
           const { data: enrollData } = await sb
             .from('dm_scenario_enrollments')
-            .select('scenario_id, status')
+            .select('scenario_id, user_name, current_step, status, enrolled_at')
             .eq('account_id', accountId)
             .eq('cast_name', castName)
             .eq('status', 'active')
+            .order('enrolled_at', { ascending: false })
             .limit(50000);
           const countMap = new Map<string, number>();
-          for (const e of enrollData || []) {
+          const detailMap = new Map<string, EnrollmentDetail[]>();
+          for (const e of (enrollData || []) as EnrollmentDetail[]) {
             countMap.set(e.scenario_id, (countMap.get(e.scenario_id) || 0) + 1);
+            if (!detailMap.has(e.scenario_id)) detailMap.set(e.scenario_id, []);
+            detailMap.get(e.scenario_id)!.push(e);
           }
           setScenarioEnrollCounts(countMap);
+          setScenarioEnrollDetails(detailMap);
         }
         setScenariosLoading(false);
       });
@@ -1054,7 +1058,7 @@ function CastDetailInner() {
 
     const channel = sb
       .channel(`dm-cast-status-realtime-${castName}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: `cast_name=eq.${castName}` }, async () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dm_send_log', filter: accountId ? `cast_name=eq.${castName},account_id=eq.${accountId}` : `cast_name=eq.${castName}` }, async () => {
         const bid = dmBatchIdRef.current;
         if (!bid) return;
         const { data: items } = await sb.from('dm_send_log')
@@ -1098,6 +1102,31 @@ function CastDetailInner() {
     const needsMessage = dmSendOrder !== 'image_only';
     const needsImage = dmDeliveryMode === 'image_pipeline' && (dmSendOrder === 'image_only' || dmSendOrder === 'text_then_image' || dmSendOrder === 'image_then_text');
     if (dmTargets.size === 0 || (needsMessage && !dmMessage.trim()) || (needsImage && !dmImageFile) || !accountId) return;
+
+    // DM安全ゲート: campaign必須チェック（タグ未入力時はブロック）
+    if (!dmCampaign.trim()) {
+      setDmError('キャンペーンタグは必須です。送信目的を識別するタグを入力してください。');
+      return;
+    }
+
+    // DM安全ゲート: テストモード時ホワイトリスト外チェック
+    const guardStatus = getDmGuardStatus();
+    if (guardStatus.isTestMode) {
+      const blocked = Array.from(dmTargets).filter(u => !DM_TEST_WHITELIST.has(u));
+      if (blocked.length > 0) {
+        const sample = blocked.slice(0, 5).join(', ');
+        const suffix = blocked.length > 5 ? ` 他${blocked.length - 5}名` : '';
+        setDmError(`[テストモード] ホワイトリスト外のユーザー${blocked.length}名をブロック: ${sample}${suffix}\n許可: ${guardStatus.whitelist.join(', ')}\n本番送信するにはDM_TEST_MODE=falseを設定`);
+        return;
+      }
+    }
+
+    // DM安全ゲート: 送信先プレビュー確認（未確認ならプレビューを表示して中断）
+    if (!dmPreviewConfirmed) {
+      setDmShowPreview(true);
+      return;
+    }
+
     setDmSending(true); setDmError(null); setDmResult(null);
     try {
       const usernames = Array.from(dmTargets);
@@ -1207,6 +1236,8 @@ function CastDetailInner() {
       setDmMessage('');
       setDmCampaign('');
       setDmImageFile(null);
+      setDmPreviewConfirmed(false);
+      setDmShowPreview(false);
       if (dmImagePreview) { URL.revokeObjectURL(dmImagePreview); setDmImagePreview(null); }
 
       // ログ再取得
@@ -1222,7 +1253,7 @@ function CastDetailInner() {
       setDmError(errMsg);
     }
     setDmSending(false);
-  }, [dmTargets, dmMessage, dmCampaign, dmIsTest, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview, dmDeliveryMode, dmSendOrder]);
+  }, [dmTargets, dmMessage, dmCampaign, dmIsTest, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview, dmDeliveryMode, dmSendOrder, dmPreviewConfirmed]);
 
   const toggleTarget = useCallback((un: string) => {
     setDmTargets(prev => { const n = new Set(prev); if (n.has(un)) n.delete(un); else n.add(un); return n; });
@@ -1446,16 +1477,16 @@ function CastDetailInner() {
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
-    // 最後のチップ（このキャストのspy_messages）
-    sb.from('spy_messages')
-      .select('user_name, tokens, message_time, message')
+    // 最後のチップ（このキャストのchat_logs）
+    sb.from('chat_logs')
+      .select('username, tokens, timestamp, message')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
-      .in('msg_type', ['tip', 'gift'])
+      .in('message_type', ['tip', 'gift'])
       .gt('tokens', 0)
-      .order('message_time', { ascending: false })
+      .order('timestamp', { ascending: false })
       .limit(5)
-      .then(({ data }) => setLastTips((data || []) as typeof lastTips));
+      .then(({ data }) => setLastTips((data || []).map(r => ({ user_name: r.username, tokens: r.tokens, message_time: r.timestamp, message: r.message })) as typeof lastTips));
 
     // 直近のチケットチャット（このキャスト）
     sb.from('coin_transactions')
@@ -1575,8 +1606,8 @@ function CastDetailInner() {
   useEffect(() => {
     if (!accountId || activeTab !== 'analytics') return;
     setSalesLoading(true);
-    const thisMonday = getWeekStart(0);
-    const lastMonday = getWeekStart(1);
+    const thisMonday = getWeekStartJST(0);
+    const lastMonday = getWeekStartJST(1);
 
     // registeredAt以降のデータのみ表示（データ分離）
     const regFilter = registeredAt || null;
@@ -1682,12 +1713,12 @@ function CastDetailInner() {
   }, [accountId, castName, activeTab, sb]);
 
   // ============================================================
-  // Broadcast analysis: セッション一覧取得
+  // Broadcast analysis: セッション一覧取得（v2 RPC — coin_transactionsベース売上）
   // ============================================================
   useEffect(() => {
     if (!accountId || activeTab !== 'sessions') return;
     setBroadcastLoading(true);
-    sb.rpc('get_session_list', {
+    sb.rpc('get_session_list_v2', {
       p_account_id: accountId,
       p_cast_name: castName,
       p_limit: 50,
@@ -1700,7 +1731,17 @@ function CastDetailInner() {
       }
       // 2/15以降のみ表示
       const cutoff = new Date('2026-02-15T00:00:00+09:00');
-      const filtered = (data as BroadcastSessionItem[]).filter(s => new Date(s.started_at) >= cutoff);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mapped: BroadcastSessionItem[] = (data as any[]).map(r => ({
+        session_id: r.broadcast_group_id ?? r.session_ids?.[0] ?? '',
+        title: r.session_title ?? '',
+        started_at: r.started_at,
+        ended_at: r.ended_at,
+        duration_minutes: r.duration_minutes ?? 0,
+        total_tokens: r.chat_tokens ?? 0,      // spy_messages ベース（参考値）
+        coin_revenue: r.total_revenue ?? 0,     // coin_transactions ベース
+      }));
+      const filtered = mapped.filter(s => new Date(s.started_at) >= cutoff);
       setBroadcastSessions(filtered);
       // 最新セッションを自動選択
       if (filtered.length > 0 && !broadcastSelectedDate) {
@@ -2040,8 +2081,8 @@ function CastDetailInner() {
               <span style={{ color: 'var(--accent-amber)' }}>
                 TIP <span className="font-bold">{formatTokens(totalCoinTx ?? stats.total_coins)}</span>
               </span>
-              <span style={{ color: 'var(--accent-green)' }}>
-                <span className="font-bold">{tokensToJPY(totalCoinTx ?? stats.total_coins, coinRate)}</span>
+              <span style={{ color: 'var(--text-muted)' }}>
+                <span className="text-[10px]">({tokensToJPY(totalCoinTx ?? stats.total_coins, coinRate)})</span>
               </span>
               <span style={{ color: 'var(--accent-purple, #a855f7)' }}>
                 USERS <span className="font-bold">{stats.unique_users}</span>
@@ -2064,24 +2105,7 @@ function CastDetailInner() {
         </div>
       </div>
 
-      {/* Coin sync alert */}
-      {daysSinceSync !== null && daysSinceSync >= 3 && (
-        <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs mb-2 ${
-          daysSinceSync >= 7 ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-          daysSinceSync >= 5 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30' :
-          'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-        }`}>
-          <span>{daysSinceSync >= 7 ? '🔴' : daysSinceSync >= 5 ? '🟡' : '🔵'}</span>
-          <span>
-            コイン履歴が <strong>{daysSinceSync}日間</strong> 更新されていません。
-            → Chrome拡張のコイン同期を実行してください
-            <a href="https://ja.stripchat.com/earnings/tokens-history"
-               target="_blank" rel="noopener" className="underline ml-1">
-              Earningsページを開いて同期 →
-            </a>
-          </span>
-        </div>
-      )}
+{/* Coin sync alert — replaced by DataSyncPanel in overview tab */}
 
       {loading && activeTab !== 'sessions' ? (
         <div className="space-y-3">
@@ -2103,17 +2127,17 @@ function CastDetailInner() {
                 <div className="grid grid-cols-3 gap-3">
                   <div className="glass-card p-4 text-center">
                     <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
-                      {tokensToJPY(thisWeekCoins, coinRate)}
+                      {formatTokens(thisWeekCoins)}
                     </p>
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週の売上</p>
-                    <p className="text-[9px]" style={{ color: 'var(--accent-amber)' }}>{formatTokens(thisWeekCoins)}</p>
+                    <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(thisWeekCoins, coinRate)})</p>
                   </div>
                   <div className="glass-card p-4 text-center">
                     <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
-                      {tokensToJPY(lastWeekCoins, coinRate)}
+                      {formatTokens(lastWeekCoins)}
                     </p>
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週の売上</p>
-                    <p className="text-[9px]" style={{ color: 'var(--accent-amber)' }}>{formatTokens(lastWeekCoins)}</p>
+                    <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(lastWeekCoins, coinRate)})</p>
                   </div>
                   <div className="glass-card p-4 text-center">
                     <p className="text-xl font-bold" style={{
@@ -2139,6 +2163,7 @@ function CastDetailInner() {
                   </div>
                 </div>
 
+                <Accordion id={`cast-${castName}-new-paying`} title="新規応援ユーザー（24h）" icon="🆕" defaultOpen={false}>
                 {/* New paying users */}
                 {newPayingUsers.length > 0 && (() => {
                   const MAX_COLLAPSED = 5;
@@ -2197,6 +2222,9 @@ function CastDetailInner() {
                   );
                 })()}
 
+                </Accordion>
+
+                <Accordion id={`cast-${castName}-recent-sessions`} title="直近の配信" icon="📺" badge={`${sessions.length}件`} defaultOpen={false}>
                 {/* Recent sessions */}
                 <div className="glass-card p-4">
                   <h3 className="text-sm font-bold mb-3">直近の配信</h3>
@@ -2228,8 +2256,15 @@ function CastDetailInner() {
                     </div>
                   )}
                 </div>
+                </Accordion>
               </div>
 
+              {/* Data sync panel */}
+              {accountId && (
+                <DataSyncPanel supabase={sb} accountId={accountId} castName={castName} />
+              )}
+
+              <Accordion id={`cast-${castName}-top-fans`} title="トップファン" icon="💰" badge={`${fans.length}名`} defaultOpen={false}>
               {/* Top fans */}
               <div className="glass-card p-4">
                 <h3 className="text-sm font-bold mb-3">💰 トップファン</h3>
@@ -2255,6 +2290,7 @@ function CastDetailInner() {
                   </div>
                 )}
               </div>
+              </Accordion>
             </div>
           )}
 
@@ -2361,7 +2397,7 @@ function CastDetailInner() {
                         {broadcastSessions.map(s => {
                           const d = new Date(s.started_at);
                           const dateStr = d.toISOString().split('T')[0];
-                          const label = `${d.toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short' })} — ${formatTokens(s.coin_revenue || s.total_tokens)}tk (${s.duration_minutes}分)`;
+                          const label = `${d.toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', weekday: 'short' })} — ${formatTokens(s.coin_revenue)}tk (${s.duration_minutes}分)`;
                           return <option key={s.session_id} value={dateStr}>{label}</option>;
                         })}
                       </select>
@@ -2379,9 +2415,9 @@ function CastDetailInner() {
                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                         <div className="glass-card p-4">
                           <p className="text-[10px] font-medium" style={{ color: 'var(--text-muted)' }}>売上</p>
-                          <p className="text-2xl font-bold text-amber-400 mt-1">{formatTokens(broadcastBreakdown.total_tokens)}<span className="text-xs ml-1">tk</span></p>
+                          <p className="text-2xl font-bold text-amber-400 mt-1">{formatTokens(broadcastBreakdown.total_tokens)}</p>
                           <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                            ¥{tokensToJPY(broadcastBreakdown.total_tokens, 7.7)}
+                            ({tokensToJPY(broadcastBreakdown.total_tokens, coinRate)})
                           </p>
                           {broadcastBreakdown.change_pct !== null && (
                             <p className={`text-[10px] mt-1 font-bold ${broadcastBreakdown.change_pct >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -2403,6 +2439,7 @@ function CastDetailInner() {
                         </div>
                       </div>
 
+                      <Accordion id={`cast-${castName}-revenue-type`} title="売上タイプ別内訳" icon="📊" defaultOpen={false}>
                       {/* 売上タイプ別内訳 */}
                       {Object.keys(broadcastBreakdown.revenue_by_type).length > 0 && (
                         <div className="glass-card p-4">
@@ -2419,7 +2456,7 @@ function CastDetailInner() {
                                     <div className="flex items-center justify-between mb-1">
                                       <span className="text-xs font-medium">{type}</span>
                                       <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                                        {formatTokens(tokens)}tk ({pct}%) — ¥{tokensToJPY(tokens, 7.7)}
+                                        {formatTokens(tokens)} ({pct}%) — {tokensToJPY(tokens, coinRate)}
                                       </span>
                                     </div>
                                     <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(15,23,42,0.6)' }}>
@@ -2440,6 +2477,8 @@ function CastDetailInner() {
                           </div>
                         </div>
                       )}
+
+                      </Accordion>
 
                       {/* 新規 vs リピーター 比較 */}
                       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -2483,6 +2522,7 @@ function CastDetailInner() {
                         </div>
                       </div>
 
+                      <Accordion id={`cast-${castName}-top-supporters`} title="トップ5 応援ユーザー" icon="🏆" defaultOpen={false}>
                       {/* トップ5応援ユーザー */}
                       {broadcastBreakdown.top_users && broadcastBreakdown.top_users.length > 0 && (
                         <div className="glass-card p-4">
@@ -2508,8 +2548,8 @@ function CastDetailInner() {
                                 </div>
                                 <div className="flex items-center gap-3">
                                   <div className="text-right">
-                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.tokens)}tk</p>
-                                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>¥{tokensToJPY(u.tokens, 7.7)}</p>
+                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.tokens)}</p>
+                                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(u.tokens, coinRate)})</p>
                                   </div>
                                   <button
                                     onClick={() => {
@@ -2528,6 +2568,9 @@ function CastDetailInner() {
                         </div>
                       )}
 
+                      </Accordion>
+
+                      <Accordion id={`cast-${castName}-new-user-list`} title="新規ユーザー（初回応援）" icon="🆕" defaultOpen={false}>
                       {/* 新規ユーザーリスト */}
                       {broadcastNewUsers.filter(u => !u.has_prior_history).length > 0 && (
                         <div className="glass-card p-4">
@@ -2549,7 +2592,7 @@ function CastDetailInner() {
                                     </p>
                                   </div>
                                   <div className="flex items-center gap-3">
-                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.total_tokens_on_date)}tk</p>
+                                    <p className="text-sm font-bold text-amber-400">{formatTokens(u.total_tokens_on_date)}</p>
                                     <button
                                       onClick={() => {
                                         setDmTargets(new Set([u.user_name]));
@@ -2567,6 +2610,9 @@ function CastDetailInner() {
                         </div>
                       )}
 
+                      </Accordion>
+
+                      <Accordion id={`cast-${castName}-broadcast-info`} title="配信情報" icon="📺" defaultOpen={false}>
                       {/* 配信情報 */}
                       <div className="glass-card p-4">
                         <h3 className="text-sm font-bold mb-2">配信情報</h3>
@@ -2589,13 +2635,14 @@ function CastDetailInner() {
                               <p className="text-xs font-medium">
                                 {new Date(broadcastBreakdown.prev_session_date).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })}
                                 <span className="text-[10px] ml-1" style={{ color: 'var(--text-muted)' }}>
-                                  ({formatTokens(broadcastBreakdown.prev_session_tokens)}tk)
+                                  ({formatTokens(broadcastBreakdown.prev_session_tokens)})
                                 </span>
                               </p>
                             </div>
                           )}
                         </div>
                       </div>
+                      </Accordion>
                     </>
                   ) : (
                     <div className="glass-card p-8 text-center">
@@ -2743,7 +2790,7 @@ function CastDetailInner() {
                                     {fan && (
                                       <span className="text-[9px] px-1.5 py-0.5 rounded font-bold tabular-nums"
                                         style={{ background: 'rgba(245,158,11,0.1)', color: 'var(--accent-amber)' }}>
-                                        {fan.total_tokens.toLocaleString()}tk
+                                        {formatTokens(fan.total_tokens)}
                                       </span>
                                     )}
                                     <span className="text-[9px] px-1.5 py-0.5 rounded"
@@ -3199,7 +3246,7 @@ function CastDetailInner() {
                                     <span className={`w-3 h-3 rounded-sm border ${checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'}`} />
                                     <span className="font-medium">{f.user_name}</span>
                                   </div>
-                                  <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{f.total_tokens.toLocaleString()} tk</span>
+                                  <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{formatTokens(f.total_tokens)}</span>
                                 </div>
                               </button>
                             );
@@ -3301,18 +3348,76 @@ function CastDetailInner() {
                 <div className="glass-card p-4">
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="text-sm font-bold">📋 DMシナリオ</h3>
-                    <button
-                      onClick={() => setScenarioCreating(!scenarioCreating)}
-                      className="text-[10px] px-2 py-1 rounded-lg"
-                      style={{
-                        background: 'rgba(56,189,248,0.12)',
-                        border: '1px solid rgba(56,189,248,0.3)',
-                        color: 'var(--accent-primary)',
-                      }}
-                    >
-                      {scenarioCreating ? '✕ 閉じる' : '＋ 新規作成'}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        disabled={scenarioProcessing || !accountId}
+                        onClick={async () => {
+                          if (!accountId) return;
+                          setScenarioProcessing(true);
+                          setScenarioProcessResult(null);
+                          try {
+                            const { data: { session } } = await sb.auth.getSession();
+                            const res = await fetch('/api/scenario/process', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${session?.access_token || ''}`,
+                              },
+                              body: JSON.stringify({ account_id: accountId }),
+                            });
+                            const result = await res.json();
+                            if (res.ok) {
+                              setScenarioProcessResult(result);
+                            } else {
+                              alert(result.error || 'キュー処理失敗');
+                            }
+                          } catch (e) {
+                            alert('キュー処理エラー: ' + (e instanceof Error ? e.message : ''));
+                          } finally {
+                            setScenarioProcessing(false);
+                          }
+                        }}
+                        className="text-[10px] px-2 py-1 rounded-lg disabled:opacity-40"
+                        style={{
+                          background: 'rgba(34,197,94,0.12)',
+                          border: '1px solid rgba(34,197,94,0.3)',
+                          color: 'var(--accent-green)',
+                        }}
+                      >
+                        {scenarioProcessing ? '処理中...' : '▶ キュー実行'}
+                      </button>
+                      <button
+                        onClick={() => setScenarioCreating(!scenarioCreating)}
+                        className="text-[10px] px-2 py-1 rounded-lg"
+                        style={{
+                          background: 'rgba(56,189,248,0.12)',
+                          border: '1px solid rgba(56,189,248,0.3)',
+                          color: 'var(--accent-primary)',
+                        }}
+                      >
+                        {scenarioCreating ? '✕ 閉じる' : '＋ 新規作成'}
+                      </button>
+                    </div>
                   </div>
+
+                  {/* キュー処理結果 */}
+                  {scenarioProcessResult && (
+                    <div className="glass-panel rounded-lg p-2 mb-3 flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                      <span style={{ color: 'var(--accent-green)' }}>処理: {scenarioProcessResult.processed}件</span>
+                      {scenarioProcessResult.aiGenerated > 0 && (
+                        <span style={{ color: 'var(--accent-purple)' }}>AI生成: {scenarioProcessResult.aiGenerated}件</span>
+                      )}
+                      {scenarioProcessResult.skipped > 0 && (
+                        <span style={{ color: 'var(--text-muted)' }}>スキップ: {scenarioProcessResult.skipped}件</span>
+                      )}
+                      {scenarioProcessResult.errors > 0 && (
+                        <span style={{ color: 'var(--accent-pink)' }}>エラー: {scenarioProcessResult.errors}件</span>
+                      )}
+                      {scenarioProcessResult.aiErrors > 0 && (
+                        <span style={{ color: 'var(--accent-amber)' }}>AI失敗(テンプレ代替): {scenarioProcessResult.aiErrors}件</span>
+                      )}
+                    </div>
+                  )}
 
                   {/* 新規作成フォーム */}
                   {scenarioCreating && (
@@ -3510,6 +3615,55 @@ function CastDetailInner() {
                                   <span>最小間隔: {sc.min_interval_hours}h</span>
                                   <span>Step0自動: {sc.auto_approve_step0 ? 'ON' : 'OFF'}</span>
                                 </div>
+
+                                {/* エンロールメント詳細リスト（折りたたみ） */}
+                                {enrollCount > 0 && (() => {
+                                  const details = scenarioEnrollDetails.get(sc.id) || [];
+                                  const isEnrollOpen = enrollExpanded.has(sc.id);
+                                  const displayLimit = 30;
+                                  const visibleEnrolls = isEnrollOpen ? details.slice(0, displayLimit) : [];
+                                  return (
+                                    <div className="mt-1">
+                                      <button
+                                        onClick={() => setEnrollExpanded(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(sc.id)) next.delete(sc.id); else next.add(sc.id);
+                                          return next;
+                                        })}
+                                        className="flex items-center gap-2 text-[10px] font-semibold w-full text-left hover:opacity-80 transition-opacity py-1"
+                                        style={{ color: 'var(--accent-primary)' }}
+                                      >
+                                        <span>{isEnrollOpen ? '▼' : '▶'}</span>
+                                        <span>進行中ユーザー（{enrollCount}名）</span>
+                                      </button>
+                                      {isEnrollOpen && (
+                                        <div className="space-y-0.5 max-h-60 overflow-auto mt-1">
+                                          {visibleEnrolls.map(e => (
+                                            <div key={e.user_name} className="flex items-center justify-between text-[10px] px-2 py-1 rounded hover:bg-white/[0.03]">
+                                              <span className="truncate font-medium" style={{ color: 'var(--text-secondary)' }}>
+                                                {e.user_name}
+                                              </span>
+                                              <div className="flex items-center gap-2 flex-shrink-0" style={{ color: 'var(--text-muted)' }}>
+                                                <span className="px-1.5 py-0.5 rounded" style={{
+                                                  background: 'rgba(56,189,248,0.1)',
+                                                  color: 'var(--accent-primary)',
+                                                }}>
+                                                  Step {e.current_step}
+                                                </span>
+                                                <span>{new Date(e.enrolled_at).toLocaleDateString('ja-JP')}</span>
+                                              </div>
+                                            </div>
+                                          ))}
+                                          {details.length > displayLimit && (
+                                            <p className="text-[10px] text-center py-1" style={{ color: 'var(--text-muted)' }}>
+                                              ... 他 {details.length - displayLimit}名
+                                            </p>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             )}
                           </div>
@@ -3735,7 +3889,7 @@ function CastDetailInner() {
                           </div>
                           <div className="glass-panel p-3 rounded-xl text-center">
                             <p className="text-lg font-bold" style={{ color: 'var(--accent-green)' }}>
-                              {segments.reduce((s, seg) => s + seg.total_coins, 0).toLocaleString()} tk
+                              {formatTokens(segments.reduce((s, seg) => s + seg.total_coins, 0))}
                             </p>
                             <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>総コイン</p>
                           </div>
@@ -3764,7 +3918,7 @@ function CastDetailInner() {
                                       </span>
                                       <div className="flex items-center gap-2 flex-shrink-0">
                                         <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                          {(t.tokens || 0).toLocaleString()} tk
+                                          {formatTokens(t.tokens || 0)}
                                         </span>
                                         <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                                           {t.message_time ? new Date(t.message_time).toLocaleDateString('ja-JP') : '--'}
@@ -3789,7 +3943,7 @@ function CastDetailInner() {
                                       </span>
                                       <div className="flex items-center gap-2 flex-shrink-0">
                                         <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                          {(t.tokens || 0).toLocaleString()} tk
+                                          {formatTokens(t.tokens || 0)}
                                         </span>
                                         <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                                           {t.date ? new Date(t.date).toLocaleDateString('ja-JP') : '--'}
@@ -3805,16 +3959,8 @@ function CastDetailInner() {
 
                         {/* H5: Segment legend (collapsible) */}
                         <div className="glass-card p-3 mb-4">
-                          <button
-                            onClick={() => setShowSegmentLegend(!showSegmentLegend)}
-                            className="flex items-center gap-2 text-[11px] font-semibold w-full text-left hover:opacity-80 transition-opacity"
-                            style={{ color: 'var(--text-secondary)' }}
-                          >
-                            <span>{showSegmentLegend ? '▼' : '▶'}</span>
-                            <span>凡例</span>
-                          </button>
-                          {showSegmentLegend && (
-                            <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1 text-[10px]">
+                          <Accordion id="segment-legend" title="凡例" defaultOpen={true}>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-1 text-[10px]">
                               <div className="flex items-center gap-2 px-2 py-1 rounded" style={{ background: 'rgba(239,68,68,0.06)' }}>
                                 <span className="font-bold w-6">S1</span>
                                 <span>Whale現役 — 高額応援＋最近も応援</span>
@@ -3856,7 +4002,7 @@ function CastDetailInner() {
                                 <span>離脱 — 長期間来ていない</span>
                               </div>
                             </div>
-                          )}
+                          </Accordion>
                         </div>
 
                         {/* M26: Segment sort options + M19: color legend */}
@@ -3922,13 +4068,13 @@ function CastDetailInner() {
                                   <div className="flex items-center gap-4 text-[11px]">
                                     <span className="tabular-nums">{seg.user_count.toLocaleString()}名</span>
                                     <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
-                                      {seg.total_coins.toLocaleString()} tk
+                                      {formatTokens(seg.total_coins)}
                                     </span>
                                     <span className="tabular-nums" style={{ color: 'var(--text-muted)' }}>
                                       ({coinPct}%)
                                     </span>
                                     <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                                      平均 {Math.round(seg.avg_coins).toLocaleString()} tk
+                                      平均 {formatTokens(Math.round(seg.avg_coins))}
                                     </span>
                                   </div>
                                 </button>
@@ -3963,7 +4109,7 @@ function CastDetailInner() {
                                           </div>
                                           <div className="flex items-center gap-3 flex-shrink-0">
                                             <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
-                                              {u.total_coins.toLocaleString()} tk
+                                              {formatTokens(u.total_coins)}
                                             </span>
                                             <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                                               {u.last_payment_date ? new Date(u.last_payment_date).toLocaleDateString('ja-JP') : '--'}
@@ -4070,7 +4216,7 @@ function CastDetailInner() {
                                       {u.last_tip ? timeAgo(u.last_tip) : '--'}
                                     </td>
                                     <td className="text-right px-3 py-2 tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                      {u.total_tokens.toLocaleString()} tk
+                                      {formatTokens(u.total_tokens)}
                                     </td>
                                     <td className="text-right px-3 py-2" style={{ color: 'var(--text-muted)' }}>
                                       {timeAgo(u.last_seen)}
@@ -4199,7 +4345,7 @@ function CastDetailInner() {
                               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[10px] mb-2">
                                 <div>
                                   <span style={{ color: 'var(--text-muted)' }}>累計: </span>
-                                  <span className="font-bold" style={{ color: 'var(--accent-amber)' }}>{r.total_coins.toLocaleString()} tk</span>
+                                  <span className="font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(r.total_coins)}</span>
                                   <span style={{ color: 'var(--text-muted)' }}> ({r.tx_count}回)</span>
                                 </div>
                                 <div>
@@ -4242,7 +4388,7 @@ function CastDetailInner() {
                                             {new Date(tx.date).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                                           </span>
                                           <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                            {tx.amount.toLocaleString()} tk
+                                            {formatTokens(tx.amount)}
                                           </span>
                                           <span className="text-[9px]" style={{ color: 'var(--text-secondary)' }}>
                                             {tx.type === 'ticketShow' ? 'チケットチャット' :
@@ -4410,7 +4556,7 @@ function CastDetailInner() {
                                     </span>
                                     <div className="flex items-center gap-2 flex-shrink-0">
                                       <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
-                                        {u.total_coins.toLocaleString()} tk
+                                        {formatTokens(u.total_coins)}
                                       </span>
                                       <span style={{ color: 'var(--text-muted)' }}>{u.tx_count}回</span>
                                     </div>
@@ -4687,22 +4833,25 @@ function CastDetailInner() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
-                        {tokensToJPY(thisWeekCoins, coinRate)}
+                        {formatTokens(thisWeekCoins)}
                       </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(thisWeekCoins, coinRate)})</p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
                       <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-primary)' }}>チャット内チップ（SPYログ）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--accent-amber)' }}>
-                        {tokensToJPY(salesThisWeek, coinRate)}
+                        {formatTokens(salesThisWeek)}
                       </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(salesThisWeek, coinRate)})</p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
                       <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
                     </div>
                     <div className="glass-card p-4 text-center">
                       <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
-                        {tokensToJPY(salesLastWeek, coinRate)}
+                        {formatTokens(salesLastWeek)}
                       </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(salesLastWeek, coinRate)})</p>
                       <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週売上</p>
                       <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
                     </div>
@@ -4743,7 +4892,7 @@ function CastDetailInner() {
                         <p className="text-xs mt-1 font-bold">
                           <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(stats?.total_coins || 0)}</span>
                           {' '}
-                          <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(stats?.total_coins || 0, coinRate)}</span>
+                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(stats?.total_coins || 0, coinRate)})</span>
                         </p>
                       </div>
                       <div className="glass-panel p-3 rounded-xl">
@@ -4801,10 +4950,10 @@ function CastDetailInner() {
                               </div>
                               <div className="flex-shrink-0 text-right">
                                 <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                  {u.total_coins.toLocaleString()} tk
+                                  {formatTokens(u.total_coins)}
                                 </span>
-                                <p className="text-[9px]" style={{ color: 'var(--accent-green)' }}>
-                                  {tokensToJPY(u.total_coins, coinRate)}
+                                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                  ({tokensToJPY(u.total_coins, coinRate)})
                                 </p>
                               </div>
                             </div>
@@ -4905,11 +5054,11 @@ function CastDetailInner() {
                                       </div>
                                       <div className="flex justify-between">
                                         <span style={{ color: 'var(--text-muted)' }}>合計収益</span>
-                                        <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(row.total_tokens, coinRate)}</span>
+                                        <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(row.total_tokens)} <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(row.total_tokens, coinRate)})</span></span>
                                       </div>
                                       <div className="flex justify-between">
                                         <span style={{ color: 'var(--text-muted)' }}>サポーター平均</span>
-                                        <span style={{ color: 'var(--accent-amber)' }}>{tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)}</span>
+                                        <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(Math.round(row.avg_tokens_per_payer || 0))} <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)})</span></span>
                                       </div>
                                     </div>
                                   )}
@@ -4952,7 +5101,7 @@ function CastDetailInner() {
                                 </div>
                                 <div className="flex-shrink-0 ml-2 text-right">
                                   <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                    {tx.tokens.toLocaleString()} tk
+                                    {formatTokens(tx.tokens)}
                                   </span>
                                   <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgo(tx.date)}</p>
                                 </div>
@@ -5177,7 +5326,7 @@ function CastDetailInner() {
                               <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>グロス売上</p>
                               <p className="text-lg font-bold font-mono">{fmtUsd(rsTotals.gross)}</p>
                               <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                                {rsTotals.tokens.toLocaleString()} tk × ${revenueShare[0]?.setting_token_to_usd ?? 0.05}
+                                {formatTokens(rsTotals.tokens)} × ${revenueShare[0]?.setting_token_to_usd ?? 0.05}
                               </p>
                             </div>
                             <div className="glass-panel p-3 rounded-xl text-center">
@@ -6000,6 +6149,11 @@ function CastDetailInner() {
             </div>
           )}
 
+          {/* ============ REPORTS (配信レポート) ============ */}
+          {activeTab === 'reports' && accountId && castInfo && (
+            <CastReportsTab accountId={accountId} castId={castInfo.id} castName={castName} />
+          )}
+
           {/* ============ SETTINGS (設定) ============ */}
           {activeTab === 'settings' && (
             <div className="space-y-4">
@@ -6527,6 +6681,74 @@ function CastDetailInner() {
                   color: 'white',
                 }}>
                 {dmSending ? '送信中...' : '送信実行'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DM安全ゲート: 送信先プレビューモーダル */}
+      {dmShowPreview && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="glass-card p-6 rounded-2xl max-w-lg w-full mx-4 max-h-[80vh] flex flex-col" style={{ border: '1px solid rgba(56,189,248,0.2)' }}>
+            <h3 className="text-sm font-bold mb-3" style={{ color: 'var(--accent-primary)' }}>
+              送信先リスト確認（必須）
+            </h3>
+
+            {isDmTestMode() && (
+              <div className="mb-3 p-2 rounded-lg text-[10px]" style={{ background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)', color: 'var(--accent-amber)' }}>
+                DM_TEST_MODE: ON — ホワイトリスト以外への送信は自動ブロックされます
+              </div>
+            )}
+
+            <div className="mb-3 grid grid-cols-2 gap-2 text-[10px]">
+              <div className="glass-panel p-2 rounded-lg">
+                <span style={{ color: 'var(--text-muted)' }}>送信先</span>
+                <p className="font-bold text-sm" style={{ color: 'var(--text-primary)' }}>{dmTargets.size}名</p>
+              </div>
+              <div className="glass-panel p-2 rounded-lg">
+                <span style={{ color: 'var(--text-muted)' }}>キャンペーン</span>
+                <p className="font-bold text-sm truncate" style={{ color: 'var(--accent-primary)' }}>{dmCampaign || '(未設定)'}</p>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto mb-3 glass-panel rounded-lg p-2" style={{ maxHeight: '300px' }}>
+              <p className="text-[10px] font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>送信対象ユーザー:</p>
+              <div className="flex flex-wrap gap-1">
+                {Array.from(dmTargets).map(u => (
+                  <span key={u} className="text-[10px] px-2 py-0.5 rounded-full" style={{
+                    background: DM_TEST_WHITELIST.has(u) ? 'rgba(34,197,94,0.15)' : 'rgba(15,23,42,0.6)',
+                    border: `1px solid ${DM_TEST_WHITELIST.has(u) ? 'rgba(34,197,94,0.3)' : 'var(--border-glass)'}`,
+                    color: DM_TEST_WHITELIST.has(u) ? 'var(--accent-green)' : 'var(--text-secondary)',
+                  }}>
+                    {u}{DM_TEST_WHITELIST.has(u) && ' (WL)'}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="mb-3 glass-panel rounded-lg p-2">
+              <p className="text-[10px] font-semibold mb-1" style={{ color: 'var(--text-muted)' }}>メッセージ:</p>
+              <p className="text-[11px] whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                {dmMessage.length > 200 ? dmMessage.slice(0, 200) + '...' : dmMessage}
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setDmShowPreview(false); setDmPreviewConfirmed(false); }}
+                className="btn-ghost text-xs py-2 px-4 flex-1">
+                キャンセル
+              </button>
+              <button
+                onClick={() => {
+                  setDmPreviewConfirmed(true);
+                  setDmShowPreview(false);
+                  setTimeout(() => handleDmSend(), 100);
+                }}
+                className="text-xs py-2 px-4 flex-1 rounded-xl font-semibold"
+                style={{ background: 'linear-gradient(135deg, var(--accent-primary), #0284c7)', color: 'white' }}>
+                {dmTargets.size}名への送信を確認
               </button>
             </div>
           </div>

@@ -9,6 +9,21 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isDmTestMode, DM_TEST_WHITELIST } from './dm-guard';
+
+// シナリオタイプ → Persona API scenario ラベル変換
+const SCENARIO_TYPE_MAP: Record<string, string> = {
+  thankyou_vip: 'A',
+  thankyou_regular: 'A',
+  thankyou_first: 'A',
+  first_payment: 'A',
+  high_payment: 'A',
+  churn_recovery: 'B',
+  dormant: 'B',
+  visit_no_action: 'C',
+  segment_change: 'D',
+  manual: 'A',
+};
 
 // ============================================================
 // Types
@@ -61,6 +76,91 @@ export interface ProcessResult {
   processed: number;
   errors: number;
   skipped: number;
+  aiGenerated: number;
+  aiErrors: number;
+}
+
+// シナリオタイプ別の送信目的マッピング（AI文面生成のcontextに渡す）
+const SCENARIO_PURPOSE: Record<string, string> = {
+  thankyou_vip: '感謝+特別感。VIPとして唯一性を強調。限定情報を匂わせる。',
+  thankyou_regular: '感謝+再来訪の種まき。直接誘わない。余韻を残す。',
+  thankyou_first: '初課金お礼。嬉しさを全面に。次も来やすい空気を作る。',
+  first_payment: '初課金検出。自然な感謝。押しすぎない。',
+  high_payment: '高額応援お礼。特別扱い+承認欲求充足。',
+  churn_recovery: '存在を思い出させる+懐かしさ。理由を聞かない。圧ゼロ。',
+  dormant: '長期不在フォロー。軽い接触+BYAF強め。',
+  visit_no_action: '来訪ありがとう。課金には触れない。純粋に嬉しさだけ。',
+  segment_change: 'セグメント変動通知。アップなら祝福、ダウンなら気遣い。',
+  manual: '手動シナリオ。テンプレートに従う。',
+};
+
+// ステップ番号に応じたトーン指示
+function getStepToneGuide(stepNumber: number, totalSteps: number): string {
+  if (totalSteps <= 1) return '1通のみのシナリオ。感謝と余韻で完結させる。';
+  if (stepNumber === 1) return 'Step 1: 最初の接触。軽く自然に。感謝ベース。';
+  if (stepNumber === totalSteps) return `最終Step: クロージング。BYAF強め。圧をかけない。来てくれたら嬉しい、で終わる。`;
+  return `Step ${stepNumber}/${totalSteps}: 中間ステップ。前回と異なるトーン（感情⇔事実交互）。話題を変える。`;
+}
+
+// AI文面生成: Persona API mode='ai' でフルコンテキスト送信
+async function generateAiMessage(
+  baseUrl: string,
+  token: string,
+  castName: string,
+  accountId: string,
+  userName: string,
+  scenarioType: string,
+  stepNumber: number,
+  totalSteps: number,
+  enrollmentId?: string,
+): Promise<{ message: string; isAi: true } | null> {
+  try {
+    const res = await fetch(`${baseUrl}/api/persona`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        mode: 'ai',
+        cast_name: castName,
+        account_id: accountId,
+        task_type: 'dm_generate',
+        context: {
+          user_name: userName,
+          cast_name: castName,
+          account_id: accountId,
+          scenario_type: scenarioType,
+          step_number: stepNumber,
+          // フルコンテキスト: buildUserPrompt() が自動的にSPYログ・課金履歴・過去DM・セグメントを取得
+          // 追加のシナリオ固有コンテキスト:
+          scenario_purpose: SCENARIO_PURPOSE[scenarioType] || SCENARIO_PURPOSE.manual,
+          step_tone_guide: getStepToneGuide(stepNumber, totalSteps),
+          scenario_enrollment_id: enrollmentId,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn(`[scenario-engine] Persona API ${res.status}: ${await res.text().catch(() => '')}`);
+      return null;
+    }
+
+    const data = await res.json();
+    // mode='ai' は output がオブジェクト（{message, reasoning}）または文字列
+    const aiMessage = typeof data.output === 'object'
+      ? data.output?.message
+      : typeof data.output === 'string'
+        ? data.output
+        : data.message;
+    if (aiMessage && typeof aiMessage === 'string' && aiMessage.length > 0) {
+      return { message: aiMessage, isAi: true };
+    }
+    return null;
+  } catch (e) {
+    console.warn('[scenario-engine] AI文面生成失敗:', e);
+    return null;
+  }
 }
 
 // ============================================================
@@ -161,10 +261,15 @@ export async function checkAndEnroll(
 export async function processScenarioQueue(
   supabase: SupabaseClient,
   accountId: string,
+  options?: { baseUrl?: string; token?: string },
 ): Promise<ProcessResult> {
   let processed = 0;
   let errors = 0;
   let skipped = 0;
+  let aiGenerated = 0;
+  let aiErrors = 0;
+  const baseUrl = options?.baseUrl || '';
+  const authToken = options?.token || '';
 
   // 1. 期日到来のエンロールメントを取得（シナリオ情報を結合）
   const { data: dueEnrollments, error: fetchError } = await supabase
@@ -178,11 +283,11 @@ export async function processScenarioQueue(
 
   if (fetchError) {
     console.warn('[scenario-engine] Failed to fetch due enrollments:', fetchError.message);
-    return { processed: 0, errors: 0, skipped: 0 };
+    return { processed: 0, errors: 0, skipped: 0, aiGenerated: 0, aiErrors: 0 };
   }
 
   if (!dueEnrollments || dueEnrollments.length === 0) {
-    return { processed: 0, errors: 0, skipped: 0 };
+    return { processed: 0, errors: 0, skipped: 0, aiGenerated: 0, aiErrors: 0 };
   }
 
   for (const raw of dueEnrollments) {
@@ -214,9 +319,37 @@ export async function processScenarioQueue(
 
       const step = steps[currentStep];
 
-      // メッセージテンプレートの {username} を置換
-      const message = (step.message || step.template || '')
-        .replace(/\{username\}/g, enrollment.username);
+      // AI文面生成 or テンプレート置換
+      let message: string;
+      let usedAi = false;
+
+      if (step.use_persona !== false && baseUrl && authToken) {
+        const aiResult = await generateAiMessage(
+          baseUrl,
+          authToken,
+          enrollment.cast_name || '',
+          accountId,
+          enrollment.username,
+          scenario.trigger_type,
+          currentStep + 1,
+          steps.length,
+          enrollment.id,
+        );
+        if (aiResult) {
+          message = aiResult.message;
+          usedAi = true;
+          aiGenerated++;
+        } else {
+          // AI失敗時はテンプレートにフォールバック
+          message = (step.message || step.template || '')
+            .replace(/\{username\}/g, enrollment.username);
+          aiErrors++;
+        }
+      } else {
+        // use_persona=false or AI設定なし → テンプレート
+        message = (step.message || step.template || '')
+          .replace(/\{username\}/g, enrollment.username);
+      }
 
       // P0-5: 24時間以内の重複チェック（シナリオ経由のDMも対象）
       const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -236,6 +369,13 @@ export async function processScenarioQueue(
         continue;
       }
 
+      // DM安全ゲート: テストモード時ホワイトリスト外はスキップ
+      if (isDmTestMode() && !DM_TEST_WHITELIST.has(enrollment.username)) {
+        console.info(`[scenario-engine] [DM_TEST_MODE] スキップ: ${enrollment.username} はホワイトリスト外`);
+        skipped++;
+        continue;
+      }
+
       // dm_send_log にDMをキュー登録
       // 注意: dm_send_log は user_name カラム、dm_scenario_enrollments は username カラム
       const dmStatus = scenario.auto_approve_step0 && currentStep === 0 ? 'queued' : 'pending';
@@ -249,7 +389,7 @@ export async function processScenarioQueue(
           status: dmStatus,
           campaign: `scenario_${scenario.id.slice(0, 8)}_step${currentStep}`,
           scenario_enrollment_id: enrollment.id,
-          ai_generated: step.use_persona !== false,
+          ai_generated: usedAi,
         });
 
       if (dmError) {
@@ -297,7 +437,140 @@ export async function processScenarioQueue(
     }
   }
 
-  return { processed, errors, skipped };
+  return { processed, errors, skipped, aiGenerated, aiErrors };
+}
+
+// ============================================================
+// fireGoalEvents — アクティブエンロールメントのゴール自動検出
+// SPYメッセージ返信・課金・来訪を自動スキャンし、ゴール発火
+// ============================================================
+
+export async function fireGoalEvents(
+  supabase: SupabaseClient,
+  accountId: string,
+): Promise<{ fired: number; checked: number }> {
+  let fired = 0;
+
+  // 1. アクティブなエンロールメントを取得（ゴールタイプ付き）
+  const { data: enrollments, error } = await supabase
+    .from('dm_scenario_enrollments')
+    .select('id, username, cast_name, goal_type, last_step_sent_at')
+    .eq('account_id', accountId)
+    .eq('status', 'active')
+    .not('goal_type', 'is', null)
+    .limit(500);
+
+  if (error || !enrollments || enrollments.length === 0) {
+    return { fired: 0, checked: enrollments?.length || 0 };
+  }
+
+  for (const enrollment of enrollments) {
+    if (!enrollment.cast_name || !enrollment.goal_type) continue;
+    const since = enrollment.last_step_sent_at || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const goalType = enrollment.goal_type as string;
+
+    // payment ゴールチェック: 最終ステップ送信後に課金があるか
+    if (goalType === 'payment' || goalType === 'reply_or_visit') {
+      if (goalType === 'payment') {
+        const { data: coinTx } = await supabase
+          .from('coin_transactions')
+          .select('id')
+          .eq('user_name', enrollment.username)
+          .eq('cast_name', enrollment.cast_name)
+          .gte('date', since)
+          .limit(1);
+
+        if (coinTx && coinTx.length > 0) {
+          await markGoalReached(supabase, enrollment.id);
+          fired++;
+          continue;
+        }
+      }
+    }
+
+    // visit ゴールチェック: chat_logs → spy_messages フォールバック
+    if (goalType === 'visit' || goalType === 'reply_or_visit') {
+      // 1st: chat_logs (v2)
+      const { data: chatVisits } = await supabase
+        .from('chat_logs')
+        .select('id')
+        .eq('username', enrollment.username)
+        .eq('cast_name', enrollment.cast_name)
+        .gte('timestamp', since)
+        .limit(1);
+
+      if (chatVisits && chatVisits.length > 0) {
+        await markGoalReached(supabase, enrollment.id);
+        fired++;
+        continue;
+      }
+
+      // 2nd: spy_messages (v1) フォールバック
+      const { data: spyVisits } = await supabase
+        .from('spy_messages')
+        .select('id')
+        .eq('user_name', enrollment.username)
+        .eq('cast_name', enrollment.cast_name)
+        .gte('message_time', since)
+        .limit(1);
+
+      if (spyVisits && spyVisits.length > 0) {
+        await markGoalReached(supabase, enrollment.id);
+        fired++;
+        continue;
+      }
+    }
+
+    // reply ゴールチェック: chat_logs → spy_messages フォールバック
+    if (goalType === 'reply' || goalType === 'reply_or_visit') {
+      // 1st: chat_logs (v2) dm_reply タイプ
+      const { data: chatReplies } = await supabase
+        .from('chat_logs')
+        .select('id')
+        .eq('username', enrollment.username)
+        .eq('cast_name', enrollment.cast_name)
+        .eq('message_type', 'dm_reply')
+        .gte('timestamp', since)
+        .limit(1);
+
+      if (chatReplies && chatReplies.length > 0) {
+        await markGoalReached(supabase, enrollment.id);
+        fired++;
+        continue;
+      }
+
+      // 2nd: spy_messages (v1) dm_reply タイプ
+      const { data: spyReplies } = await supabase
+        .from('spy_messages')
+        .select('id')
+        .eq('user_name', enrollment.username)
+        .eq('cast_name', enrollment.cast_name)
+        .eq('msg_type', 'dm_reply')
+        .gte('message_time', since)
+        .limit(1);
+
+      if (spyReplies && spyReplies.length > 0) {
+        await markGoalReached(supabase, enrollment.id);
+        fired++;
+        continue;
+      }
+    }
+  }
+
+  return { fired, checked: enrollments.length };
+}
+
+async function markGoalReached(supabase: SupabaseClient, enrollmentId: string): Promise<void> {
+  const now = new Date().toISOString();
+  await supabase
+    .from('dm_scenario_enrollments')
+    .update({
+      status: 'goal_reached',
+      goal_reached_at: now,
+      completed_at: now,
+      next_step_due_at: null,
+    })
+    .eq('id', enrollmentId);
 }
 
 // ============================================================

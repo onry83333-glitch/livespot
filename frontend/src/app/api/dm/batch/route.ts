@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerSupabase } from '@/lib/supabase/server';
 import { StripchatAPI } from '@/lib/stripchat-api';
 import { checkDailyDmLimit } from '@/lib/dm-safety';
+import { isDmTestMode, DM_TEST_WHITELIST } from '@/lib/dm-guard';
 import { reportError } from '@/lib/error-handler';
 
 function sleep(ms: number) {
@@ -73,10 +74,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // P0-5: セッションのstripchat_user_id必須チェック
+  if (!session.stripchat_user_id) {
+    return NextResponse.json(
+      { error: 'セッションにstripchat_user_idがありません。Chrome拡張でセッションを再同期してください。' },
+      { status: 400 },
+    );
+  }
+
   // P0-5: キャスト身元検証 — セッションのstripchat_user_idとregistered_castsの照合
   // バッチ処理開始前に、このアカウントの全登録キャストを取得してルックアップ用マップを構築
   const castIdentityMap = new Map<string, string>();
-  if (session.stripchat_user_id) {
+  {
     const { data: registeredCasts } = await supabase
       .from('registered_casts')
       .select('cast_name, stripchat_user_id')
@@ -128,22 +137,68 @@ export async function POST(req: NextRequest) {
   const errors: Array<{ user_name: string; error: string }> = [];
 
   for (const task of tasks) {
+    // DM安全ゲート: テストモード時ホワイトリスト外はスキップ
+    if (isDmTestMode() && !DM_TEST_WHITELIST.has(task.user_name)) {
+      errorCount++;
+      const guardMsg = `[DM_TEST_MODE] ${task.user_name} はホワイトリスト外のためブロック`;
+      errors.push({ user_name: task.user_name, error: guardMsg });
+      await supabase
+        .from('dm_send_log')
+        .update({ status: 'error', error: guardMsg })
+        .eq('id', task.id);
+      continue;
+    }
+
+    // DM安全ゲート: campaign未設定のタスクはスキップ
+    if (!task.campaign) {
+      errorCount++;
+      const guardMsg = 'campaign未設定のためブロック';
+      errors.push({ user_name: task.user_name, error: guardMsg });
+      await supabase
+        .from('dm_send_log')
+        .update({ status: 'error', error: guardMsg })
+        .eq('id', task.id);
+      continue;
+    }
+
     // status を sending に更新
     await supabase
       .from('dm_send_log')
       .update({ status: 'sending', sent_via: 'api' })
       .eq('id', task.id);
 
-    // P0-5: タスクごとのキャスト身元検証ゲート
-    if (task.cast_name && session.stripchat_user_id) {
+    // P0-5: タスクごとのキャスト身元検証ゲート（cast_name必須）
+    if (!task.cast_name) {
+      errorCount++;
+      const missingErr = 'CAST_IDENTITY_MISSING: cast_nameが未設定のため送信ブロック';
+      errors.push({ user_name: task.user_name, error: missingErr });
+      await supabase
+        .from('dm_send_log')
+        .update({ status: 'blocked_identity_mismatch', sent_via: 'api', error: missingErr })
+        .eq('id', task.id);
+      continue;
+    }
+
+    {
       const registeredId = castIdentityMap.get(task.cast_name);
-      if (registeredId && registeredId !== String(session.stripchat_user_id)) {
+      if (!registeredId) {
+        errorCount++;
+        const unregErr = `CAST_IDENTITY_UNREGISTERED: cast=${task.cast_name} のstripchat_user_idが未登録のため送信ブロック`;
+        errors.push({ user_name: task.user_name, error: unregErr });
+        await supabase
+          .from('dm_send_log')
+          .update({ status: 'blocked_identity_mismatch', sent_via: 'api', error: unregErr })
+          .eq('id', task.id);
+        continue;
+      }
+
+      if (registeredId !== String(session.stripchat_user_id)) {
         errorCount++;
         const mismatchErr = `CAST_IDENTITY_MISMATCH: cast=${task.cast_name}(ID:${registeredId}) != session(${session.stripchat_user_id})`;
         errors.push({ user_name: task.user_name, error: mismatchErr });
         await supabase
           .from('dm_send_log')
-          .update({ status: 'error', sent_via: 'api', error: mismatchErr })
+          .update({ status: 'blocked_identity_mismatch', sent_via: 'api', error: mismatchErr })
           .eq('id', task.id);
 
         // 身元不一致は全件停止（同一セッションで全タスク同じ結果になるため）
@@ -151,7 +206,7 @@ export async function POST(req: NextRequest) {
         for (let i = currentIdx + 1; i < tasks.length; i++) {
           await supabase
             .from('dm_send_log')
-            .update({ status: 'error', error: mismatchErr })
+            .update({ status: 'blocked_identity_mismatch', error: mismatchErr })
             .eq('id', tasks[i].id);
         }
         errorCount += tasks.length - currentIdx - 1;

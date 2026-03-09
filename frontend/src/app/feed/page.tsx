@@ -470,7 +470,7 @@ export default function FeedPage() {
                               {c.next_session_viewers != null ? c.next_session_viewers.toLocaleString() : '-'}
                             </td>
                             <td className="py-2 text-right tabular-nums" style={{ color: 'var(--accent-amber, #f59e0b)' }}>
-                              {c.next_session_coins != null ? c.next_session_coins.toLocaleString() : '-'}
+                              {c.next_session_coins != null ? `${c.next_session_coins.toLocaleString()} tk` : '-'}
                             </td>
                           </tr>
                         ))}

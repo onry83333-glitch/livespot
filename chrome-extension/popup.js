@@ -1,8 +1,8 @@
 /**
- * Strip Live Spot - Popup Script (Simplified)
+ * Strip Live Spot - Popup Script (Auth Exporter)
  *
- * Streamlined to: login, account select, coin sync only.
- * Background processes (SPY, AutoPatrol, rotation, STT) continue independently.
+ * Login, account select, cast identity detection only.
+ * コイン同期・DM送信はサーバーサイドに移行済み。
  */
 
 // 環境判定: CWS経由インストール=本番、それ以外=開発
@@ -26,7 +26,6 @@ const passwordInput = $('passwordInput');
 const loginBtn = $('loginBtn');
 const loginError = $('loginError');
 const accountSelect = $('accountSelect');
-const coinSyncCastSelect = $('coinSyncCastSelect');
 
 // ============================================================
 // Supabase Auth via REST API
@@ -314,57 +313,6 @@ async function populateAccounts(accounts) {
   }
 }
 
-async function loadCastsForSync() {
-  const data = await chrome.storage.local.get(['account_id']);
-  if (!data.account_id) {
-    coinSyncCastSelect.innerHTML = '<option value="">アカウント未選択</option>';
-    return;
-  }
-
-  // getValidToken で最新トークンを取得（期限切れなら自動リフレッシュ）
-  const token = await getValidToken();
-  if (!token) {
-    coinSyncCastSelect.innerHTML = '<option value="">認証切れ — 再ログイン</option>';
-    return;
-  }
-
-  try {
-    const res = await supabaseFetch(
-      `${SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${data.account_id}&is_active=eq.true&select=cast_name,display_name`,
-      token,
-    );
-    if (!res) {
-      // 認証切れ → ログイン画面に戻す
-      await forceLogout();
-      return;
-    }
-    if (!res.ok) {
-      console.error('[LSP] Casts HTTP error:', res.status);
-      coinSyncCastSelect.innerHTML = `<option value="">取得失敗 (${res.status})</option>`;
-      return;
-    }
-    const casts = await res.json();
-    coinSyncCastSelect.innerHTML = '<option value="">キャストを選択</option>';
-    casts.forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.cast_name;
-      opt.textContent = c.display_name || c.cast_name;
-      coinSyncCastSelect.appendChild(opt);
-    });
-    const saved = await chrome.storage.local.get(['last_sync_cast_name']);
-    if (saved.last_sync_cast_name) {
-      coinSyncCastSelect.value = saved.last_sync_cast_name;
-    }
-    if (casts.length === 1) {
-      coinSyncCastSelect.value = casts[0].cast_name;
-      await chrome.storage.local.set({ last_sync_cast_name: casts[0].cast_name });
-    }
-  } catch (e) {
-    console.error('[LSP] Casts fetch error:', e.message);
-    coinSyncCastSelect.innerHTML = '<option value="">エラー</option>';
-  }
-}
-
 // ============================================================
 // Initialize
 // ============================================================
@@ -389,23 +337,8 @@ async function init() {
     }
 
     showDashboard();
-    // loadAccounts を先に完了 → account_id 確定後に loadCastsForSync
     await loadAccounts();
-    loadCastsForSync();
     detectLoggedInCast();
-
-    // Restore last coin sync status
-    chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
-      if (chrome.runtime.lastError) return;
-      if (response && response.ok && response.lastCoinSync) {
-        const syncEl = $('coinSyncStatus');
-        if (syncEl) {
-          const syncDate = new Date(response.lastCoinSync).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-          syncEl.innerHTML = `<span style="color:#475569;">前回: ${syncDate} (${response.coinSyncCount || 0}件)</span>`;
-          syncEl.classList.remove('hidden');
-        }
-      }
-    });
   } else {
     showLogin();
   }
@@ -448,7 +381,6 @@ loginBtn.addEventListener('click', async () => {
 
     showDashboard();
     await loadAccounts();
-    loadCastsForSync();
     detectLoggedInCast();
   } catch (err) {
     const msg = err.message === 'Invalid login credentials'
@@ -471,7 +403,6 @@ accountSelect.addEventListener('change', async () => {
   if (id) {
     chrome.storage.local.set({ account_id: id });
     chrome.runtime.sendMessage({ type: 'SET_ACCOUNT', account_id: id });
-    loadCastsForSync();
     // アカウント切り替え時にAMP cookieを自動クリーンアップ（誤送信防止）
     chrome.runtime.sendMessage({ type: 'CLEAR_CAST_COOKIES' }, (response) => {
       if (response && response.ok) {
@@ -510,57 +441,6 @@ $('clearCookiesBtn').addEventListener('click', () => {
 
 // --- Account Selection Change → Re-detect cast ---
 // (also triggers on page load if account was pre-selected)
-
-// --- Coin Sync Cast Selection ---
-coinSyncCastSelect.addEventListener('change', () => {
-  const castName = coinSyncCastSelect.value;
-  if (castName) {
-    chrome.storage.local.set({ last_sync_cast_name: castName });
-  }
-});
-
-// --- Coin Sync ---
-$('coinSyncBtn').addEventListener('click', async () => {
-  const btn = $('coinSyncBtn');
-  const statusEl = $('coinSyncStatus');
-
-  const selectedCast = coinSyncCastSelect.value;
-  if (!selectedCast) {
-    statusEl.innerHTML = '<span style="color:#f43f5e;">キャストを選択してください</span>';
-    statusEl.classList.remove('hidden');
-    return;
-  }
-
-  await chrome.storage.local.set({ last_sync_cast_name: selectedCast });
-
-  btn.disabled = true;
-  btn.textContent = '同期中...';
-  statusEl.innerHTML = '<span style="color:#f59e0b;">● 取得中...</span>';
-  statusEl.classList.remove('hidden');
-
-  chrome.runtime.sendMessage({ type: 'SYNC_COINS' }, (response) => {
-    btn.disabled = false;
-    btn.textContent = '同期';
-
-    if (chrome.runtime.lastError) {
-      statusEl.innerHTML = `<span style="color:#f43f5e;">✕ 通信エラー: ${chrome.runtime.lastError.message}</span>`;
-      return;
-    }
-
-    if (!response) {
-      statusEl.innerHTML = '<span style="color:#f43f5e;">✕ 応答なし</span>';
-      return;
-    }
-
-    if (response.ok) {
-      const now = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-      statusEl.innerHTML = `<span style="color:#22c55e;">✓ ${response.message || response.synced + '件同期'}</span>`
-        + `<br><span style="color:#475569;">最終同期: ${now}</span>`;
-    } else {
-      statusEl.innerHTML = `<span style="color:#f43f5e;">✕ ${response.error || 'エラー'}</span>`;
-    }
-  });
-});
 
 // --- Logout ---
 $('logoutLink').addEventListener('click', async (e) => {

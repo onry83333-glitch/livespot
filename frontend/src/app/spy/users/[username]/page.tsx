@@ -42,13 +42,14 @@ export default function UserActivityPage() {
       if (actData) setActivities(actData as UserCastActivity[]);
 
       // Recent messages from this user across all casts
-      const { data: msgs } = await supabase
-        .from('spy_messages')
+      const { data: rawMsgs } = await supabase
+        .from('chat_logs')
         .select('*')
         .eq('account_id', data.id)
-        .eq('user_name', username)
-        .order('message_time', { ascending: false })
+        .eq('username', username)
+        .order('timestamp', { ascending: false })
         .limit(50);
+      const msgs = (rawMsgs || []).map((r: Record<string, unknown>) => ({ ...r, message_time: r.timestamp ?? r.message_time, msg_type: r.message_type ?? r.msg_type, user_name: r.username ?? r.user_name }));
       if (msgs) setRecentMessages(msgs as SpyMessage[]);
 
       setLoading(false);

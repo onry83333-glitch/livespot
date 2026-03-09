@@ -35,8 +35,8 @@ async def generate_report(body: ReportGenerateRequest, user=Depends(get_current_
     sb = get_supabase_admin()
     _verify_account(sb, body.account_id, user["user_id"])
 
-    # (a) セッション情報取得
-    sess_result = sb.table("sessions").select("*").eq("session_id", body.session_id).single().execute()
+    # (a) セッション情報取得（account_id で所有権チェック）
+    sess_result = sb.table("sessions").select("*").eq("session_id", body.session_id).eq("account_id", body.account_id).single().execute()
     if not sess_result.data:
         raise HTTPException(status_code=404, detail="Session not found")
     session = sess_result.data

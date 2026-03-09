@@ -2,6 +2,7 @@
  * auth/index.ts — 統合認証モジュール
  *
  * フォールバックチェーン:
+ *   0. auth-manager HTTP（独立プロセス、localhost:3847）
  *   1. メモリキャッシュ（有効期限内）
  *   2. 方式C: ページHTML → __PRELOADED_STATE__
  *   3. 方式B: REST API /config
@@ -19,6 +20,32 @@ import {
 import { fetchAuthViaPlaywright } from './playwright-auth.js';
 
 const log = createLogger('auth');
+
+const AUTH_MANAGER_URL = `http://127.0.0.1:${process.env.AUTH_MANAGER_PORT || '3847'}`;
+
+/** auth-manager独立プロセスから認証データを取得 */
+async function fetchFromAuthManager(): Promise<StripchatAuth | null> {
+  try {
+    const res = await fetch(`${AUTH_MANAGER_URL}/auth`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return null;
+    const data = await res.json() as {
+      ok: boolean; jwt: string; cfClearance: string; wsUrl: string;
+      userId: string; expiresAt: number; method: string;
+    };
+    if (!data.ok || !data.jwt) return null;
+    return {
+      jwt: data.jwt,
+      cfClearance: data.cfClearance,
+      wsUrl: data.wsUrl,
+      userId: data.userId,
+      expiresAt: data.expiresAt,
+      method: data.method as StripchatAuth['method'],
+    };
+  } catch {
+    // auth-manager未起動 or タイムアウト → 次のフォールバックへ
+    return null;
+  }
+}
 
 // ----- In-memory cache -----
 let cachedAuth: StripchatAuth | null = null;
@@ -59,6 +86,14 @@ export async function getAuth(modelName?: string): Promise<StripchatAuth> {
 }
 
 async function doGetAuth(modelName?: string): Promise<StripchatAuth> {
+  // 方式0: auth-manager独立プロセス（最優先）
+  const managerAuth = await fetchFromAuthManager();
+  if (managerAuth) {
+    cachedAuth = managerAuth;
+    log.info(`Auth acquired via auth-manager (expires ${new Date(managerAuth.expiresAt * 1000).toLocaleTimeString('ja-JP')})`);
+    return managerAuth;
+  }
+
   // Auto-refresh chain
   if (AUTH_CONFIG.autoRefresh) {
     // 方式C: ページHTML
