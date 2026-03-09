@@ -12,7 +12,7 @@ import { LAYER_A_PRINCESS_MARKETING } from '@/lib/prompts/layer-a-princess';
 // 過去の高評価データを persona_feedback から取得してコンテキストに含める
 // ============================================================
 
-const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || '').trim();
+const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || '').replace(/[\s\r\n]+/g, '');
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
