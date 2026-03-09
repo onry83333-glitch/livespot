@@ -1,0 +1,64 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "session-end",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd C:/dev/kitakanto-os/context-crawler && PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python update_unified_context.py 2>&1 | tail -5"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(move:*)",
+      "Bash(cp:*)",
+      "Bash(node --version:*)",
+      "Bash(npm --version)",
+      "Bash(npm init -y)",
+      "Bash(npm run build)",
+      "Bash(npm run dev)",
+      "Bash(npm start)",
+      "Bash(npx supabase gen:*)",
+      "Bash(npx supabase status:*)",
+      "Bash(npx supabase migration:*)",
+      "Bash(grep:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(sed:*)",
+      "Bash(find:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(curl:*)",
+      "Bash(python:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "mcp__claude_ai_Notion__notion-fetch",
+      "mcp__claude_ai_Notion__notion-update-page",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 python:*)",
+      "Bash(where psql:*)",
+      "Bash(npx supabase:*)",
+      "Bash(git status:*)"
+    ],
+    "deny": [
+      "Bash(rm:*)",
+      "Bash(rm -rf:*)",
+      "Bash(del:*)",
+      "Bash(rmdir:*)",
+      "Bash(Remove-Item:*)",
+      "Bash(DROP TABLE:*)",
+      "Bash(DROP DATABASE:*)",
+      "Bash(TRUNCATE:*)",
+      "Bash(format:*)",
+      "Bash(shutdown:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}

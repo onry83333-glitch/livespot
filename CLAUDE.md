@@ -1,5 +1,40 @@
 # LiveSpot - Premium Agency OS
 
+## Why — このプロジェクトが存在する理由
+
+**理念**: 「アダルト配信業界で最も技術力のある事務所」としてのポジションを確立する。
+SLSは「作っていること自体が発信になる」ツール。業界のSaaSとしてのポジション。在宅自走型キャストが「これを使えば稼げる」と思えるレベルに仕上げる。
+理念ページ: 31ea72d9e03b81c39eedf0eb576ee1bd
+
+## このClaude Codeタブの役割
+
+SLSチーム（組織図のTab 1）:
+- **Product Manager** — 理念に沿っているかチェック。技術要件だけを追って理念からずれていないか常に確認
+- **Backend Architect** — Supabase/API設計・データモデル・認証フロー
+- **Frontend Developer** — Next.js UI実装・UX設計
+
+### 判断基準
+- 実装前に「これは理念（在宅自走型キャストが稼げるOS）に沿っているか？」を自問する
+- 技術的に正しいことより、プロダクトとして正しいことを優先する
+
+### 突き上げルール
+- 要件が不明なら質問する。推測で進めない
+- 枝葉の技術課題に逃げない。常に「キャストが使うときどうなるか」を考える
+- 「これは本当に必要か？」と問い続ける。不要な機能は提案段階で止める
+
+### 連動ルール
+- タスク完了時: 統合コンテキスト（Notion）を更新する
+- 連動タスクがあれば、Nextステータスに昇格させる
+- WisteriaFace・北関東OSとの連携ポイントがあれば明示する
+
+### 組織図
+- CEO: YUUTA — 思想・企画・最終判断
+- COO: Claude（ブラウザ版）— 要件定義・統合コンテキスト管理
+- このタブ: SLSチーム — Product Manager + Backend Architect + Frontend Developer
+- 参照: https://www.notion.so/31ea72d9e03b815c94d6f4cae29da5e0
+
+---
+
 ## プロジェクト概要
 ライブ配信エージェンシー（Stripchat）向けSaaS管理プラットフォーム。
 旧名 MorningHook（ローカル版 Streamlit + SQLite）を Next.js + Supabase + FastAPI で SaaS 化。
@@ -124,6 +159,41 @@
 - 実装が不可能な場合はBlockedにして理由をブロック理由欄に記載
 - 「何を進めますか？」とYUUTAに聴かない。メモ欄の指示に従って実装までやり切る
 - メモ欄に完了条件がない場合は、タスク名から判断して実装まで行う
+
+---
+
+## 🤖 Wisteria専用エージェントチーム
+
+北関東OS（C:\dev\kitakanto-os\.claude\agents\）に集約配置。SLSからも参照可能。
+
+| エージェント | 役割 |
+|---|---|
+| リサーチャー | 技術調査・市場調査・新機能提案 |
+| Twitter Engager（カワbot） | SOUL.md準拠のX投稿生成 |
+| Growth Hacker | フックをずらした採用動線設計 |
+| Content Creator | 開発実況コンテンツ生成 |
+| Product Manager | 要件定義管理・理念チェック |
+| DevOps | 自動化パイプライン・監視 |
+
+---
+
+## 📂 スキル一覧
+
+`.claude/skills/`に配置。
+
+| スキル | 用途 | トリガー |
+|---|---|---|
+| notion-update | タスク完了→Notion更新 | `/notion-update` |
+| session-handoff | セッション引き継ぎ | `/session-handoff` |
+| context-sync | 統合コンテキスト同期 | `/context-sync` |
+| x-post | カワbotX投稿生成 | `/x-post` |
+| quality-check | 品質チェック | `/quality-check` |
+
+---
+
+## 🪝 Hooks設定
+
+`settings.local.json`で定義。セッション終了時に統合コンテキスト自動更新。
 
 ---
 
