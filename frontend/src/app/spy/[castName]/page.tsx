@@ -5,8 +5,6 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { formatTokens, timeAgo, tokensToJPY } from '@/lib/utils';
-import { detectTicketShows } from '@/lib/ticket-show-detector';
-import type { TicketShow } from '@/lib/ticket-show-detector';
 import Link from 'next/link';
 import type { SpyCast, SpyMessage } from '@/types';
 import { mapChatLog } from '@/lib/table-mappers';
@@ -361,12 +359,11 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
    ============================================================ */
 function SessionsTab({ castName, accountId }: { castName: string; accountId: string }) {
   const [sessions, setSessions] = useState<{
-    session_id: string; started_at: string; ended_at: string;
-    total_messages: number; total_tokens: number;
-    peak_viewers: number; title: string | null; broadcast_title: string | null;
-    tip_count: number;
-    ticket_estimated_revenue: number; ticket_show_count: number;
-    show_estimated_revenue: number; show_transitions: { from: string; to: string; at: string; viewerCount: number }[];
+    broadcast_group_id: string; session_ids: string[];
+    started_at: string; ended_at: string;
+    session_title: string | null;
+    msg_count: number; chat_tokens: number; tip_count: number;
+    duration_minutes: number; total_revenue: number;
   }[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -374,136 +371,79 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
     const load = async () => {
       const supabase = createClient();
 
-      console.log('[配信ログ] castName:', castName, 'accountId:', accountId);
+      // get_session_list_v2: chat_logsから正確な売上を集計（自社と同一ロジック）
+      // sessions.total_tokens はコレクター再起動時にリセットされるため不正確
+      const { data, error } = await supabase.rpc('get_session_list_v2', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_limit: 30,
+        p_offset: 0,
+      });
 
-      // 1. sessionsテーブルから直接取得（cast_name + ended_at IS NOT NULL）
-      const { data: sessionRows, error: sessErr } = await supabase
-        .from('sessions')
-        .select('*')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .filter('ended_at', 'not.is', null)
-        .order('started_at', { ascending: false })
-        .limit(30);
+      if (error) {
+        console.warn('[SessionsTab] v2 RPC error, falling back to chat_logs:', error.message);
+        // フォールバック: chat_logsから直接集計
+        const { data: rawData } = await supabase
+          .from('chat_logs')
+          .select('session_id, cast_name, timestamp, username, tokens')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .not('session_id', 'is', null)
+          .order('timestamp', { ascending: false })
+          .limit(5000);
 
-      console.log('[配信ログ] sessions結果:', sessionRows?.length, '件', 'error:', JSON.stringify(sessErr));
-      if (sessionRows?.length) {
-        console.log('[配信ログ] 先頭session:', sessionRows[0].session_id, 'account_id:', sessionRows[0].account_id, 'cast_name:', sessionRows[0].cast_name);
-      }
+        if (!rawData || rawData.length === 0) {
+          setSessions([]);
+          setLoading(false);
+          return;
+        }
 
-      if (!sessionRows || sessionRows.length === 0) {
-        setSessions([]);
+        const sessionMap = new Map<string, { session_id: string; messages: { time: string; tokens: number }[] }>();
+        for (const r of rawData) {
+          if (!r.session_id) continue;
+          if (!sessionMap.has(r.session_id)) {
+            sessionMap.set(r.session_id, { session_id: r.session_id, messages: [] });
+          }
+          sessionMap.get(r.session_id)!.messages.push({ time: r.timestamp, tokens: r.tokens || 0 });
+        }
+
+        const rows = Array.from(sessionMap.values()).map(sess => {
+          const times = sess.messages.map(m => new Date(m.time).getTime());
+          const minTime = Math.min(...times);
+          const maxTime = Math.max(...times);
+          const totalTk = sess.messages.reduce((s, m) => s + (m.tokens > 0 ? m.tokens : 0), 0);
+          const tips = sess.messages.filter(m => m.tokens > 0).length;
+          return {
+            broadcast_group_id: sess.session_id,
+            session_ids: [sess.session_id],
+            started_at: new Date(minTime).toISOString(),
+            ended_at: new Date(maxTime).toISOString(),
+            session_title: null as string | null,
+            msg_count: sess.messages.length,
+            chat_tokens: totalTk,
+            tip_count: tips,
+            duration_minutes: Math.round((maxTime - minTime) / 60000),
+            total_revenue: totalTk,
+          };
+        });
+        rows.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime());
+        setSessions(rows);
         setLoading(false);
         return;
       }
 
-      // 2. chat_logsからセッション別TIP件数・チケットショー検出
-      const sessionIds = sessionRows.map(s => s.session_id);
-      const { data: msgs } = await supabase
-        .from('chat_logs')
-        .select('session_id, message_type, username, tokens, timestamp')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .in('session_id', sessionIds)
-        .limit(50000);
-
-      // 2b. spy_messagesからステータス遷移イベントを取得（売上推定用）
-      const { data: sysMsgs } = await supabase
-        .from('spy_messages')
-        .select('session_id, message, metadata')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .eq('msg_type', 'system')
-        .in('session_id', sessionIds);
-
-      // 3. Client-side集計
-      const aggMap = new Map<string, { tip_count: number; tipMsgs: { tokens: number; message_time: string; user_name: string }[] }>();
-      for (const m of (msgs || [])) {
-        if (!m.session_id) continue;
-        if (!aggMap.has(m.session_id)) {
-          aggMap.set(m.session_id, { tip_count: 0, tipMsgs: [] });
-        }
-        const agg = aggMap.get(m.session_id)!;
-        if (m.message_type === 'tip' || m.message_type === 'gift') {
-          agg.tip_count++;
-          if ((m.tokens || 0) > 0) {
-            agg.tipMsgs.push({ tokens: m.tokens, message_time: m.timestamp, user_name: m.username || '' });
-          }
-        }
-      }
-
-      // 3b. ステータス遷移データを集計（非公開ショーの売上推定）
-      type TransitionInfo = { from: string; to: string; at: string; viewerCount: number };
-      const transMap = new Map<string, { transitions: TransitionInfo[]; prices: Record<string, number> | null }>();
-      for (const m of (sysMsgs || [])) {
-        if (!m.session_id || !m.metadata) continue;
-        const meta = m.metadata as Record<string, unknown>;
-        // 配信終了メッセージからshowTransitionsを取得
-        if (meta.showTransitions && Array.isArray(meta.showTransitions)) {
-          transMap.set(m.session_id, {
-            transitions: meta.showTransitions as TransitionInfo[],
-            prices: (meta.prices as Record<string, number>) || null,
-          });
-        }
-        // 個別遷移メッセージからも取得
-        if (meta.event === 'status_transition') {
-          if (!transMap.has(m.session_id)) {
-            transMap.set(m.session_id, { transitions: [], prices: (meta.prices as Record<string, number>) || null });
-          }
-          const entry = transMap.get(m.session_id)!;
-          entry.transitions.push({
-            from: String(meta.from || ''),
-            to: String(meta.to || ''),
-            at: String((meta as Record<string, unknown>).at || m.message || ''),
-            viewerCount: Number(meta.viewerCount || 0),
-          });
-          if (meta.prices) entry.prices = meta.prices as Record<string, number>;
-        }
-      }
-
-      // 4. マージ（チケットショー + 非公開ショー推定売上を含む）
-      const merged = sessionRows.map(s => {
-        const agg = aggMap.get(s.session_id);
-        // チケットショー検出（既存ロジック）
-        const shows = agg?.tipMsgs?.length ? detectTicketShows(agg.tipMsgs) : [];
-        const ticketEstimated = shows.reduce((sum, sh) => sum + sh.ticket_revenue, 0);
-
-        // ステータス遷移ベースの推定（新ロジック）
-        const transData = transMap.get(s.session_id);
-        const transitions = transData?.transitions || [];
-        const prices = transData?.prices || {};
-        let showEstimated = 0;
-
-        // 各遷移ペア（from→to→next）から非公開ショーの所要時間を推定
-        for (let i = 0; i < transitions.length; i++) {
-          const t = transitions[i];
-          const nextAt = transitions[i + 1]?.at || s.ended_at;
-          const durationMin = nextAt
-            ? Math.max(1, Math.round((new Date(nextAt).getTime() - new Date(t.at).getTime()) / 60000))
-            : 5; // デフォルト5分
-
-          if (t.to === 'private' && prices.privatePrice) {
-            showEstimated += prices.privatePrice * durationMin;
-          } else if (t.to === 'groupShow' && prices.groupShowPrice) {
-            showEstimated += prices.groupShowPrice * Math.max(1, t.viewerCount) * durationMin;
-          } else if (t.to === 'p2p' && prices.cam2camPrice) {
-            showEstimated += prices.cam2camPrice * durationMin;
-          }
-          // ticketShowはチップ検出で既にカバー済み（重複回避）
-        }
-
-        return {
-          ...s,
-          total_tokens: s.total_tokens || 0,
-          tip_count: agg?.tip_count || 0,
-          ticket_estimated_revenue: ticketEstimated,
-          ticket_show_count: shows.length,
-          show_estimated_revenue: showEstimated,
-          show_transitions: transitions,
-        };
-      });
-
-      setSessions(merged);
+      setSessions((data || []).map((r: Record<string, unknown>) => ({
+        broadcast_group_id: r.broadcast_group_id as string,
+        session_ids: r.session_ids as string[],
+        started_at: r.started_at as string,
+        ended_at: r.ended_at as string,
+        session_title: r.session_title as string | null,
+        msg_count: (r.msg_count as number) || 0,
+        chat_tokens: (r.chat_tokens as number) || 0,
+        tip_count: (r.tip_count as number) || 0,
+        duration_minutes: (r.duration_minutes as number) || 0,
+        total_revenue: (r.total_revenue as number) || 0,
+      })));
       setLoading(false);
     };
     load();
@@ -527,20 +467,16 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>MSG</th>
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>TIP</th>
                 <th className="text-right py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>COINS</th>
-                              </tr>
+              </tr>
             </thead>
             <tbody>
-              {sessions.map((s, i) => {
+              {sessions.map((s) => {
                 const start = new Date(s.started_at);
                 const end = new Date(s.ended_at);
-                const durationMin = Math.round((end.getTime() - start.getTime()) / 60000);
-                const chatCoins = s.total_tokens;
-                const ticketRev = s.ticket_estimated_revenue;
-                const showRev = s.show_estimated_revenue;
-                const totalCoins = chatCoins + ticketRev + showRev;
-                const hasBreakdown = ticketRev > 0 || showRev > 0;
+                const durationMin = s.duration_minutes || Math.round((end.getTime() - start.getTime()) / 60000);
+                const totalCoins = s.total_revenue;
                 return (
-                  <tr key={s.session_id} className="border-b hover:bg-white/[0.02] transition-colors" style={{ borderColor: 'rgba(56,189,248,0.05)' }}>
+                  <tr key={s.broadcast_group_id} className="border-b hover:bg-white/[0.02] transition-colors" style={{ borderColor: 'rgba(56,189,248,0.05)' }}>
                     <td className="py-2.5 px-2 font-medium">
                       {start.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', timeZone: 'Asia/Tokyo' })}
                     </td>
@@ -549,36 +485,20 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                       {end.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })}
                       <span className="ml-1 text-[9px]" style={{ color: 'var(--text-muted)' }}>({durationMin}分)</span>
                     </td>
-                    <td className="py-2.5 px-2 max-w-[200px] truncate" style={{ color: s.broadcast_title ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
-                      {s.broadcast_title || '-'}
-                      {s.show_transitions.length > 0 && (
-                        <div className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                          {s.show_transitions.map(t => t.to).filter(t => t !== 'public').map((t, i) => (
-                            <span key={i} className="inline-block mr-1 px-1 rounded" style={{
-                              background: t === 'ticketShow' ? 'rgba(167,139,250,0.15)' :
-                                t === 'groupShow' ? 'rgba(34,197,94,0.15)' :
-                                t === 'private' ? 'rgba(244,63,94,0.15)' : 'rgba(148,163,184,0.1)',
-                              color: t === 'ticketShow' ? '#a78bfa' :
-                                t === 'groupShow' ? '#22c55e' :
-                                t === 'private' ? '#f43f5e' : 'var(--text-muted)',
-                            }}>{t}</span>
-                          ))}
-                        </div>
+                    <td className="py-2.5 px-2 max-w-[200px] truncate" style={{ color: s.session_title ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                      {s.session_title || '-'}
+                      {s.session_ids.length > 1 && (
+                        <span className="ml-1 text-[9px] px-1 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>
+                          {s.session_ids.length}セッション統合
+                        </span>
                       )}
                     </td>
-                    <td className="py-2.5 px-2 text-right tabular-nums">{(s.total_messages || 0).toLocaleString()}</td>
+                    <td className="py-2.5 px-2 text-right tabular-nums">{(s.msg_count || 0).toLocaleString()}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums" style={{ color: 'var(--accent-primary)' }}>{s.tip_count}</td>
                     <td className="py-2.5 px-2 text-right tabular-nums font-semibold" style={{ color: 'var(--accent-amber)' }}>
                       {formatTokens(totalCoins)}{totalCoins > 0 && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(totalCoins)})</span>}
-                      {hasBreakdown && (
-                        <div className="text-[9px] font-normal mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                          <span style={{ color: 'var(--accent-primary)' }}>チップ {formatTokens(chatCoins)}</span>
-                          {ticketRev > 0 && <>{' + '}<span style={{ color: '#a78bfa' }}>チケット {formatTokens(ticketRev)}</span></>}
-                          {showRev > 0 && <>{' + '}<span style={{ color: '#22c55e' }}>ショー推定 {formatTokens(showRev)}</span></>}
-                        </div>
-                      )}
                     </td>
-                                      </tr>
+                  </tr>
                 );
               })}
             </tbody>

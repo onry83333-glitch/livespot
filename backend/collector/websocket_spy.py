@@ -10,9 +10,25 @@ WebSocket SPY — Centrifugo v3 プロトコルでStripchatのリアルタイム
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 import httpx
+
+# ゴールメッセージ検出パターン（Node.js parsers/chat.ts と同一）
+GOAL_PATTERNS = [
+    re.compile(r"ゴール"),
+    re.compile(r"goal", re.IGNORECASE),
+    re.compile(r"エピック"),
+    re.compile(r"epic", re.IGNORECASE),
+    re.compile(r"達成"),
+    re.compile(r"残り.*コイン"),
+    re.compile(r"新しいゴール"),
+    re.compile(r"new goal", re.IGNORECASE),
+]
+
+# 拒否するユーザー名（Node.js normalizer/message.ts と同一）
+REJECTED_USERNAMES = {"unknown", "undefined", "null", ""}
 
 from collector.config import (
     USER_AGENT,
@@ -85,13 +101,22 @@ def _parse_chat_message(data: dict) -> dict | None:
         or data.get("username")
         or ""
     )
-    if not user_name:
+    if not user_name or user_name.lower() in REJECTED_USERNAMES:
         return None
 
     message = details.get("body") or details.get("text") or ""
     tokens = _safe_int(details.get("amount")) or _safe_int(data.get("tokens")) or 0
     raw_type = m.get("type", "")
-    msg_type = "tip" if (raw_type == "tip" or tokens > 0) else "chat"
+
+    # ゴールメッセージ検出（Node.js chat.ts と同一ロジック）
+    is_goal_message = any(p.search(message) for p in GOAL_PATTERNS)
+    if is_goal_message:
+        msg_type = "goal"
+        tokens = 0  # ゴール進捗トークンは実チップではない
+    elif raw_type == "tip" or tokens > 0:
+        msg_type = "tip"
+    else:
+        msg_type = "chat"
     message_time = m.get("createdAt") or _now_iso()
 
     user_league = str(ranking.get("league", ""))

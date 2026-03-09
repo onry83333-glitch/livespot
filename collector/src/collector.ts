@@ -42,6 +42,8 @@ interface CastState {
   target: CastTarget;
   status: CastStatus;
   viewerCount: number;
+  /** Peak viewer count during the current session */
+  peakViewerCount: number;
   modelId: string | null;
   lastStatusPoll: number;
   lastViewerPoll: number;
@@ -256,6 +258,7 @@ export function registerTarget(target: CastTarget): void {
     target,
     status: 'unknown',
     viewerCount: 0,
+    peakViewerCount: 0,
     modelId: null,
     lastStatusPoll: 0,
     lastViewerPoll: 0,
@@ -350,6 +353,9 @@ async function pollStatus(state: CastState): Promise<void> {
   const prevStatus = state.status;
   state.status = result.status;
   state.viewerCount = result.viewerCount;
+  if (isOnlineStatus(result.status)) {
+    state.peakViewerCount = Math.max(state.peakViewerCount, result.viewerCount);
+  }
 
   // Store modelId for WS subscription
   if (result.modelId) {
@@ -366,6 +372,7 @@ async function pollStatus(state: CastState): Promise<void> {
     state.sessionId = generateSessionId(target.accountId, target.castName, startTime);
     state.wsMessageCount = 0;
     state.wsTipTotal = 0;
+    state.peakViewerCount = result.viewerCount;
     state.lastPricing = result.prices;
     state.showTransitions = [];
     state.estimatedShowRevenue = 0;
@@ -498,7 +505,7 @@ async function pollStatus(state: CastState): Promise<void> {
 
     // sessions テーブルにセッション終了を記録
     if (state.sessionId) {
-      closeSession(state.sessionId, target.accountId, target.castName, state.wsMessageCount, state.wsTipTotal, state.viewerCount)
+      closeSession(state.sessionId, target.accountId, target.castName, state.wsMessageCount, state.wsTipTotal, state.peakViewerCount)
         .catch((err) => log.error(`Session close error: ${err}`));
     }
 
@@ -522,6 +529,7 @@ async function pollStatus(state: CastState): Promise<void> {
     state.wsClient = null;
     state.sessionId = null;
     state.sessionStartTime = null;
+    state.peakViewerCount = 0;
     state.lastPricing = null;
     state.showTransitions = [];
     state.estimatedShowRevenue = 0;
@@ -537,6 +545,7 @@ async function pollStatus(state: CastState): Promise<void> {
     state.lastPricing = result.prices;
     state.showTransitions = [];
     state.estimatedShowRevenue = 0;
+    state.peakViewerCount = result.viewerCount;
 
     if (existing) {
       state.sessionId = existing.session_id;
@@ -702,7 +711,7 @@ export async function closeAllActiveSessions(): Promise<number> {
   for (const state of castStates.values()) {
     if (state.sessionId) {
       try {
-        await closeSession(state.sessionId, state.target.accountId, state.target.castName, state.wsMessageCount, state.wsTipTotal, state.viewerCount);
+        await closeSession(state.sessionId, state.target.accountId, state.target.castName, state.wsMessageCount, state.wsTipTotal, state.peakViewerCount);
         closed++;
         log.info(`Shutdown: closed session ${state.sessionId} (${state.target.castName})`);
       } catch (err) {

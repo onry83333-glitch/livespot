@@ -57,6 +57,7 @@ const target: CastTarget = {
 
 let status: CastStatus = 'unknown';
 let viewerCount = 0;
+let peakViewerCount = 0;
 let modelId: string | null = target.stripchatModelId;
 let lastStatusPoll = 0;
 let lastViewerPoll = 0;
@@ -294,6 +295,9 @@ async function doPollStatus(): Promise<void> {
   const prevStatus = status;
   status = result.status;
   viewerCount = result.viewerCount;
+  if (isOnlineStatus(result.status)) {
+    peakViewerCount = Math.max(peakViewerCount, result.viewerCount);
+  }
   if (result.modelId) modelId = result.modelId;
 
   const isOnline = isOnlineStatus(result.status);
@@ -306,6 +310,7 @@ async function doPollStatus(): Promise<void> {
     sessionId = generateSessionId(startTime);
     wsMessageCount = 0;
     wsTipTotal = 0;
+    peakViewerCount = result.viewerCount;
 
     log.info(`ONLINE (${result.status}, ${result.viewerCount} viewers, session=${sessionId})`);
 
@@ -366,7 +371,7 @@ async function doPollStatus(): Promise<void> {
     });
 
     if (sessionId) {
-      closeSession(sessionId, ACCOUNT_ID, CAST_NAME, wsMessageCount, wsTipTotal, viewerCount)
+      closeSession(sessionId, ACCOUNT_ID, CAST_NAME, wsMessageCount, wsTipTotal, peakViewerCount)
         .catch((err) => log.error(`Session close error: ${err}`));
     }
 
@@ -386,12 +391,14 @@ async function doPollStatus(): Promise<void> {
     wsClient = null;
     sessionId = null;
     sessionStartTime = null;
+    peakViewerCount = 0;
   }
 
   // --- First poll: already online (or process restart while online) ---
   if (isOnline && prevStatus === 'unknown' && modelId && !wsClient) {
     // 再起動時: 既存の未閉鎖セッションを引き継ぐ（分割防止）
     const existingSession = await resumeExistingSession(ACCOUNT_ID, CAST_NAME);
+    peakViewerCount = result.viewerCount;
     if (existingSession) {
       sessionId = existingSession.session_id;
       sessionStartTime = existingSession.started_at;
@@ -627,7 +634,7 @@ async function shutdown(signal: string): Promise<void> {
 
   if (sessionId) {
     try {
-      await closeSession(sessionId, ACCOUNT_ID, CAST_NAME, wsMessageCount, wsTipTotal, viewerCount);
+      await closeSession(sessionId, ACCOUNT_ID, CAST_NAME, wsMessageCount, wsTipTotal, peakViewerCount);
       log.info(`Session ${sessionId} closed`);
     } catch (err) {
       log.error(`Failed to close session: ${err}`);
