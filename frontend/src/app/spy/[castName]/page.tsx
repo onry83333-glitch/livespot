@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
@@ -355,24 +355,33 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
 }
 
 /* ============================================================
-   Sessions Tab — sessionsテーブル直接クエリ + spy_messages集計
+   Sessions Tab — get_session_list_v2 RPC + アコーディオン展開
    ============================================================ */
+type SessionRow = {
+  broadcast_group_id: string; session_ids: string[];
+  started_at: string; ended_at: string;
+  session_title: string | null;
+  msg_count: number; chat_tokens: number; tip_count: number;
+  duration_minutes: number; total_revenue: number;
+};
+
+type ChildSession = {
+  session_id: string; started_at: string; ended_at: string;
+  msg_count: number; tip_count: number; chat_tokens: number;
+  duration_minutes: number;
+};
+
 function SessionsTab({ castName, accountId }: { castName: string; accountId: string }) {
-  const [sessions, setSessions] = useState<{
-    broadcast_group_id: string; session_ids: string[];
-    started_at: string; ended_at: string;
-    session_title: string | null;
-    msg_count: number; chat_tokens: number; tip_count: number;
-    duration_minutes: number; total_revenue: number;
-  }[]>([]);
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [childSessions, setChildSessions] = useState<Record<string, ChildSession[]>>({});
+  const [loadingChildren, setLoadingChildren] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     const load = async () => {
       const supabase = createClient();
 
-      // get_session_list_v2: chat_logsから正確な売上を集計（自社と同一ロジック）
-      // sessions.total_tokens はコレクター再起動時にリセットされるため不正確
       const { data, error } = await supabase.rpc('get_session_list_v2', {
         p_account_id: accountId,
         p_cast_name: castName,
@@ -382,7 +391,6 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
 
       if (error) {
         console.warn('[SessionsTab] v2 RPC error, falling back to chat_logs:', error.message);
-        // フォールバック: chat_logsから直接集計
         const { data: rawData } = await supabase
           .from('chat_logs')
           .select('session_id, cast_name, timestamp, username, tokens')
@@ -449,6 +457,60 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
     load();
   }, [accountId, castName]);
 
+  const toggleExpand = async (s: SessionRow) => {
+    if (s.session_ids.length <= 1) return;
+    const groupId = s.broadcast_group_id;
+
+    if (expandedGroups.has(groupId)) {
+      setExpandedGroups(prev => { const next = new Set(prev); next.delete(groupId); return next; });
+      return;
+    }
+
+    setExpandedGroups(prev => new Set(prev).add(groupId));
+
+    // Already fetched
+    if (childSessions[groupId]) return;
+
+    // Fetch child session breakdown from chat_logs
+    setLoadingChildren(prev => new Set(prev).add(groupId));
+    const supabase = createClient();
+    const { data: rawData } = await supabase
+      .from('chat_logs')
+      .select('session_id, timestamp, tokens')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .in('session_id', s.session_ids)
+      .order('timestamp', { ascending: true });
+
+    if (rawData) {
+      const map = new Map<string, { times: number[]; tokens: number; tips: number; msgCount: number }>();
+      for (const r of rawData) {
+        if (!r.session_id) continue;
+        if (!map.has(r.session_id)) map.set(r.session_id, { times: [], tokens: 0, tips: 0, msgCount: 0 });
+        const entry = map.get(r.session_id)!;
+        entry.times.push(new Date(r.timestamp).getTime());
+        entry.msgCount++;
+        if (r.tokens > 0) { entry.tokens += r.tokens; entry.tips++; }
+      }
+      const children: ChildSession[] = Array.from(map.entries()).map(([sid, d]) => {
+        const minT = Math.min(...d.times);
+        const maxT = Math.max(...d.times);
+        return {
+          session_id: sid,
+          started_at: new Date(minT).toISOString(),
+          ended_at: new Date(maxT).toISOString(),
+          msg_count: d.msgCount,
+          tip_count: d.tips,
+          chat_tokens: d.tokens,
+          duration_minutes: Math.round((maxT - minT) / 60000),
+        };
+      }).sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
+
+      setChildSessions(prev => ({ ...prev, [groupId]: children }));
+    }
+    setLoadingChildren(prev => { const next = new Set(prev); next.delete(groupId); return next; });
+  };
+
   if (loading) return <div className="glass-card p-8 text-center text-sm" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>;
 
   return (
@@ -461,6 +523,7 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
           <table className="w-full text-[11px]">
             <thead>
               <tr className="border-b" style={{ borderColor: 'var(--border-glass)' }}>
+                <th className="w-5 py-2 px-1"></th>
                 <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>日付</th>
                 <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>時間</th>
                 <th className="text-left py-2 px-2 font-semibold" style={{ color: 'var(--text-muted)' }}>タイトル</th>
@@ -475,30 +538,76 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                 const end = new Date(s.ended_at);
                 const durationMin = s.duration_minutes || Math.round((end.getTime() - start.getTime()) / 60000);
                 const totalCoins = s.total_revenue;
+                const isMerged = s.session_ids.length > 1;
+                const isExpanded = expandedGroups.has(s.broadcast_group_id);
+                const children = childSessions[s.broadcast_group_id];
+                const isLoadingChild = loadingChildren.has(s.broadcast_group_id);
+
                 return (
-                  <tr key={s.broadcast_group_id} className="border-b hover:bg-white/[0.02] transition-colors" style={{ borderColor: 'rgba(56,189,248,0.05)' }}>
-                    <td className="py-2.5 px-2 font-medium">
-                      {start.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', timeZone: 'Asia/Tokyo' })}
-                    </td>
-                    <td className="py-2.5 px-2" style={{ color: 'var(--text-secondary)' }}>
-                      {start.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })} -
-                      {end.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })}
-                      <span className="ml-1 text-[9px]" style={{ color: 'var(--text-muted)' }}>({durationMin}分)</span>
-                    </td>
-                    <td className="py-2.5 px-2 max-w-[200px] truncate" style={{ color: s.session_title ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
-                      {s.session_title || '-'}
-                      {s.session_ids.length > 1 && (
-                        <span className="ml-1 text-[9px] px-1 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>
-                          {s.session_ids.length}セッション統合
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-2 text-right tabular-nums">{(s.msg_count || 0).toLocaleString()}</td>
-                    <td className="py-2.5 px-2 text-right tabular-nums" style={{ color: 'var(--accent-primary)' }}>{s.tip_count}</td>
-                    <td className="py-2.5 px-2 text-right tabular-nums font-semibold" style={{ color: 'var(--accent-amber)' }}>
-                      {formatTokens(totalCoins)}{totalCoins > 0 && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(totalCoins)})</span>}
-                    </td>
-                  </tr>
+                  <React.Fragment key={s.broadcast_group_id}>
+                    {/* Parent row */}
+                    <tr
+                      className={`border-b transition-colors ${isMerged ? 'cursor-pointer hover:bg-white/[0.04]' : 'hover:bg-white/[0.02]'}`}
+                      style={{ borderColor: 'rgba(56,189,248,0.05)' }}
+                      onClick={() => toggleExpand(s)}
+                    >
+                      <td className="py-2.5 px-1 text-center text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        {isMerged ? (isExpanded ? '▼' : '▶') : ''}
+                      </td>
+                      <td className="py-2.5 px-2 font-medium">
+                        {start.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', timeZone: 'Asia/Tokyo' })}
+                      </td>
+                      <td className="py-2.5 px-2" style={{ color: 'var(--text-secondary)' }}>
+                        {start.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })} -
+                        {end.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })}
+                        <span className="ml-1 text-[9px]" style={{ color: 'var(--text-muted)' }}>({durationMin}分)</span>
+                      </td>
+                      <td className="py-2.5 px-2 max-w-[200px] truncate" style={{ color: s.session_title ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
+                        {s.session_title || '-'}
+                        {isMerged && (
+                          <span className="ml-1 text-[9px] px-1 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>
+                            {s.session_ids.length}セッション統合
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-2 text-right tabular-nums">{(s.msg_count || 0).toLocaleString()}</td>
+                      <td className="py-2.5 px-2 text-right tabular-nums" style={{ color: 'var(--accent-primary)' }}>{s.tip_count}</td>
+                      <td className="py-2.5 px-2 text-right tabular-nums font-semibold" style={{ color: 'var(--accent-amber)' }}>
+                        {formatTokens(totalCoins)}{totalCoins > 0 && <span className="ml-1 text-[9px] font-normal" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(totalCoins)})</span>}
+                      </td>
+                    </tr>
+
+                    {/* Child rows (accordion) */}
+                    {isExpanded && isMerged && (
+                      isLoadingChild ? (
+                        <tr><td colSpan={7} className="py-2 px-4 text-[10px] text-center" style={{ color: 'var(--text-muted)', background: 'rgba(15,23,42,0.3)' }}>読み込み中...</td></tr>
+                      ) : children?.map((child) => {
+                        const cStart = new Date(child.started_at);
+                        const cEnd = new Date(child.ended_at);
+                        return (
+                          <tr key={child.session_id} style={{ background: 'rgba(15,23,42,0.3)', borderColor: 'rgba(56,189,248,0.03)' }} className="border-b">
+                            <td className="py-1.5 px-1"></td>
+                            <td className="py-1.5 px-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                              <span className="pl-2" style={{ color: 'rgba(56,189,248,0.3)' }}>└</span>
+                            </td>
+                            <td className="py-1.5 px-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                              {cStart.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })} -
+                              {cEnd.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' })}
+                              <span className="ml-1 text-[9px]">({child.duration_minutes}分)</span>
+                            </td>
+                            <td className="py-1.5 px-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                              {child.session_id.slice(0, 8)}
+                            </td>
+                            <td className="py-1.5 px-2 text-right tabular-nums text-[10px]" style={{ color: 'var(--text-muted)' }}>{child.msg_count.toLocaleString()}</td>
+                            <td className="py-1.5 px-2 text-right tabular-nums text-[10px]" style={{ color: 'rgba(56,189,248,0.6)' }}>{child.tip_count}</td>
+                            <td className="py-1.5 px-2 text-right tabular-nums text-[10px]" style={{ color: 'rgba(251,191,36,0.7)' }}>
+                              {formatTokens(child.chat_tokens)}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
