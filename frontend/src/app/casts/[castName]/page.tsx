@@ -712,8 +712,8 @@ function CastDetailInner() {
   useEffect(() => {
     fetch(`/api/data/competitors?cast_name=${encodeURIComponent(castName)}`)
       .then(r => r.json())
-      .then(d => { if (d.competitors) setCompetitors(d.competitors); })
-      .catch(() => {});
+      .then(d => { console.log('[competitors]', d); if (d.competitors) setCompetitors(d.competitors); })
+      .catch(e => console.error('[competitors] fetch error:', e));
   }, [castName]);
 
   useEffect(() => {
