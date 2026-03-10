@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, COIN_RATE } from '@/lib/utils';
 import { Accordion } from '@/components/accordion';
@@ -80,7 +80,7 @@ interface DailyBriefingMetrics {
 
 interface CastKnowledgeRecord {
   id: string;
-  report_type: 'post_session' | 'daily_briefing' | 'weekly_review';
+  report_type: 'post_session' | 'daily_briefing' | 'weekly_review' | 'session_report';
   period_start: string;
   period_end: string | null;
   metrics_json: PostSessionMetrics | DailyBriefingMetrics;
@@ -130,9 +130,12 @@ const SEGMENT_LABELS: Record<string, string> = {
 export default function CastReportsTab({ accountId, castId, castName }: CastReportsTabProps) {
   const [records, setRecords] = useState<CastKnowledgeRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiReport, setAiReport] = useState<Record<string, unknown> | null>(null);
 
   // データ取得
-  useEffect(() => {
+  const fetchRecords = useCallback(() => {
     const sb = createClient();
     sb.from('cast_knowledge')
       .select('*')
@@ -146,6 +149,56 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       });
   }, [accountId, castId]);
 
+  useEffect(() => { fetchRecords(); }, [fetchRecords]);
+
+  // AI総合分析レポート生成
+  const handleGenerateAiReport = useCallback(async () => {
+    setAiGenerating(true);
+    setAiError(null);
+    setAiReport(null);
+    try {
+      const sb = createClient();
+      // 最新セッションを取得
+      const { data: latestSession } = await sb
+        .from('sessions')
+        .select('session_id')
+        .eq('cast_name', castName)
+        .eq('account_id', accountId)
+        .order('started_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (!latestSession) {
+        setAiError('分析対象のセッションがありません');
+        return;
+      }
+
+      const res = await fetch('/api/analysis/run-session-report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cast_name: castName,
+          session_id: latestSession.session_id,
+          account_id: accountId,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setAiError(data.error || 'レポート生成に失敗しました');
+        return;
+      }
+
+      setAiReport(data.report);
+      // 生成後にレコードを再取得して一覧に反映
+      fetchRecords();
+    } catch {
+      setAiError('通信エラーが発生しました');
+    } finally {
+      setAiGenerating(false);
+    }
+  }, [accountId, castName, fetchRecords]);
+
   // レポート分類
   const latestBriefing = useMemo(() =>
     records.find(r => r.report_type === 'daily_briefing') ?? null
@@ -153,6 +206,10 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
 
   const sessionReports = useMemo(() =>
     records.filter(r => r.report_type === 'post_session')
+  , [records]);
+
+  const aiAnalysisReports = useMemo(() =>
+    records.filter(r => r.report_type === 'session_report')
   , [records]);
 
   if (loading) {
@@ -167,15 +224,35 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
 
   if (records.length === 0) {
     return (
-      <div className="glass-card p-10 text-center">
-        <p className="text-lg mb-2">📊</p>
-        <p className="text-sm font-bold mb-1" style={{ color: 'var(--text-secondary)' }}>
-          配信レポートがまだありません
-        </p>
-        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          配信終了後に自動でレポートが生成されます。
-          日次ブリーフィングは毎朝9時に自動作成されます。
-        </p>
+      <div className="space-y-4">
+        <div className="glass-card p-10 text-center">
+          <p className="text-lg mb-2">📊</p>
+          <p className="text-sm font-bold mb-1" style={{ color: 'var(--text-secondary)' }}>
+            配信レポートがまだありません
+          </p>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            配信終了後に自動でレポートが生成されます。
+            日次ブリーフィングは毎朝9時に自動作成されます。
+          </p>
+        </div>
+        <div className="glass-card p-4">
+          <button
+            onClick={handleGenerateAiReport}
+            disabled={aiGenerating}
+            className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {aiGenerating ? 'AI分析中...' : 'AIで総合分析レポートを生成'}
+          </button>
+          <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
+            最新セッションをSonnet 4で深層分析します
+          </p>
+          {aiError && (
+            <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--accent-pink)' }}>
+              {aiError}
+            </p>
+          )}
+        </div>
+        {aiReport && <AiAnalysisCard report={aiReport} />}
       </div>
     );
   }
@@ -190,6 +267,41 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       {/* ========== インサイト（AI分析結果） ========== */}
       {latestBriefing?.insights_json && Object.keys(latestBriefing.insights_json).length > 0 && (
         <InsightsCard insights={latestBriefing.insights_json} />
+      )}
+
+      {/* ========== AI総合分析ボタン + 結果 ========== */}
+      <div className="glass-card p-4">
+        <button
+          onClick={handleGenerateAiReport}
+          disabled={aiGenerating}
+          className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {aiGenerating ? 'AI分析中...' : 'AIで総合分析レポートを生成'}
+        </button>
+        <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
+          最新セッションをSonnet 4で深層分析します（売上構造・客層・改善提案）
+        </p>
+        {aiError && (
+          <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--accent-pink)' }}>
+            {aiError}
+          </p>
+        )}
+      </div>
+
+      {/* 生成直後のAIレポート表示 */}
+      {aiReport && (
+        <AiAnalysisCard report={aiReport} />
+      )}
+
+      {/* 過去のAI総合分析レポート */}
+      {aiAnalysisReports.length > 0 && (
+        <Accordion id="cast-ai-analysis" title="AI総合分析レポート" icon="🧠" badge={`${aiAnalysisReports.length}件`}>
+          <div className="space-y-3">
+            {aiAnalysisReports.map(r => (
+              <AiAnalysisCard key={r.id} report={r.metrics_json as unknown as Record<string, unknown>} periodStart={r.period_start} />
+            ))}
+          </div>
+        </Accordion>
       )}
 
       {/* ========== 配信履歴 ========== */}
@@ -519,6 +631,72 @@ function SegmentChart({ distribution }: { distribution: SegmentDistribution }) {
           </PieChart>
         </ResponsiveContainer>
       </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   AiAnalysisCard（AI総合分析レポート表示）
+   ============================================================ */
+const AI_SECTION_CONFIG: { key: string; label: string; color: string; bg: string; border: string }[] = [
+  { key: 'revenue_structure', label: '売上構造', color: 'var(--accent-amber)', bg: 'rgba(245,158,11,0.06)', border: 'rgb(245,158,11)' },
+  { key: 'session_pattern', label: '配信パターン', color: 'var(--accent-primary)', bg: 'rgba(56,189,248,0.06)', border: 'rgb(56,189,248)' },
+  { key: 'audience_analysis', label: '客層分析', color: 'var(--accent-purple, #a855f7)', bg: 'rgba(168,85,247,0.06)', border: 'rgb(168,85,247)' },
+  { key: 'engagement_metrics', label: 'エンゲージメント', color: 'var(--accent-green)', bg: 'rgba(34,197,94,0.06)', border: 'rgb(34,197,94)' },
+  { key: 'improvement_suggestions', label: '改善提案', color: 'var(--accent-pink)', bg: 'rgba(244,63,94,0.06)', border: 'rgb(244,63,94)' },
+  { key: 'comparison_with_past', label: '過去との比較', color: 'var(--text-secondary)', bg: 'rgba(148,163,184,0.06)', border: 'rgb(148,163,184)' },
+];
+
+function AiAnalysisCard({ report, periodStart }: { report: Record<string, unknown>; periodStart?: string }) {
+  const dateLabel = periodStart
+    ? new Date(periodStart).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' })
+    : '最新';
+
+  return (
+    <div className="glass-card p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold flex items-center gap-2">
+          🧠 AI総合分析
+        </h3>
+        <span className="text-[10px] px-2 py-0.5 rounded-full"
+          style={{ background: 'rgba(168,85,247,0.08)', color: 'var(--accent-purple, #a855f7)' }}>
+          {dateLabel}
+        </span>
+      </div>
+      {AI_SECTION_CONFIG.map(section => {
+        const value = report[section.key];
+        if (!value) return null;
+        return (
+          <div key={section.key} className="p-3 rounded-xl" style={{ background: section.bg, borderLeft: `3px solid ${section.border}` }}>
+            <p className="text-[11px] font-bold mb-1.5" style={{ color: section.color }}>{section.label}</p>
+            <div className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+              {typeof value === 'string' ? (
+                <p>{value}</p>
+              ) : Array.isArray(value) ? (
+                <ul className="space-y-1">
+                  {value.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <span className="mt-0.5 shrink-0" style={{ color: section.color }}>•</span>
+                      {typeof item === 'string' ? item : JSON.stringify(item)}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <pre className="text-[10px] whitespace-pre-wrap break-words opacity-80">
+                  {JSON.stringify(value, null, 2)}
+                </pre>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      {typeof report.raw === 'string' && (
+        <div className="p-3 rounded-xl" style={{ background: 'rgba(100,116,139,0.06)' }}>
+          <pre className="text-[10px] whitespace-pre-wrap break-words" style={{ color: 'var(--text-secondary)' }}>
+            {report.raw}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
