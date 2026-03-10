@@ -473,7 +473,6 @@ $('earningsSyncBtn').addEventListener('click', async () => {
     {
       type: 'SYNC_EARNINGS',
       castName: btn.dataset.castName,
-      userId: btn.dataset.userId,
       fromDate: fromDate.toISOString(),
     },
     (response) => {

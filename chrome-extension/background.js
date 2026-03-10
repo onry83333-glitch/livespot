@@ -1811,7 +1811,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // --- Popup: Earnings同期 ---
   if (msg.type === 'SYNC_EARNINGS') {
-    handleSyncEarnings(msg.castName, msg.userId, msg.fromDate).then(result => {
+    handleSyncEarnings(msg.castName, msg.fromDate).then(result => {
       sendResponse({ ok: true, ...result });
     }).catch(e => {
       sendResponse({ ok: false, error: e.message });
@@ -1823,89 +1823,109 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // ============================================================
-// handleSyncEarnings — Stripchat Earnings API → coin_transactions UPSERT
+// handleSyncEarnings — content script経由でEarnings API取得 → Supabase UPSERT
 // ============================================================
-async function handleSyncEarnings(castName, userId, fromDate) {
-  if (!castName || !userId) throw new Error('castName/userId が未設定');
+async function handleSyncEarnings(castName, fromDate) {
+  if (!castName) throw new Error('castName が未設定');
   if (!accountId) throw new Error('accountId が未設定（アカウントを選択してください）');
 
-  // 1. Cookie取得
-  const allCookies = await chrome.cookies.getAll({ domain: '.stripchat.com' });
-  const cookieHeader = allCookies.map(c => `${c.name}=${c.value}`).join('; ');
-  if (!cookieHeader || allCookies.length < 3) {
-    throw new Error('Stripchat Cookie不足 — ブラウザでログインしてください');
+  // 1. Stripchatタブを探す（earningsページ優先）
+  let targetTab;
+  const earningsTabs = await chrome.tabs.query({
+    url: ['*://stripchat.com/earnings/*', '*://*.stripchat.com/earnings/*'],
+  });
+  if (earningsTabs.length > 0) {
+    targetTab = earningsTabs[0];
+    console.log('[LS-BG] Earnings同期: 既存earningsタブ使用 tab=', targetTab.id);
+  } else {
+    const scTabs = await chrome.tabs.query({
+      url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+    });
+    if (scTabs.length === 0) {
+      throw new Error('Stripchatのタブが開かれていません。Stripchatを開いてログインしてください');
+    }
+    targetTab = scTabs[0];
+    console.log('[LS-BG] Earnings同期: Stripchatタブをearningsページへ遷移 tab=', targetTab.id);
+    await chrome.tabs.update(targetTab.id, {
+      url: 'https://ja.stripchat.com/earnings/tokens-history',
+    });
+    // ページロード完了待ち
+    await new Promise((resolve) => {
+      const check = setInterval(async () => {
+        try {
+          const t = await chrome.tabs.get(targetTab.id);
+          if (t.status === 'complete') { clearInterval(check); resolve(); }
+        } catch { clearInterval(check); resolve(); }
+      }, 500);
+      setTimeout(() => { clearInterval(check); resolve(); }, 15000);
+    });
+    await new Promise(r => setTimeout(r, 3000)); // DOM安定待ち
   }
 
-  // 2. Earnings API fetch (最大10ページ = 1,000件)
-  const PAGE_SIZE = 100;
-  const MAX_PAGES = 10;
-  const sinceDate = fromDate ? new Date(fromDate) : null;
-  const allTx = [];
-  let offset = 0;
+  // 2. content_coin_sync.js を動的注入（manifest.jsonで既に注入されている場合はPINGで確認）
+  let scriptReady = false;
+  try {
+    const pong = await chrome.tabs.sendMessage(targetTab.id, { type: 'COIN_SYNC_PING' });
+    if (pong && pong.pong) scriptReady = true;
+  } catch { /* not injected yet */ }
 
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const url = `https://stripchat.com/api/front/users/${userId}/transactions?offset=${offset}&limit=${PAGE_SIZE}`;
-    let resp;
-    try {
-      resp = await fetch(url, {
-        headers: {
-          'Cookie': cookieHeader,
-          'Accept': 'application/json',
-          'User-Agent': navigator.userAgent,
-        },
-      });
-    } catch (err) {
-      console.error('[LS-BG] Earnings API接続エラー:', err.message);
-      break;
-    }
-
-    if (resp.status === 401 || resp.status === 403) {
-      throw new Error(`認証エラー (${resp.status}) — Stripchatに再ログインしてください`);
-    }
-    if (!resp.ok) {
-      console.warn('[LS-BG] Earnings API', resp.status);
-      break;
-    }
-
-    let data;
-    try { data = await resp.json(); } catch { break; }
-
-    const items = data.transactions || data.items || [];
-    if (items.length === 0) break;
-
-    let hitOld = false;
-    for (const tx of items) {
-      const txDate = tx.date || tx.createdAt || tx.created_at;
-      if (sinceDate && txDate && new Date(txDate) < sinceDate) { hitOld = true; break; }
-      allTx.push(tx);
-    }
-    if (hitOld || items.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-
-    // 800msディレイ（レート制限対策）
-    await new Promise(r => setTimeout(r, 800));
+  if (!scriptReady) {
+    console.log('[LS-BG] Earnings同期: content_coin_sync.js を動的注入');
+    await chrome.scripting.executeScript({
+      target: { tabId: targetTab.id },
+      files: ['content_coin_sync.js'],
+    });
+    await new Promise(r => setTimeout(r, 1000));
   }
 
-  if (allTx.length === 0) return { synced: 0, totalTokens: 0 };
+  // 3. content scriptにFETCH_COINSメッセージ送信
+  const sinceISO = fromDate || null;
+  console.log('[LS-BG] Earnings同期: FETCH_COINS送信 sinceISO=', sinceISO);
+  const result = await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Earnings取得タイムアウト（10分）')), 10 * 60 * 1000);
+    chrome.tabs.sendMessage(
+      targetTab.id,
+      { type: 'FETCH_COINS', options: { sinceISO, maxPages: 20 } },
+      (response) => {
+        clearTimeout(timeout);
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!response) {
+          reject(new Error('content scriptから応答なし'));
+          return;
+        }
+        resolve(response);
+      },
+    );
+  });
 
-  // 3. coin_transactions形式に変換
-  const rows = allTx.map(tx => ({
+  if (result.error) {
+    throw new Error(result.message || result.error);
+  }
+
+  const transactions = result.transactions || [];
+  if (transactions.length === 0) {
+    return { synced: 0, totalTokens: 0, fetched: 0 };
+  }
+
+  // 4. coin_transactions形式に変換してSupabase UPSERT
+  const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZ2Joa2xsZmVhY2JncGRianRvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDk2NDk3NywiZXhwIjoyMDg2NTQwOTc3fQ.IxlG4X6zHi9h4pgh6vFpQKaJGKwQzLBL-2C4af90MZQ';
+
+  const rows = transactions.map(tx => ({
     account_id: accountId,
     cast_name: castName,
-    stripchat_tx_id: tx.id ? String(tx.id) : null,
+    stripchat_tx_id: tx.id != null ? String(tx.id) : null,
     username: tx.userName || tx.user_name || tx.username || 'anonymous',
-    tokens: tx.tokens || tx.amount || 0,
-    type: (tx.type || tx.source || 'unknown').toLowerCase(),
-    date: tx.date || tx.createdAt || tx.created_at || new Date().toISOString(),
+    tokens: Math.max(0, tx.tokens || tx.amount || 0),
+    type: (tx.type || tx.sourceType || 'unknown').toLowerCase(),
+    date: tx.date || tx.created_at || tx.createdAt || new Date().toISOString(),
     is_anonymous: tx.isAnonymous ? true : false,
   }));
 
-  // 4. Supabase UPSERT（バッチ、service_role不要 — anon + RLS）
-  //    service_role keyを使ってRLSバイパス
-  const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZ2Joa2xsZmVhY2JncGRianRvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDk2NDk3NywiZXhwIjoyMDg2NTQwOTc3fQ.IxlG4X6zHi9h4pgh6vFpQKaJGKwQzLBL-2C4af90MZQ';
-
   let totalSynced = 0;
-  const BATCH = 200;
+  const BATCH = 500;
   for (let i = 0; i < rows.length; i += BATCH) {
     const batch = rows.slice(i, i + BATCH);
     try {
@@ -1935,7 +1955,13 @@ async function handleSyncEarnings(castName, userId, fromDate) {
 
   const totalTokens = rows.reduce((s, r) => s + (r.tokens || 0), 0);
   console.log(`[LS-BG] Earnings同期完了: ${totalSynced}件, ${totalTokens}tk`);
-  return { synced: totalSynced, totalTokens, fetched: allTx.length };
+
+  // 5. paying users もあれば処理
+  if (result.payingUsers && result.payingUsers.length > 0) {
+    console.log(`[LS-BG] 有料ユーザー ${result.payingUsers.length}名も取得済み`);
+  }
+
+  return { synced: totalSynced, totalTokens, fetched: transactions.length, pages: result.pages || 0 };
 }
 
 // ============================================================
