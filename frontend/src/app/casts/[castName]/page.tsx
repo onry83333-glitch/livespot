@@ -459,6 +459,13 @@ function CastDetailInner() {
   // M26: Segment sort
   const [segmentSortMode, setSegmentSortMode] = useState<'id' | 'users' | 'coins'>('id');
 
+  // Segment threshold customization
+  const [segThresholdVip, setSegThresholdVip] = useState(5000);
+  const [segThresholdRegular, setSegThresholdRegular] = useState(1000);
+  const [segThresholdMid, setSegThresholdMid] = useState(300);
+  const [segThresholdLight, setSegThresholdLight] = useState(50);
+  const [segThresholdsOpen, setSegThresholdsOpen] = useState(false);
+
   // Coin sync alert
   const [daysSinceSync, setDaysSinceSync] = useState<number | null>(null);
 
@@ -1518,7 +1525,14 @@ function CastDetailInner() {
         }
       });
 
-    sb.rpc('get_user_segments', { p_account_id: accountId, p_cast_name: castName })
+    sb.rpc('get_user_segments', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_threshold_vip: segThresholdVip,
+        p_threshold_regular: segThresholdRegular,
+        p_threshold_mid: segThresholdMid,
+        p_threshold_light: segThresholdLight,
+      })
       .then(({ data, error }) => {
         if (error) {
           console.error('[analytics] segments RPC error:', error.message);
@@ -2055,8 +2069,15 @@ function CastDetailInner() {
       } else {
         const count = typeof data === 'number' ? data : 0;
         setRefreshResult(`${count.toLocaleString()}件更新しました`);
-        // セグメントデータをリロード
-        sb.rpc('get_user_segments', { p_account_id: accountId, p_cast_name: castName })
+        // セグメントデータをリロード（カスタム閾値反映）
+        sb.rpc('get_user_segments', {
+          p_account_id: accountId,
+          p_cast_name: castName,
+          p_threshold_vip: segThresholdVip,
+          p_threshold_regular: segThresholdRegular,
+          p_threshold_mid: segThresholdMid,
+          p_threshold_light: segThresholdLight,
+        })
           .then(({ data: segData }) => {
             const parsed = Array.isArray(segData) ? segData : [];
             setSegments(parsed as UserSegment[]);
@@ -2067,7 +2088,7 @@ function CastDetailInner() {
     } finally {
       setRefreshingSegments(false);
     }
-  }, [accountId, castName, sb]);
+  }, [accountId, castName, sb, segThresholdVip, segThresholdRegular, segThresholdMid, segThresholdLight]);
 
   // Navigate to DM tab with segment targets (H6: segment context in campaign)
   const sendSegmentDm = useCallback((segmentId: string, segmentName: string) => {
@@ -3814,6 +3835,17 @@ function CastDetailInner() {
                           </span>
                         )}
                         <button
+                          onClick={() => setSegThresholdsOpen(!segThresholdsOpen)}
+                          className="text-[10px] px-3 py-1.5 rounded-lg font-medium transition-all"
+                          style={{
+                            background: segThresholdsOpen ? 'rgba(168,139,250,0.15)' : 'rgba(255,255,255,0.03)',
+                            color: segThresholdsOpen ? '#a78bfa' : 'var(--text-secondary)',
+                            border: `1px solid ${segThresholdsOpen ? 'rgba(168,139,250,0.3)' : 'var(--border-glass)'}`,
+                          }}
+                        >
+                          ⚙ 閾値
+                        </button>
+                        <button
                           onClick={handleRefreshSegments}
                           disabled={refreshingSegments}
                           className="text-[10px] px-3 py-1.5 rounded-lg font-medium transition-all"
@@ -3827,6 +3859,51 @@ function CastDetailInner() {
                         </button>
                       </div>
                     </div>
+
+                    {/* Threshold customization panel */}
+                    {segThresholdsOpen && (
+                      <div className="glass-panel p-3 rounded-xl mb-3" style={{ border: '1px solid rgba(168,139,250,0.2)' }}>
+                        <p className="text-[10px] font-bold mb-2" style={{ color: '#a78bfa' }}>
+                          セグメント閾値カスタマイズ（変更後「セグメント更新」で反映）
+                        </p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                          {([
+                            { label: 'VIP境界', value: segThresholdVip, set: setSegThresholdVip, default_: 5000, color: '#ef4444' },
+                            { label: '常連境界', value: segThresholdRegular, set: setSegThresholdRegular, default_: 1000, color: '#f59e0b' },
+                            { label: '中堅境界', value: segThresholdMid, set: setSegThresholdMid, default_: 300, color: '#38bdf8' },
+                            { label: 'ライト境界', value: segThresholdLight, set: setSegThresholdLight, default_: 50, color: '#94a3b8' },
+                          ] as const).map(t => (
+                            <div key={t.label}>
+                              <label className="text-[9px] block mb-0.5" style={{ color: t.color }}>{t.label} (tk+)</label>
+                              <input
+                                type="number"
+                                min={1}
+                                value={t.value}
+                                onChange={e => t.set(Math.max(1, parseInt(e.target.value) || t.default_))}
+                                className="w-full text-[11px] px-2 py-1 rounded-md"
+                                style={{
+                                  background: 'rgba(255,255,255,0.04)',
+                                  border: '1px solid var(--border-glass)',
+                                  color: 'var(--text-primary)',
+                                }}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex items-center justify-between mt-2">
+                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                            S1-S3: {segThresholdVip}tk+ / S4-S6: {segThresholdRegular}-{segThresholdVip - 1}tk / S7-S8: {segThresholdMid}-{segThresholdRegular - 1}tk / S9: {segThresholdLight}-{segThresholdMid - 1}tk / S10: {segThresholdLight}tk未満
+                          </p>
+                          <button
+                            onClick={() => { setSegThresholdVip(5000); setSegThresholdRegular(1000); setSegThresholdMid(300); setSegThresholdLight(50); }}
+                            className="text-[9px] px-2 py-0.5 rounded"
+                            style={{ color: 'var(--text-muted)', background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-glass)' }}
+                          >
+                            デフォルトに戻す
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
                     {segmentsLoading ? (
                       <div className="space-y-2">
