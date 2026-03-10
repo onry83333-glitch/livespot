@@ -4,6 +4,7 @@ import { authenticateAndValidateAccount } from '@/lib/api-auth';
 import { reportError } from '@/lib/error-handler';
 import { LAYER_A_ANDO_FOUNDATION } from '@/lib/prompts/layer-a-ando';
 import { LAYER_A_PRINCESS_MARKETING } from '@/lib/prompts/layer-a-princess';
+import { buildCastRAGContext } from '@/lib/rag-context';
 
 // ============================================================
 // 統一クリエイティブエンジン /api/persona/engine
@@ -419,6 +420,12 @@ export async function POST(req: NextRequest) {
     const topFeedback = await fetchTopFeedback(auth.token, cast_name, task_type);
     const feedbackContext = buildFeedbackContext(topFeedback);
 
+    // ── RAG Context: cast_knowledge から配信分析ナレッジを取得 ──
+    const ragContext = await buildCastRAGContext(cast_name, task_type, sb);
+    const ragBlock = ragContext.summary
+      ? `\n=== キャスト分析ナレッジ（直近の配信データに基づく） ===\n${ragContext.summary}\n`
+      : '';
+
     // ── Layer A 選択 ──
     const layerA = selectLayerA(task_type, activePersona.system_prompt_base);
 
@@ -427,12 +434,13 @@ export async function POST(req: NextRequest) {
       ? `=== あなたの役割 ===\nライブ配信エージェンシーの採用マーケター。\n温かく、共感的で、押しつけがましくない。\n「この人なら相談できそう」と思わせるトーン。`
       : buildLayerB(activePersona, detail);
 
-    // ── System Prompt 組み立て: Layer A + B + Feedback + Context + C ──
+    // ── System Prompt 組み立て: Layer A + B + RAG + Feedback + Context + C ──
     const systemPrompt = [
       layerA,
       '',
       layerB,
       '',
+      ragBlock,
       feedbackContext,
       activePersona.system_prompt_context
         ? `=== 直近コンテキスト ===\n${activePersona.system_prompt_context}`
@@ -480,6 +488,8 @@ export async function POST(req: NextRequest) {
       persona_used: activePersona.display_name || activePersona.cast_name,
       persona_found: !!persona,
       feedback_examples_used: topFeedback.length,
+      rag_data_points: ragContext.dataPoints,
+      rag_last_updated: ragContext.lastUpdated || null,
       raw_text: result.text,
     });
   } catch (e: unknown) {
