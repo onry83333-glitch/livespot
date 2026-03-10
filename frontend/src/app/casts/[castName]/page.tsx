@@ -696,7 +696,7 @@ function CastDetailInner() {
     } finally {
       setCompetitorAnalyzing(false);
     }
-  }, [castName]);
+  }, [castName, accountId]);
 
   // ============================================================
   // Load account + cast info
