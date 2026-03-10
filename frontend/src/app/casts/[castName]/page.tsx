@@ -5,6 +5,7 @@ import { useParams, useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { useRealtimeSpy } from '@/hooks/use-realtime-spy';
+import { useCoinStats } from '@/hooks/use-coin-stats';
 import { ChatMessage } from '@/components/chat-message';
 import { formatTokens, tokensToJPY, timeAgo, formatJST, COIN_RATE, getWeekStartJST } from '@/lib/utils';
 import type { RegisteredCast, SpyMessage, UserSegment } from '@/types';
@@ -376,9 +377,6 @@ function CastDetailInner() {
   // Coin sync alert
   const [daysSinceSync, setDaysSinceSync] = useState<number | null>(null);
 
-  // New paying users detection
-  const [newPayingUsers, setNewPayingUsers] = useState<{ user_name: string; total_coins: number; tx_count: number; is_completely_new: boolean }[]>([]);
-  const [newPayingExpanded, setNewPayingExpanded] = useState(false);
 
   // Alert system
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
@@ -650,6 +648,15 @@ function CastDetailInner() {
   // データ分離: キャスト登録日以降のデータのみ表示
   const registeredAt = useMemo(() => castInfo?.created_at || null, [castInfo]);
 
+  const { totalTokens: hookTotalTokens, thisWeekTokens: hookThisWeek, lastWeekTokens: hookLastWeek, daysSinceSync: hookDaysSync } = useCoinStats({ accountId, castName, registeredAt });
+
+  useEffect(() => {
+    setTotalCoinTx(hookTotalTokens);
+    setThisWeekCoins(hookThisWeek);
+    setLastWeekCoins(hookLastWeek);
+    setDaysSinceSync(hookDaysSync);
+  }, [hookTotalTokens, hookThisWeek, hookLastWeek, hookDaysSync]);
+
   // Settings: castInfo → form state sync
   useEffect(() => {
     if (!castInfo) return;
@@ -778,40 +785,15 @@ function CastDetailInner() {
     Promise.all([
       sb.rpc('get_cast_stats', { p_account_id: accountId, p_cast_names: [castName] }),
       sb.rpc('get_cast_fans', { p_account_id: accountId, p_cast_name: castName, p_limit: 10 }),
-      sb.from('coin_transactions')
-        .select('tokens')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .neq('type', 'studio')
-        .limit(50000),
-    ]).then(([statsRes, fansRes, coinTotalRes]) => {
+    ]).then(([statsRes, fansRes]) => {
       const s = statsRes.data as CastStatsData[] | null;
       if (s && s.length > 0) setStats(s[0]);
       setFans((fansRes.data || []) as FanItem[]);
-      setTotalCoinTx((coinTotalRes.data || []).reduce((sum: number, r: { tokens: number }) => sum + (r.tokens || 0), 0));
       setLoading(false);
     });
   }, [accountId, castName, sb]);
 
-  // ============================================================
-  // Coin sync alert: 最終同期からの経過日数
-  // ============================================================
-  useEffect(() => {
-    if (!accountId) return;
-    sb.from('coin_transactions')
-      .select('date')
-      .eq('account_id', accountId)
-      .eq('cast_name', castName)
-      .order('date', { ascending: false })
-      .limit(1)
-      .single()
-      .then(({ data }) => {
-        if (data?.date) {
-          const diff = Math.floor((Date.now() - new Date(data.date).getTime()) / (1000 * 60 * 60 * 24));
-          setDaysSinceSync(diff);
-        }
-      });
-  }, [accountId, castName, sb]);
+
 
   // ============================================================
   // Realtime: paid_users color cache
@@ -832,49 +814,6 @@ function CastDetailInner() {
         setPaidUserCoins(map);
       });
   }, [activeTab, accountId, castName, sb]);
-
-  // ============================================================
-  // Overview: weekly revenue (coin_transactionsベース)
-  // ============================================================
-  useEffect(() => {
-    if (!accountId || activeTab !== 'overview') return;
-    const thisMonday = getWeekStartJST(0);
-    const lastMonday = getWeekStartJST(1);
-
-    const thisStart = registeredAt && registeredAt > thisMonday.toISOString() ? registeredAt : thisMonday.toISOString();
-    const lastStart = registeredAt && registeredAt > lastMonday.toISOString() ? registeredAt : lastMonday.toISOString();
-
-    Promise.all([
-      sb.from('coin_transactions')
-        .select('tokens')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .neq('type', 'studio')
-        .gte('date', thisStart)
-        .limit(10000),
-      sb.from('coin_transactions')
-        .select('tokens')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .neq('type', 'studio')
-        .gte('date', lastStart)
-        .lt('date', thisMonday.toISOString())
-        .limit(10000),
-    ]).then(([thisTxRes, lastTxRes]) => {
-      setThisWeekCoins((thisTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
-      setLastWeekCoins((lastTxRes.data || []).reduce((s: number, r: { tokens: number }) => s + (r.tokens || 0), 0));
-    });
-
-    // 新規応援ユーザー検出（直近24時間）
-    sb.rpc('detect_new_paying_users', {
-      p_account_id: accountId,
-      p_cast_name: castName,
-    }).then(({ data, error }) => {
-      if (!error && Array.isArray(data)) {
-        setNewPayingUsers(data as typeof newPayingUsers);
-      }
-    });
-  }, [accountId, castName, activeTab, registeredAt, sb]);
 
   // ============================================================
   // Sessions: v2 RPC（coin_transactionsベース売上）

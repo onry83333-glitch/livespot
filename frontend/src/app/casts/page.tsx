@@ -6,6 +6,7 @@ import { useAuth } from '@/components/auth-provider';
 import { createClient } from '@/lib/supabase/client';
 import { formatTokens, tokensToJPY, timeAgo, COIN_RATE, getWeekStartJST, getTodayStartJST } from '@/lib/utils';
 import type { Account, RegisteredCast } from '@/types';
+import { useRegisteredCasts } from '@/hooks/use-registered-casts';
 
 /** coin_transactions の週次集計を取得。RPC優先、未適用時はページネーションフォールバック */
 async function fetchWeeklyCoinStats(
@@ -127,6 +128,7 @@ export default function CastsPage() {
   const { user } = useAuth();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedAccount, setSelectedAccount] = useState('');
+  const { casts: hookCasts, castNames: hookCastNames, loading: castsLoading } = useRegisteredCasts({ accountId: selectedAccount });
   const [registeredCasts, setRegisteredCasts] = useState<RegisteredCast[]>([]);
   const [castStats, setCastStats] = useState<CastStats[]>([]);
   const [weeklyStats, setWeeklyStats] = useState<WeeklyCoinStats[]>([]);
@@ -174,6 +176,11 @@ export default function CastsPage() {
     });
   }, [user]);
 
+  // hookCasts → registeredCasts 同期
+  useEffect(() => {
+    setRegisteredCasts(hookCasts);
+  }, [hookCasts]);
+
   // registered_casts → RPC get_cast_stats で集計取得
   useEffect(() => {
     if (!selectedAccount) return;
@@ -182,16 +189,7 @@ export default function CastsPage() {
     const load = async () => {
       const supabase = createClient();
       try {
-        const castsRes = await supabase
-          .from('registered_casts')
-          .select('*')
-          .eq('account_id', selectedAccount)
-          .eq('is_active', true)
-          .order('created_at', { ascending: true })
-          .limit(100);
-
-        const casts = castsRes.data || [];
-        setRegisteredCasts(casts);
+        const casts = hookCasts;
 
         if (casts.length === 0) {
           setCastStats([]);
@@ -264,7 +262,7 @@ export default function CastsPage() {
       }
     };
     load();
-  }, [selectedAccount]);
+  }, [selectedAccount, hookCasts]);
 
   // registered_casts + SPY stats + weekly coin stats を結合
   const castsWithStats = useMemo((): CastWithStats[] => {

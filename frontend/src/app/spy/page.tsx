@@ -15,6 +15,7 @@ import Link from 'next/link';
 import type { SpyCast, RegisteredCast, CastType } from '@/types';
 import { mapChatLog } from '@/lib/table-mappers';
 import { Accordion } from '@/components/accordion';
+import { useRegisteredCasts } from '@/hooks/use-registered-casts';
 
 /* ============================================================
    Types
@@ -236,31 +237,29 @@ function RealtimeTab({ castFilter }: { castFilter: 'own' | 'competitor' }) {
   const [castNamesLoaded, setCastNamesLoaded] = useState(false);
   const [castMonitorStatus, setCastMonitorStatus] = useState<Map<string, Date>>(new Map());
   const [castTagsMap, setCastTagsMap] = useState<Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }>>({});
+  const { casts: regCastsHook } = useRegisteredCasts({ accountId, columns: 'cast_name, genre, benchmark, category' });
   const { messages, allMessages, castNames, isConnected, insertDemoData, deleteCastMessages } = useRealtimeSpy({
     castName: selectedCast,
     enabled: !!user,
   });
 
-  // accountId取得 + registered_casts + spy_casts取得
+  // hookからregistered_castsを同期
+  useEffect(() => {
+    if (regCastsHook.length > 0) {
+      setRegisteredCastNames(new Set(regCastsHook.map(c => c.cast_name)));
+      const tagsMap: Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }> = {};
+      regCastsHook.forEach((c: any) => { tagsMap[c.cast_name] = { genre: c.genre, benchmark: c.benchmark, category: c.category }; });
+      setCastTagsMap(prev => ({ ...prev, ...tagsMap }));
+    }
+  }, [regCastsHook]);
+
+  // accountId取得 + spy_casts取得
   useEffect(() => {
     if (!user) return;
     whisperSbRef.current.from('accounts').select('id').limit(1).single().then(({ data }) => {
       if (data) {
         setAccountId(data.id);
-        const p1 = whisperSbRef.current
-          .from('registered_casts')
-          .select('cast_name, genre, benchmark, category')
-          .eq('account_id', data.id)
-          .eq('is_active', true)
-          .limit(100)
-          .then(({ data: casts }) => {
-            if (casts) {
-              setRegisteredCastNames(new Set(casts.map(c => c.cast_name)));
-              const tagsMap: Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }> = {};
-              casts.forEach(c => { tagsMap[c.cast_name] = { genre: c.genre, benchmark: c.benchmark, category: c.category }; });
-              setCastTagsMap(prev => ({ ...prev, ...tagsMap }));
-            }
-          });
+        const p1 = Promise.resolve();
         const p2 = whisperSbRef.current
           .from('spy_casts')
           .select('cast_name, genre, benchmark, category')
@@ -862,8 +861,13 @@ function OwnCastListTab() {
   const [casts, setCasts] = useState<RegisteredCast[]>([]);
   const [loading, setLoading] = useState(true);
   const [accountId, setAccountId] = useState<string | null>(null);
+  const { casts: allRegCasts, loading: regCastsLoading } = useRegisteredCasts({ accountId, activeOnly: false });
   const [newCastName, setNewCastName] = useState('');
   const [addingCast, setAddingCast] = useState(false);
+
+  useEffect(() => {
+    if (allRegCasts.length > 0) setCasts(allRegCasts);
+  }, [allRegCasts]);
 
   useEffect(() => {
     if (!user) return;
@@ -871,15 +875,6 @@ function OwnCastListTab() {
     supabase.from('accounts').select('id').limit(1).single().then(async ({ data }) => {
       if (!data) { setLoading(false); return; }
       setAccountId(data.id);
-
-      const { data: castData } = await supabase
-        .from('registered_casts')
-        .select('*')
-        .eq('account_id', data.id)
-        .order('created_at', { ascending: false })
-        .limit(100);
-
-      if (castData) setCasts(castData as RegisteredCast[]);
       setLoading(false);
     });
   }, [user]);
