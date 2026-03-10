@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { cast_name, session_id } = body;
+    const { cast_name, session_id, account_id } = body;
 
     if (!cast_name || !session_id) {
       return NextResponse.json(
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     const { data: pastKnowledge } = await auth.supabase
       .from('cast_knowledge')
       .select('report_type, metrics_json, insights_json, created_at')
-      .eq('account_id', '940e7248-1d73-4259-a538-56fdaea9d740')
+      .eq('account_id', account_id || session.account_id)
       .order('created_at', { ascending: false })
       .limit(5);
 
@@ -118,7 +118,7 @@ ${pastKnowledgeSummary || 'なし'}
     const { data: inserted, error: insertErr } = await auth.supabase
       .from('cast_knowledge')
       .insert({
-        account_id: '940e7248-1d73-4259-a538-56fdaea9d740',
+        account_id: account_id || session.account_id,
         report_type: 'session_report',
         period_start: session.started_at,
         period_end: session.ended_at,

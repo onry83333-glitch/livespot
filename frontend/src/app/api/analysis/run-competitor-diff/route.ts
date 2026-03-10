@@ -11,11 +11,11 @@ const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { cast_name, competitor_cast_name } = body;
+    const { cast_name, competitor_cast_name, account_id } = body;
 
-    if (!cast_name || !competitor_cast_name) {
+    if (!cast_name || !competitor_cast_name || !account_id) {
       return NextResponse.json(
-        { error: 'cast_name と competitor_cast_name は必須です' },
+        { error: 'cast_name, competitor_cast_name, account_id は必須です' },
         { status: 400 },
       );
     }
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
       },
-      body: JSON.stringify({ cast_name, competitor_cast_name }),
+      body: JSON.stringify({ cast_name, competitor_cast_name, account_id }),
     });
 
     const data = await res.json();

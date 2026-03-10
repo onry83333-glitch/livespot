@@ -22,11 +22,11 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { cast_name, competitor_cast_name } = body;
+    const { cast_name, competitor_cast_name, account_id } = body;
 
-    if (!cast_name || !competitor_cast_name) {
+    if (!cast_name || !competitor_cast_name || !account_id) {
       return NextResponse.json(
-        { error: 'cast_name と competitor_cast_name は必須です' },
+        { error: 'cast_name, competitor_cast_name, account_id は必須です' },
         { status: 400 },
       );
     }
@@ -71,14 +71,14 @@ export async function POST(request: NextRequest) {
       auth.supabase
         .from('cast_knowledge')
         .select('report_type, metrics_json, insights_json, created_at')
-        .eq('account_id', '940e7248-1d73-4259-a538-56fdaea9d740')
+        .eq('account_id', account_id)
         .order('created_at', { ascending: false })
         .limit(3),
       // 競合のナレッジは存在しない可能性があるが試行
       auth.supabase
         .from('cast_knowledge')
         .select('report_type, metrics_json, created_at')
-        .eq('account_id', '940e7248-1d73-4259-a538-56fdaea9d740')
+        .eq('account_id', account_id)
         .order('created_at', { ascending: false })
         .limit(3),
     ]);

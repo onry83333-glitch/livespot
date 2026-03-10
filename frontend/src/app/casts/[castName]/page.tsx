@@ -683,7 +683,7 @@ function CastDetailInner() {
       const res = await fetch('/api/analysis/run-competitor-diff', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cast_name: castName, competitor_cast_name: competitorName }),
+        body: JSON.stringify({ cast_name: castName, competitor_cast_name: competitorName, account_id: accountId }),
       });
       const data = await res.json();
       if (!res.ok) {
