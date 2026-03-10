@@ -62,6 +62,14 @@ export default function SpyCompetitorListTab() {
       if (!data) { setLoading(false); return; }
       setAccountId(data.id);
 
+      // registered_casts の cast_name 一覧を取得（自社キャスト除外用）
+      const { data: ownCasts } = await supabase
+        .from('registered_casts')
+        .select('cast_name')
+        .eq('account_id', data.id)
+        .eq('is_active', true);
+      const ownNames = new Set((ownCasts || []).map(c => c.cast_name));
+
       const { data: casts } = await supabase
         .from('spy_casts')
         .select('*')
@@ -70,7 +78,9 @@ export default function SpyCompetitorListTab() {
         .limit(100);
 
       if (casts) {
-        setSpyCasts(casts as SpyCast[]);
+        // 自社キャストを除外（registered_castsに存在するcast_nameはspy一覧に表示しない）
+        const filtered = (casts as SpyCast[]).filter(c => !ownNames.has(c.cast_name));
+        setSpyCasts(filtered);
         const castNames = casts.map(c => c.cast_name);
         if (castNames.length > 0) {
           const { data: statsData } = await supabase.rpc('get_spy_cast_stats', {

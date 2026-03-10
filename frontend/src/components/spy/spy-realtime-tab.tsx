@@ -65,32 +65,30 @@ export default function SpyRealtimeTab({ castFilter }: { castFilter: 'own' | 'co
           .select('cast_name, genre, benchmark, category')
           .eq('account_id', data.id)
           .eq('is_active', true)
-          .limit(100)
-          .then(({ data: casts }) => {
-            if (casts) {
-              setRegisteredCastNames(new Set(casts.map(c => c.cast_name)));
-              const tagsMap: Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }> = {};
-              casts.forEach(c => { tagsMap[c.cast_name] = { genre: c.genre, benchmark: c.benchmark, category: c.category }; });
-              setCastTagsMap(prev => ({ ...prev, ...tagsMap }));
-            }
-          });
+          .limit(100);
         const p2 = whisperSbRef.current
           .from('spy_casts')
           .select('cast_name, genre, benchmark, category')
           .eq('account_id', data.id)
           .eq('is_active', true)
-          .limit(100)
-          .then(({ data: casts }) => {
-            if (casts) {
-              setSpyCastNames(new Set(casts.map(c => c.cast_name)));
-              const tagsMap: Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }> = {};
-              casts.forEach(c => { tagsMap[c.cast_name] = { genre: c.genre, benchmark: c.benchmark, category: c.category }; });
-              setCastTagsMap(prev => ({ ...prev, ...tagsMap }));
-            }
-          });
+          .limit(100);
 
-        // 両方のキャスト名ロード完了後にフラグを立てる
-        Promise.all([p1, p2]).then(() => setCastNamesLoaded(true));
+        // 両方のキャスト名ロード完了後に、spy_castsから自社キャストを除外してセット
+        Promise.all([p1, p2]).then(([regRes, spyRes]) => {
+          const regCasts = regRes.data || [];
+          const ownNames = new Set(regCasts.map(c => c.cast_name));
+          setRegisteredCastNames(ownNames);
+          const tagsMap1: Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }> = {};
+          regCasts.forEach(c => { tagsMap1[c.cast_name] = { genre: c.genre, benchmark: c.benchmark, category: c.category }; });
+
+          const spyCasts = (spyRes.data || []).filter(c => !ownNames.has(c.cast_name));
+          setSpyCastNames(new Set(spyCasts.map(c => c.cast_name)));
+          const tagsMap2: Record<string, { genre?: string | null; benchmark?: string | null; category?: string | null }> = {};
+          spyCasts.forEach(c => { tagsMap2[c.cast_name] = { genre: c.genre, benchmark: c.benchmark, category: c.category }; });
+
+          setCastTagsMap(prev => ({ ...prev, ...tagsMap1, ...tagsMap2 }));
+          setCastNamesLoaded(true);
+        });
 
         // Cast monitoring status: latest message per cast
         whisperSbRef.current
