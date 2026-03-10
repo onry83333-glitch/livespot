@@ -376,6 +376,9 @@ function CastDetailInner() {
   // DM Section toggle (A/B/C/D/E)
   const [dmSection, setDmSection] = useState<'users' | 'send' | 'segments' | 'campaigns' | 'scenarios' | 'effectiveness'>('users');
 
+  // Analytics sub-tab toggle
+  const [analyticsSection, setAnalyticsSection] = useState<'segments' | 'acquisition' | 'dm_campaign' | 'hourly'>('segments');
+
   // DM Effectiveness state
   const [dmEffectiveness, setDmEffectiveness] = useState<DmEffItem[]>([]);
   const [dmEffLoading, setDmEffLoading] = useState(false);
@@ -3759,6 +3762,29 @@ function CastDetailInner() {
                 </div>
               ) : (
                 <>
+                  {/* Sub-tab navigation */}
+                  <div className="flex gap-1.5">
+                    {([
+                      { key: 'segments' as const, icon: '📊', label: 'セグメント分析' },
+                      { key: 'acquisition' as const, icon: '👥', label: 'ユーザー獲得' },
+                      { key: 'dm_campaign' as const, icon: '📈', label: 'DMキャンペーン効果' },
+                      { key: 'hourly' as const, icon: '⏰', label: '時間帯分析' },
+                    ] as const).map(t => (
+                      <button key={t.key} onClick={() => setAnalyticsSection(t.key)}
+                        className={`text-[11px] px-4 py-2 rounded-lg font-medium transition-all ${
+                          analyticsSection === t.key ? 'text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
+                        }`}
+                        style={analyticsSection === t.key ? {
+                          background: 'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(56,189,248,0.05))',
+                          border: '1px solid rgba(56,189,248,0.2)',
+                        } : {}}>
+                        {t.icon} {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* ---- Sub-tab: segments ---- */}
+                  {analyticsSection === 'segments' && (<>
                   {/* ============ SEGMENT ANALYSIS ============ */}
                   <div className="glass-card p-4">
                     <div className="flex items-center justify-between mb-3">
@@ -4094,81 +4120,327 @@ function CastDetailInner() {
                     )}
                   </div>
 
-                  {/* Retention status badges — データがある場合のみ表示 */}
-                  {retentionUsers.length > 0 && (
-                    <>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        <div className="glass-card p-4 text-center">
-                          <p className="text-2xl font-bold" style={{ color: '#22c55e' }}>{retentionCounts.active}</p>
-                          <p className="text-[10px] mt-1">🟢 アクティブ</p>
-                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>7日以内にチップ</p>
-                        </div>
-                        <div className="glass-card p-4 text-center">
-                          <p className="text-2xl font-bold" style={{ color: '#f59e0b' }}>{retentionCounts.at_risk}</p>
-                          <p className="text-[10px] mt-1">🟡 離脱危機</p>
-                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>7〜14日</p>
-                        </div>
-                        <div className="glass-card p-4 text-center">
-                          <p className="text-2xl font-bold" style={{ color: '#f43f5e' }}>{retentionCounts.churned}</p>
-                          <p className="text-[10px] mt-1">🔴 離脱</p>
-                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>14日以上</p>
-                        </div>
-                        <div className="glass-card p-4 text-center">
-                          <p className="text-2xl font-bold" style={{ color: '#38bdf8' }}>{retentionCounts.new}</p>
-                          <p className="text-[10px] mt-1">🆕 新規</p>
-                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>初チップ7日以内</p>
-                        </div>
+                  {/* Sales data (from Block 2) - wrapped in salesLoading check */}
+                  {salesLoading ? (
+                    <div className="space-y-3">
+                      <div className="h-8 rounded-lg animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                      <div className="grid grid-cols-4 gap-3">
+                        <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                        <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                        <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                        <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
                       </div>
+                    </div>
+                  ) : (<>
+                  {/* Weekly summary cards */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="glass-card p-4 text-center">
+                      <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
+                        {formatTokens(thisWeekCoins)}
+                      </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(thisWeekCoins, coinRate)})</p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-primary)' }}>チャット内チップ（SPYログ）</p>
+                    </div>
+                    <div className="glass-card p-4 text-center">
+                      <p className="text-xl font-bold" style={{ color: 'var(--accent-amber)' }}>
+                        {formatTokens(salesThisWeek)}
+                      </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(salesThisWeek, coinRate)})</p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
+                    </div>
+                    <div className="glass-card p-4 text-center">
+                      <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
+                        {formatTokens(salesLastWeek)}
+                      </p>
+                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(salesLastWeek, coinRate)})</p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週売上</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
+                    </div>
+                    <div className="glass-card p-4 text-center">
+                      <p className="text-xl font-bold" style={{
+                        color: salesLastWeek > 0 ? ((salesThisWeek - salesLastWeek) >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)') : 'var(--text-muted)'
+                      }}>
+                        {salesLastWeek > 0
+                          ? `${(salesThisWeek - salesLastWeek) >= 0 ? '↑' : '↓'} ${Math.abs(Math.round((salesThisWeek - salesLastWeek) / salesLastWeek * 100))}%`
+                          : '--'}
+                      </p>
+                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比</p>
+                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
+                    </div>
+                  </div>
 
-                      {/* At-risk users */}
-                      {retentionUsers.filter(u => u.status === 'at_risk').length > 0 && (
-                        <div className="glass-card p-4">
-                          <div className="flex items-center justify-between mb-3">
-                            <h3 className="text-sm font-bold">🟡 離脱危機ファン</h3>
-                            <button onClick={() => sendRetentionDm(
-                              retentionUsers.filter(u => u.status === 'at_risk').map(u => u.user_name),
-                              '復帰DM'
-                            )} className="btn-primary text-[10px] py-1 px-3">全員に復帰DM</button>
+                  {/* Coin History */}
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3">直近のコイン履歴 (このキャスト)</h3>
+                    {coinTxs.length === 0 ? (
+                      <div className="text-center py-6">
+                        <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>コイン履歴なし</p>
+                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          Chrome拡張からStripchatにログインし、Popupの「名簿同期」で取得できます
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-1 max-h-80 overflow-auto">
+                        {coinTxs.slice(0, 50).map(tx => (
+                          <div key={tx.id} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
+                            <div className="min-w-0 flex-1">
+                              <span className="font-semibold">{tx.user_name}</span>
+                              <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded"
+                                style={{ background: 'rgba(168,139,250,0.1)', color: 'var(--accent-purple, #a855f7)' }}>
+                                {tx.type}
+                              </span>
+                            </div>
+                            <div className="flex-shrink-0 ml-2 text-right">
+                              <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                {formatTokens(tx.tokens)}
+                              </span>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgo(tx.date)}</p>
+                            </div>
                           </div>
-                          <div className="overflow-auto">
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Monthly P/L */}
+                  <div className="glass-card p-4">
+                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                      📅 月次P/L
+                    </h3>
+                    {monthlyPLLoading ? (
+                      <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    ) : monthlyPLError ? (
+                      <p className="text-xs text-center py-6" style={{ color: 'var(--accent-pink)' }}>
+                        月次P/Lの取得に失敗しました — ページを再読み込みしてください
+                      </p>
+                    ) : monthlyPL.length === 0 ? (
+                      <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
+                        コスト未設定 — 設定タブの「コスト設定」で時給・手数料を入力してください
+                      </p>
+                    ) : (
+                      <>
+                        {/* 月次バーチャート */}
+                        <div className="flex items-end gap-1 h-32 mb-4 px-2">
+                          {(() => {
+                            const maxRevenue = Math.max(...monthlyPL.map(m => Math.abs(m.net_revenue_jpy)), 1);
+                            return Array.from(monthlyPL).reverse().map((m, i) => {
+                              const isProfit = m.gross_profit_jpy >= 0;
+                              const barH = Math.max((Math.abs(m.net_revenue_jpy) / maxRevenue) * 100, 4);
+                              return (
+                                <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                                  <span className="text-[9px] font-bold tabular-nums"
+                                    style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                                    {Math.round(m.gross_profit_jpy / 1000)}k
+                                  </span>
+                                  <div className="w-full rounded-t-md transition-all" style={{
+                                    height: `${barH}%`,
+                                    background: isProfit
+                                      ? 'linear-gradient(to top, rgba(34,197,94,0.3), rgba(34,197,94,0.6))'
+                                      : 'linear-gradient(to top, rgba(244,63,94,0.3), rgba(244,63,94,0.6))',
+                                    border: `1px solid ${isProfit ? 'rgba(34,197,94,0.3)' : 'rgba(244,63,94,0.3)'}`,
+                                  }} />
+                                  <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                    {m.month.slice(5)}月
+                                  </span>
+                                </div>
+                              );
+                            });
+                          })()}
+                        </div>
+
+                        {/* 月次テーブル */}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                <th className="text-left py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>月</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>配信数</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>時間</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>ネット売上</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>人件費</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>固定費</th>
+                                <th className="text-right py-2 px-1.5 font-bold" style={{ color: 'var(--text-muted)' }}>粗利</th>
+                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>利益率</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {monthlyPL.map((m, i) => {
+                                const isProfit = m.gross_profit_jpy >= 0;
+                                return (
+                                  <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                    <td className="py-1.5 px-1.5 font-medium">{m.month}</td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums">{m.total_sessions}</td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums">{m.total_hours}h</td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums">
+                                      {Math.round(m.net_revenue_jpy).toLocaleString()}円
+                                    </td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
+                                      -{Math.round(m.total_cast_cost_jpy).toLocaleString()}
+                                    </td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
+                                      {m.monthly_fixed_cost_jpy > 0 ? `-${m.monthly_fixed_cost_jpy.toLocaleString()}` : '—'}
+                                    </td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums font-bold"
+                                      style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                                      {isProfit ? '+' : ''}{Math.round(m.gross_profit_jpy).toLocaleString()}円
+                                    </td>
+                                    <td className="py-1.5 px-1.5 text-right tabular-nums"
+                                      style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
+                                      {m.profit_margin > 0 ? '+' : ''}{m.profit_margin}%
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Revenue Share */}
+                  <div className="glass-card p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-bold flex items-center gap-2">
+                        <span style={{ color: 'var(--accent-primary)' }}>$</span>
+                        レベニューシェア（週次）
+                      </h3>
+                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                        直近90日 / coin_transactions.tokens / 月曜03:00 JST境界
+                      </span>
+                    </div>
+
+                    {revenueShareLoading ? (
+                      <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                    ) : revenueShare.length === 0 ? (
+                      <div className="text-center py-6 rounded-xl" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
+                        <p className="text-xs" style={{ color: 'var(--accent-amber)' }}>データなし</p>
+                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                          cast_cost_settings に設定がないか、該当期間の取引がありません
+                        </p>
+                      </div>
+                    ) : (() => {
+                      const rsTotals = revenueShare.reduce(
+                        (acc, r) => ({
+                          tokens: acc.tokens + r.total_tokens,
+                          txCount: acc.txCount + r.transaction_count,
+                          gross: acc.gross + r.gross_usd,
+                          fee: acc.fee + r.platform_fee_usd,
+                          net: acc.net + r.net_usd,
+                          payment: acc.payment + r.cast_payment_usd,
+                        }),
+                        { tokens: 0, txCount: 0, gross: 0, fee: 0, net: 0, payment: 0 },
+                      );
+                      const fmtUsd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      return (
+                        <>
+                          {/* Summary cards */}
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                            <div className="glass-panel p-3 rounded-xl text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>グロス売上</p>
+                              <p className="text-lg font-bold font-mono">{fmtUsd(rsTotals.gross)}</p>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                {formatTokens(rsTotals.tokens)} × ${revenueShare[0]?.setting_token_to_usd ?? 0.05}
+                              </p>
+                            </div>
+                            <div className="glass-panel p-3 rounded-xl text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>PF手数料</p>
+                              <p className="text-lg font-bold font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(rsTotals.fee)}</p>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                {revenueShare[0]?.setting_platform_fee_pct ?? 40}%
+                              </p>
+                            </div>
+                            <div className="glass-panel p-3 rounded-xl text-center">
+                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>ネット売上</p>
+                              <p className="text-lg font-bold font-mono">{fmtUsd(rsTotals.net)}</p>
+                            </div>
+                            <div className="glass-panel p-3 rounded-xl text-center" style={{ border: '1px solid rgba(56,189,248,0.15)' }}>
+                              <p className="text-[10px]" style={{ color: 'var(--accent-primary)' }}>キャスト支払い</p>
+                              <p className="text-xl font-bold font-mono" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(rsTotals.payment)}</p>
+                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                ネット × {revenueShare[0]?.setting_revenue_share_pct ?? 50}%
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Weekly table */}
+                          <div className="overflow-x-auto">
                             <table className="w-full text-[11px]">
                               <thead>
-                                <tr style={{ color: 'var(--text-muted)', borderBottom: '1px solid var(--border-glass)' }}>
-                                  <th className="text-left px-3 py-2 font-semibold">ユーザー名</th>
-                                  <th className="text-right px-3 py-2 font-semibold">最終チップ</th>
-                                  <th className="text-right px-3 py-2 font-semibold">合計チップ</th>
-                                  <th className="text-right px-3 py-2 font-semibold">最終訪問</th>
-                                  <th className="text-center px-3 py-2 font-semibold">アクション</th>
+                                <tr style={{ color: 'var(--text-muted)' }}>
+                                  <th className="text-left pb-2 font-medium">週</th>
+                                  <th className="text-right pb-2 font-medium">トークン</th>
+                                  <th className="text-right pb-2 font-medium">グロス</th>
+                                  <th className="text-right pb-2 font-medium">手数料</th>
+                                  <th className="text-right pb-2 font-medium">ネット</th>
+                                  <th className="text-right pb-2 font-medium" style={{ color: 'var(--accent-primary)' }}>支払い</th>
+                                  <th className="text-center pb-2 font-medium">根拠</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {retentionUsers.filter(u => u.status === 'at_risk').map(u => (
-                                  <tr key={u.user_name} style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                                    <td className="px-3 py-2 font-semibold">{u.user_name}</td>
-                                    <td className="text-right px-3 py-2" style={{ color: 'var(--accent-amber)' }}>
-                                      {u.last_tip ? timeAgo(u.last_tip) : '--'}
-                                    </td>
-                                    <td className="text-right px-3 py-2 tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                      {formatTokens(u.total_tokens)}
-                                    </td>
-                                    <td className="text-right px-3 py-2" style={{ color: 'var(--text-muted)' }}>
-                                      {timeAgo(u.last_seen)}
-                                    </td>
-                                    <td className="text-center px-3 py-2">
-                                      <button onClick={() => sendRetentionDm([u.user_name], '復帰DM')}
-                                        className="text-[10px] px-2 py-1 rounded-lg hover:bg-sky-500/10 transition-all"
-                                        style={{ color: 'var(--accent-primary)' }}>復帰DM</button>
+                                {revenueShare.map(r => (
+                                  <tr key={r.week_start} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                                    <td className="py-1.5 font-mono">{r.week_label}</td>
+                                    <td className="py-1.5 text-right tabular-nums">{r.total_tokens.toLocaleString()}</td>
+                                    <td className="py-1.5 text-right tabular-nums font-mono">{fmtUsd(r.gross_usd)}</td>
+                                    <td className="py-1.5 text-right tabular-nums font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(r.platform_fee_usd)}</td>
+                                    <td className="py-1.5 text-right tabular-nums font-mono">{fmtUsd(r.net_usd)}</td>
+                                    <td className="py-1.5 text-right tabular-nums font-mono font-bold" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(r.cast_payment_usd)}</td>
+                                    <td className="py-1.5 text-center">
+                                      <button
+                                        className="text-[10px] hover:text-sky-400 transition-colors"
+                                        style={{ color: 'var(--text-muted)' }}
+                                        onClick={() => setRevenueShareExpanded(revenueShareExpanded === r.week_start ? null : r.week_start)}
+                                      >
+                                        {revenueShareExpanded === r.week_start ? '閉じる' : '詳細'}
+                                      </button>
                                     </td>
                                   </tr>
                                 ))}
+                                {revenueShareExpanded && (() => {
+                                  const r = revenueShare.find(r => r.week_start === revenueShareExpanded);
+                                  if (!r) return null;
+                                  return (
+                                    <tr>
+                                      <td colSpan={7} className="p-0">
+                                        <div className="p-3 space-y-1.5 text-[10px] font-mono" style={{ background: 'rgba(56,189,248,0.03)', borderTop: '1px solid rgba(56,189,248,0.1)', borderBottom: '1px solid rgba(56,189,248,0.1)' }}>
+                                          <p style={{ color: 'var(--text-muted)' }}>
+                                            設定: 1tk=${r.setting_token_to_usd} / PF手数料={r.setting_platform_fee_pct}% / 分配率={r.setting_revenue_share_pct}%
+                                          </p>
+                                          <p>1. グロス: <span style={{ color: 'var(--text-primary)' }}>{r.formula_gross}</span></p>
+                                          <p>2. PF手数料: <span style={{ color: 'var(--accent-pink)' }}>{r.formula_fee}</span></p>
+                                          <p>3. ネット: <span style={{ color: 'var(--text-primary)' }}>{r.formula_net}</span></p>
+                                          <p>4. キャスト支払い: <span style={{ color: 'var(--accent-primary)' }}>{r.formula_payment}</span></p>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })()}
                               </tbody>
+                              <tfoot>
+                                <tr className="font-bold" style={{ borderTop: '2px solid rgba(56,189,248,0.15)' }}>
+                                  <td className="py-2">合計 ({revenueShare.length}週)</td>
+                                  <td className="py-2 text-right tabular-nums">{rsTotals.tokens.toLocaleString()}</td>
+                                  <td className="py-2 text-right tabular-nums font-mono">{fmtUsd(rsTotals.gross)}</td>
+                                  <td className="py-2 text-right tabular-nums font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(rsTotals.fee)}</td>
+                                  <td className="py-2 text-right tabular-nums font-mono">{fmtUsd(rsTotals.net)}</td>
+                                  <td className="py-2 text-right tabular-nums font-mono" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(rsTotals.payment)}</td>
+                                  <td />
+                                </tr>
+                              </tfoot>
                             </table>
                           </div>
-                        </div>
-                      )}
-                    </>
-                  )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                  </>)}
+                  </>)}
 
+                  {/* ---- Sub-tab: dm_campaign ---- */}
+                  {analyticsSection === 'dm_campaign' && (<>
                   {/* Campaign effectiveness */}
                   <div className="glass-card p-4">
                     <h3 className="text-sm font-bold mb-3">📊 DMキャンペーン効果</h3>
@@ -4214,7 +4486,122 @@ function CastDetailInner() {
                       </div>
                     )}
                   </div>
+                  {/* DM Campaign CVR (from Block 2) */}
+                  {dmCvr.length > 0 && (
+                    <div className="glass-card p-4">
+                      <h3 className="text-sm font-bold mb-3">DM Campaign CVR</h3>
+                      <div className="space-y-2">
+                        {/* Header */}
+                        <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold px-2" style={{ color: 'var(--text-muted)' }}>
+                          <div className="col-span-3">Campaign</div>
+                          <div className="col-span-1 text-right">送信</div>
+                          <div className="col-span-1 text-right">来場</div>
+                          <div className="col-span-1 text-right">応援</div>
+                          <div className="col-span-2 text-right">来場率</div>
+                          <div className="col-span-2 text-right">応援率</div>
+                          <div className="col-span-2 text-right">収益tk</div>
+                        </div>
+                        {/* Rows */}
+                        {dmCvr.map(row => {
+                          const payCvrColor = row.cvr_pct >= 50 ? 'var(--accent-green)'
+                            : row.cvr_pct >= 20 ? 'var(--accent-amber)'
+                            : 'var(--accent-pink)';
+                          const visitCvrColor = (row.visit_cvr_pct || 0) >= 30 ? 'var(--accent-green)'
+                            : (row.visit_cvr_pct || 0) >= 10 ? 'var(--accent-amber)'
+                            : 'var(--accent-pink)';
+                          const visitBarWidth = Math.min(row.visit_cvr_pct || 0, 100);
+                          const payBarWidth = Math.min(row.cvr_pct, 100);
+                          return (
+                            <div key={row.campaign}>
+                              <div
+                                className="glass-panel px-2 py-2 rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
+                                onClick={() => setDmCvrExpanded(dmCvrExpanded === row.campaign ? null : row.campaign)}
+                              >
+                                <div className="grid grid-cols-12 gap-2 items-center text-[11px]">
+                                  <div className="col-span-3 truncate font-medium">{row.campaign}</div>
+                                  <div className="col-span-1 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
+                                    {row.dm_sent.toLocaleString()}
+                                  </div>
+                                  <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: visitCvrColor }}>
+                                    {(row.visited_after || 0).toLocaleString()}
+                                  </div>
+                                  <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: payCvrColor }}>
+                                    {row.paid_after.toLocaleString()}
+                                  </div>
+                                  <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: visitCvrColor }}>
+                                    {Number(row.visit_cvr_pct || 0).toFixed(1)}%
+                                  </div>
+                                  <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: payCvrColor }}>
+                                    {Number(row.cvr_pct).toFixed(1)}%
+                                  </div>
+                                  <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
+                                    {row.total_tokens.toLocaleString()}
+                                  </div>
+                                </div>
+                                {/* Dual CVR Bars: 来場(上) + 応援(下) */}
+                                <div className="mt-1.5 space-y-0.5">
+                                  <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                    <div
+                                      className="h-full rounded-full transition-all"
+                                      style={{ width: `${visitBarWidth}%`, background: visitCvrColor, opacity: 0.7 }}
+                                    />
+                                  </div>
+                                  <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                    <div
+                                      className="h-full rounded-full transition-all"
+                                      style={{ width: `${payBarWidth}%`, background: payCvrColor }}
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                              {/* Expanded detail */}
+                              {dmCvrExpanded === row.campaign && (
+                                <div className="mt-1 px-3 py-2 rounded-lg text-[10px] space-y-1" style={{ background: 'rgba(15,23,42,0.4)' }}>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>来場率（チャット出現）</span>
+                                    <span style={{ color: visitCvrColor }}>{(row.visited_after || 0).toLocaleString()}/{row.dm_sent.toLocaleString()} = {Number(row.visit_cvr_pct || 0).toFixed(1)}%</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>応援率（課金）</span>
+                                    <span style={{ color: payCvrColor }}>{row.paid_after.toLocaleString()}/{row.dm_sent.toLocaleString()} = {Number(row.cvr_pct).toFixed(1)}%</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>初回送信</span>
+                                    <span>{row.first_sent ? formatJST(row.first_sent) : '-'}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>最終送信</span>
+                                    <span>{row.last_sent ? formatJST(row.last_sent) : '-'}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>合計収益</span>
+                                    <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(row.total_tokens)} <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(row.total_tokens, coinRate)})</span></span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span style={{ color: 'var(--text-muted)' }}>サポーター平均</span>
+                                    <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(Math.round(row.avg_tokens_per_payer || 0))} <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)})</span></span>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {/* Summary */}
+                      <div className="mt-3 pt-3 flex items-center justify-between text-[10px]" style={{ borderTop: '1px solid var(--border-glass)' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>
+                          {dmCvr.length}キャンペーン / 送信合計 {dmCvr.reduce((s, r) => s + r.dm_sent, 0).toLocaleString()}通
+                        </span>
+                        <span style={{ color: 'var(--accent-green)' }}>
+                          総収益 {tokensToJPY(dmCvr.reduce((s, r) => s + r.total_tokens, 0), coinRate)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                  </>)}
 
+                  {/* ---- Sub-tab: acquisition ---- */}
+                  {analyticsSection === 'acquisition' && (<>
                   {/* ============ ACQUISITION DASHBOARD ============ */}
                   <div className="glass-card p-4">
                     <h3 className="text-sm font-bold mb-1">📊 ユーザー獲得ダッシュボード</h3>
@@ -4616,9 +5003,196 @@ function CastDetailInner() {
                       </>
                     )}
                   </div>
-                </>
-              )}
+                  {/* Overlap/Competitor (from Block 3) */}
+                  {overlapLoading ? (
+                    <div className="space-y-3">
+                      {[1, 2, 3].map(i => (
+                        <div key={i} className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
+                      ))}
+                    </div>
+                  ) : (
+                    <>
+                      {/* Section 1: データ更新 */}
+                      <div className="glass-card p-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="text-sm font-bold flex items-center gap-2">
+                              🔄 プロフィール集計
+                            </h3>
+                            <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                              spy_messages からユーザー×キャスト別にトークン・出現回数を集計
+                            </p>
+                            {lastProfileUpdate && (
+                              <p className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                                最終更新: {formatJST(lastProfileUpdate)}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            onClick={handleRefreshProfiles}
+                            disabled={overlapRefreshing}
+                            className="btn-primary text-xs px-4 py-2"
+                            style={{ opacity: overlapRefreshing ? 0.5 : 1 }}
+                          >
+                            {overlapRefreshing ? '集計中...' : '集計を更新'}
+                          </button>
+                        </div>
+                      </div>
 
+                      {/* Section 2: サマリーカード */}
+                      {(() => {
+                        const totalSpyUsers = new Set(spyTopUsers.map(u => u.user_name)).size;
+                        const overlapUserSet = new Set(
+                          spyTopUsers.filter(u => u.own_total_coins > 0).map(u => u.user_name)
+                        );
+                        const overlapRate = totalSpyUsers > 0
+                          ? Math.round((overlapUserSet.size / totalSpyUsers) * 100)
+                          : 0;
+                        const avgSpyTokens = spyTopUsers.length > 0
+                          ? Math.round(spyTopUsers.reduce((s, u) => s + u.spy_total_tokens, 0) / spyTopUsers.length)
+                          : 0;
+                        const prospectCount = spyTopUsers.filter(
+                          u => u.own_total_coins === 0 && u.spy_total_tokens >= 100
+                        ).length;
+                        return (
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            {[
+                              { label: '他社ユーザー数', value: totalSpyUsers.toLocaleString(), icon: '👥' },
+                              { label: '自社との重複率', value: `${overlapRate}%`, icon: '🔗' },
+                              { label: '平均他社tk', value: formatTokens(avgSpyTokens), icon: '💰' },
+                              { label: '獲得候補数', value: prospectCount.toLocaleString(), icon: '🎯' },
+                            ].map((card, i) => (
+                              <div key={i} className="glass-card p-3 text-center">
+                                <p className="text-lg mb-1">{card.icon}</p>
+                                <p className="text-base font-bold" style={{ color: 'var(--text-primary)' }}>{card.value}</p>
+                                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{card.label}</p>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+
+                      {/* Section 3: 重複マトリクス */}
+                      <div className="glass-card p-4">
+                        <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                          📊 ユーザー重複マトリクス
+                        </h3>
+                        {overlapMatrix.length === 0 ? (
+                          <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>
+                            データなし — 「集計を更新」を実行してください
+                          </p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>他社キャスト</th>
+                                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複ユーザー</th>
+                                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複tk</th>
+                                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複率</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {overlapMatrix.map((row, i) => {
+                                  const rate = row.own_total_users > 0
+                                    ? Math.round((row.overlap_users / row.own_total_users) * 100)
+                                    : 0;
+                                  const heatBg = `rgba(56,189,248,${Math.min(rate / 100, 0.4).toFixed(2)})`;
+                                  return (
+                                    <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)', background: heatBg }}>
+                                      <td className="py-2 px-2 font-medium">{row.spy_cast}</td>
+                                      <td className="py-2 px-2 text-right">{row.overlap_users}</td>
+                                      <td className="py-2 px-2 text-right" style={{ color: 'var(--accent-amber)' }}>
+                                        {formatTokens(row.overlap_tokens)}
+                                      </td>
+                                      <td className="py-2 px-2 text-right font-bold">{rate}%</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Section 4: ユーザーランキング */}
+                      <div className="glass-card p-4">
+                        <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
+                          🏆 他社高額応援ユーザーランキング
+                        </h3>
+                        {spyTopUsers.length === 0 ? (
+                          <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>
+                            データなし — 「集計を更新」を実行してください
+                          </p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead>
+                                <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>#</th>
+                                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>ユーザー</th>
+                                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>他社tk</th>
+                                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>キャスト数</th>
+                                  <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>自社tk</th>
+                                  <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>セグメント</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {spyTopUsers.map((u, i) => {
+                                  const segBadge: Record<string, { icon: string; color: string }> = {
+                                    whale: { icon: '🐋', color: 'var(--accent-purple)' },
+                                    vip: { icon: '👑', color: 'var(--accent-amber)' },
+                                    regular: { icon: '⭐', color: 'var(--accent-green)' },
+                                    light: { icon: '💡', color: 'var(--text-secondary)' },
+                                    new: { icon: '🆕', color: 'var(--accent-primary)' },
+                                    churned: { icon: '💤', color: 'var(--text-muted)' },
+                                  };
+                                  const seg = u.own_segment ? segBadge[u.own_segment] : null;
+                                  return (
+                                    <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)' }}>
+                                      <td className="py-2 px-2" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
+                                      <td className="py-2 px-2">
+                                        <a href={`/users/${encodeURIComponent(u.user_name)}`}
+                                          className="hover:underline truncate block max-w-[180px]" style={{ color: 'var(--accent-primary)' }}>
+                                          {u.user_name}
+                                        </a>
+                                        <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                                          {(u.spy_casts || []).slice(0, 3).join(', ')}{(u.spy_casts || []).length > 3 ? ` +${u.spy_casts.length - 3}` : ''}
+                                        </p>
+                                      </td>
+                                      <td className="py-2 px-2 text-right font-medium" style={{ color: 'var(--accent-amber)' }}>
+                                        {formatTokens(u.spy_total_tokens)}
+                                      </td>
+                                      <td className="py-2 px-2 text-right">{u.cast_count}</td>
+                                      <td className="py-2 px-2 text-right">
+                                        {u.own_total_coins > 0 ? formatTokens(u.own_total_coins) : (
+                                          <span style={{ color: 'var(--text-muted)' }}>—</span>
+                                        )}
+                                      </td>
+                                      <td className="py-2 px-2">
+                                        {seg ? (
+                                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full"
+                                            style={{ background: `${seg.color}20`, color: seg.color }}>
+                                            {seg.icon} {u.own_segment}
+                                          </span>
+                                        ) : (
+                                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>未応援</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                  </>)}
+
+                  {/* ---- Sub-tab: hourly ---- */}
+                  {analyticsSection === 'hourly' && (<>
               {/* 時間帯別パフォーマンス */}
               <div className="glass-card p-4">
                 <h3 className="text-sm font-bold mb-3">⏰ 時間帯別パフォーマンス（直近30日）</h3>
@@ -4743,620 +5317,14 @@ function CastDetailInner() {
                   </>
                 )}
               </div>
-            </div>
-          )}
+                  </>)}
 
-          {/* ============ SALES (analytics内に統合) ============ */}
-          {activeTab === 'analytics' && (
-            <div className="space-y-4">
-              {salesLoading ? (
-                <div className="space-y-3">
-                  <div className="h-8 rounded-lg animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                  <div className="grid grid-cols-4 gap-3">
-                    <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                    <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                    <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                    <div className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                  </div>
-                  <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                </div>
-              ) : (
-                <>
-                  {/* Weekly summary cards (H7: SPY vs API labels) */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <div className="glass-card p-4 text-center">
-                      <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
-                        {formatTokens(thisWeekCoins)}
-                      </p>
-                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(thisWeekCoins, coinRate)})</p>
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
-                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-primary)' }}>チャット内チップ（SPYログ）</p>
-                    </div>
-                    <div className="glass-card p-4 text-center">
-                      <p className="text-xl font-bold" style={{ color: 'var(--accent-amber)' }}>
-                        {formatTokens(salesThisWeek)}
-                      </p>
-                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(salesThisWeek, coinRate)})</p>
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週売上</p>
-                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
-                    </div>
-                    <div className="glass-card p-4 text-center">
-                      <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
-                        {formatTokens(salesLastWeek)}
-                      </p>
-                      <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(salesLastWeek, coinRate)})</p>
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週売上</p>
-                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
-                    </div>
-                    <div className="glass-card p-4 text-center">
-                      <p className="text-xl font-bold" style={{
-                        color: salesLastWeek > 0 ? ((salesThisWeek - salesLastWeek) >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)') : 'var(--text-muted)'
-                      }}>
-                        {salesLastWeek > 0
-                          ? `${(salesThisWeek - salesLastWeek) >= 0 ? '↑' : '↓'} ${Math.abs(Math.round((salesThisWeek - salesLastWeek) / salesLastWeek * 100))}%`
-                          : '--'}
-                      </p>
-                      <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前週比</p>
-                      <p className="text-[9px] font-semibold" style={{ color: 'var(--accent-purple, #a855f7)' }}>全応援（コインAPI）</p>
-                    </div>
-                  </div>
-
-                  {/* Data source info + sync */}
-                  <div className="glass-card p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-bold">データソース</h3>
-                      <div className="flex items-center gap-2">
-                        {syncStatus.last && (
-                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                            最終同期: {timeAgo(syncStatus.last)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="glass-panel p-3 rounded-xl">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="w-2 h-2 rounded-full bg-sky-400" />
-                          <span className="text-[11px] font-semibold">SPY (spy_messages)</span>
-                        </div>
-                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                          リアルタイムチャット監視からのtip/giftデータ。このキャスト固有。
-                        </p>
-                        <p className="text-xs mt-1 font-bold">
-                          <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(stats?.total_coins || 0)}</span>
-                          {' '}
-                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(stats?.total_coins || 0, coinRate)})</span>
-                        </p>
-                      </div>
-                      <div className="glass-panel p-3 rounded-xl">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="w-2 h-2 rounded-full bg-purple-400" />
-                          <span className="text-[11px] font-semibold">Coin API (coin_transactions)</span>
-                        </div>
-                        <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                          Stripchat Earnings APIからの応援履歴。cast_name絞り込み済み。
-                        </p>
-                        <p className="text-xs mt-1 font-bold" style={{ color: 'var(--accent-amber)' }}>
-                          {coinTxs.length > 0 ? `${coinTxs.length}件取得済み` : '未同期'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="mt-3 flex items-center gap-3">
-                      <button
-                        onClick={handleReassignTransactions}
-                        disabled={reassigning}
-                        className="btn-ghost px-4 py-2 text-[11px] rounded-lg"
-                        style={{ borderColor: 'rgba(168,139,250,0.3)', color: 'var(--accent-purple, #a855f7)' }}
-                      >
-                        {reassigning ? '再振り分け中...' : 'トランザクション再振り分け'}
-                      </button>
-                      {reassignResult && reassignResult.updated >= 0 && (
-                        <span className="text-[11px]" style={{ color: 'var(--accent-green)' }}>
-                          {reassignResult.updated}件更新 (配信中: {reassignResult.session}, オフライン: {reassignResult.fallback})
-                        </span>
-                      )}
-                      {reassignResult && reassignResult.updated < 0 && (
-                        <span className="text-[11px]" style={{ color: 'var(--accent-pink)' }}>エラーが発生しました</span>
-                      )}
-                    </div>
-                    <p className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                      配信セッションの時間帯に基づいてcast_nameを再割り当てします
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    {/* Left column: Paid users */}
-                    <div className="space-y-4">
-                      <div className="glass-card p-4">
-                        <h3 className="text-sm font-bold mb-3">有料ユーザー (このキャスト)</h3>
-                      {paidUsers.length === 0 ? (
-                        <p className="text-xs" style={{ color: 'var(--text-muted)' }}>有料ユーザーデータなし</p>
-                      ) : (
-                        <div className="space-y-1.5 max-h-[480px] overflow-auto">
-                          {paidUsers.map((u, i) => (
-                            <div key={u.user_name} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className="font-bold w-4 text-center" style={{
-                                  color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
-                                }}>{i + 1}</span>
-                                <span className="truncate font-medium" style={{ color: getUserColorFromCoins(u.total_coins) }}>{u.user_name}</span>
-                              </div>
-                              <div className="flex-shrink-0 text-right">
-                                <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                  {formatTokens(u.total_coins)}
-                                </span>
-                                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                                  ({tokensToJPY(u.total_coins, coinRate)})
-                                </p>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      </div>
-                    </div>
-
-                    {/* Right column: DM CVR + Coin history */}
-                    <div className="space-y-4">
-                      {/* DM Campaign CVR */}
-                      {dmCvr.length > 0 && (
-                        <div className="glass-card p-4">
-                          <h3 className="text-sm font-bold mb-3">DM Campaign CVR</h3>
-                          <div className="space-y-2">
-                            {/* Header */}
-                            <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold px-2" style={{ color: 'var(--text-muted)' }}>
-                              <div className="col-span-3">Campaign</div>
-                              <div className="col-span-1 text-right">送信</div>
-                              <div className="col-span-1 text-right">来場</div>
-                              <div className="col-span-1 text-right">応援</div>
-                              <div className="col-span-2 text-right">来場率</div>
-                              <div className="col-span-2 text-right">応援率</div>
-                              <div className="col-span-2 text-right">収益tk</div>
-                            </div>
-                            {/* Rows */}
-                            {dmCvr.map(row => {
-                              const payCvrColor = row.cvr_pct >= 50 ? 'var(--accent-green)'
-                                : row.cvr_pct >= 20 ? 'var(--accent-amber)'
-                                : 'var(--accent-pink)';
-                              const visitCvrColor = (row.visit_cvr_pct || 0) >= 30 ? 'var(--accent-green)'
-                                : (row.visit_cvr_pct || 0) >= 10 ? 'var(--accent-amber)'
-                                : 'var(--accent-pink)';
-                              const visitBarWidth = Math.min(row.visit_cvr_pct || 0, 100);
-                              const payBarWidth = Math.min(row.cvr_pct, 100);
-                              return (
-                                <div key={row.campaign}>
-                                  <div
-                                    className="glass-panel px-2 py-2 rounded-lg cursor-pointer hover:opacity-80 transition-opacity"
-                                    onClick={() => setDmCvrExpanded(dmCvrExpanded === row.campaign ? null : row.campaign)}
-                                  >
-                                    <div className="grid grid-cols-12 gap-2 items-center text-[11px]">
-                                      <div className="col-span-3 truncate font-medium">{row.campaign}</div>
-                                      <div className="col-span-1 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                                        {row.dm_sent.toLocaleString()}
-                                      </div>
-                                      <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: visitCvrColor }}>
-                                        {(row.visited_after || 0).toLocaleString()}
-                                      </div>
-                                      <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: payCvrColor }}>
-                                        {row.paid_after.toLocaleString()}
-                                      </div>
-                                      <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: visitCvrColor }}>
-                                        {Number(row.visit_cvr_pct || 0).toFixed(1)}%
-                                      </div>
-                                      <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: payCvrColor }}>
-                                        {Number(row.cvr_pct).toFixed(1)}%
-                                      </div>
-                                      <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                        {row.total_tokens.toLocaleString()}
-                                      </div>
-                                    </div>
-                                    {/* Dual CVR Bars: 来場(上) + 応援(下) */}
-                                    <div className="mt-1.5 space-y-0.5">
-                                      <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                                        <div
-                                          className="h-full rounded-full transition-all"
-                                          style={{ width: `${visitBarWidth}%`, background: visitCvrColor, opacity: 0.7 }}
-                                        />
-                                      </div>
-                                      <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                                        <div
-                                          className="h-full rounded-full transition-all"
-                                          style={{ width: `${payBarWidth}%`, background: payCvrColor }}
-                                        />
-                                      </div>
-                                    </div>
-                                  </div>
-                                  {/* Expanded detail */}
-                                  {dmCvrExpanded === row.campaign && (
-                                    <div className="mt-1 px-3 py-2 rounded-lg text-[10px] space-y-1" style={{ background: 'rgba(15,23,42,0.4)' }}>
-                                      <div className="flex justify-between">
-                                        <span style={{ color: 'var(--text-muted)' }}>来場率（チャット出現）</span>
-                                        <span style={{ color: visitCvrColor }}>{(row.visited_after || 0).toLocaleString()}/{row.dm_sent.toLocaleString()} = {Number(row.visit_cvr_pct || 0).toFixed(1)}%</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span style={{ color: 'var(--text-muted)' }}>応援率（課金）</span>
-                                        <span style={{ color: payCvrColor }}>{row.paid_after.toLocaleString()}/{row.dm_sent.toLocaleString()} = {Number(row.cvr_pct).toFixed(1)}%</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span style={{ color: 'var(--text-muted)' }}>初回送信</span>
-                                        <span>{row.first_sent ? formatJST(row.first_sent) : '-'}</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span style={{ color: 'var(--text-muted)' }}>最終送信</span>
-                                        <span>{row.last_sent ? formatJST(row.last_sent) : '-'}</span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span style={{ color: 'var(--text-muted)' }}>合計収益</span>
-                                        <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(row.total_tokens)} <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(row.total_tokens, coinRate)})</span></span>
-                                      </div>
-                                      <div className="flex justify-between">
-                                        <span style={{ color: 'var(--text-muted)' }}>サポーター平均</span>
-                                        <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(Math.round(row.avg_tokens_per_payer || 0))} <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(row.avg_tokens_per_payer || 0, coinRate)})</span></span>
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                          {/* Summary */}
-                          <div className="mt-3 pt-3 flex items-center justify-between text-[10px]" style={{ borderTop: '1px solid var(--border-glass)' }}>
-                            <span style={{ color: 'var(--text-muted)' }}>
-                              {dmCvr.length}キャンペーン / 送信合計 {dmCvr.reduce((s, r) => s + r.dm_sent, 0).toLocaleString()}通
-                            </span>
-                            <span style={{ color: 'var(--accent-green)' }}>
-                              総収益 {tokensToJPY(dmCvr.reduce((s, r) => s + r.total_tokens, 0), coinRate)}
-                            </span>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Recent coin transactions */}
-                      <div className="glass-card p-4">
-                        <h3 className="text-sm font-bold mb-3">直近のコイン履歴 (このキャスト)</h3>
-                        {coinTxs.length === 0 ? (
-                          <div className="text-center py-6">
-                            <p className="text-xs mb-2" style={{ color: 'var(--text-muted)' }}>コイン履歴なし</p>
-                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                              Chrome拡張からStripchatにログインし、Popupの「名簿同期」で取得できます
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="space-y-1 max-h-80 overflow-auto">
-                            {coinTxs.slice(0, 50).map(tx => (
-                              <div key={tx.id} className="glass-panel px-3 py-2 flex items-center justify-between text-[11px]">
-                                <div className="min-w-0 flex-1">
-                                  <span className="font-semibold">{tx.user_name}</span>
-                                  <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded"
-                                    style={{ background: 'rgba(168,139,250,0.1)', color: 'var(--accent-purple, #a855f7)' }}>
-                                    {tx.type}
-                                  </span>
-                                </div>
-                                <div className="flex-shrink-0 ml-2 text-right">
-                                  <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                    {formatTokens(tx.tokens)}
-                                  </span>
-                                  <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{timeAgo(tx.date)}</p>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* ============ セッション別P/L ============ */}
-                  <div className="glass-card p-4">
-                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                      📊 セッション別P/L（損益）
-                    </h3>
-                    {sessionPLLoading ? (
-                      <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                    ) : sessionPLError ? (
-                      <p className="text-xs text-center py-6" style={{ color: 'var(--accent-pink)' }}>
-                        P/Lデータの取得に失敗しました — ページを再読み込みしてください
-                      </p>
-                    ) : sessionPL.length === 0 ? (
-                      <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
-                        コスト未設定 — 設定タブの「コスト設定」で時給・手数料を入力してください
-                      </p>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                              <th className="text-left py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>日付</th>
-                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>時間</th>
-                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>トークン</th>
-                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>粗売上</th>
-                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>手数料</th>
-                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>人件費</th>
-                              <th className="text-right py-2 px-1.5 font-bold" style={{ color: 'var(--text-muted)' }}>粗利</th>
-                              <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>利益率</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {sessionPL.slice(0, 20).map((row, i) => {
-                              const isProfit = row.gross_profit_jpy >= 0;
-                              return (
-                                <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                                  <td className="py-1.5 px-1.5">
-                                    {row.started_at ? formatJST(row.started_at).slice(0, 10) : row.session_date}
-                                  </td>
-                                  <td className="py-1.5 px-1.5 text-right tabular-nums">
-                                    {row.duration_minutes > 0 ? `${Math.floor(row.duration_minutes / 60)}h${row.duration_minutes % 60}m` : '—'}
-                                  </td>
-                                  <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                    {formatTokens(row.total_tokens)}
-                                  </td>
-                                  <td className="py-1.5 px-1.5 text-right tabular-nums">
-                                    {Math.round(row.gross_revenue_jpy).toLocaleString()}
-                                  </td>
-                                  <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
-                                    -{Math.round(row.platform_fee_jpy).toLocaleString()}
-                                  </td>
-                                  <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
-                                    -{Math.round(row.cast_cost_jpy).toLocaleString()}
-                                  </td>
-                                  <td className="py-1.5 px-1.5 text-right tabular-nums font-bold"
-                                    style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
-                                    {isProfit ? '+' : ''}{Math.round(row.gross_profit_jpy).toLocaleString()}
-                                  </td>
-                                  <td className="py-1.5 px-1.5 text-right tabular-nums"
-                                    style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
-                                    {row.profit_margin > 0 ? '+' : ''}{row.profit_margin}%
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                        {sessionPL.length > 20 && (
-                          <p className="text-[10px] text-center mt-2" style={{ color: 'var(--text-muted)' }}>
-                            直近20件を表示（全{sessionPL.length}件）
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* ============ 月次P/L ============ */}
-                  <div className="glass-card p-4">
-                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                      📅 月次P/L
-                    </h3>
-                    {monthlyPLLoading ? (
-                      <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                    ) : monthlyPLError ? (
-                      <p className="text-xs text-center py-6" style={{ color: 'var(--accent-pink)' }}>
-                        月次P/Lの取得に失敗しました — ページを再読み込みしてください
-                      </p>
-                    ) : monthlyPL.length === 0 ? (
-                      <p className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
-                        コスト未設定 — 設定タブの「コスト設定」で時給・手数料を入力してください
-                      </p>
-                    ) : (
-                      <>
-                        {/* 月次バーチャート */}
-                        <div className="flex items-end gap-1 h-32 mb-4 px-2">
-                          {(() => {
-                            const maxRevenue = Math.max(...monthlyPL.map(m => Math.abs(m.net_revenue_jpy)), 1);
-                            return Array.from(monthlyPL).reverse().map((m, i) => {
-                              const isProfit = m.gross_profit_jpy >= 0;
-                              const barH = Math.max((Math.abs(m.net_revenue_jpy) / maxRevenue) * 100, 4);
-                              return (
-                                <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                                  <span className="text-[9px] font-bold tabular-nums"
-                                    style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
-                                    {Math.round(m.gross_profit_jpy / 1000)}k
-                                  </span>
-                                  <div className="w-full rounded-t-md transition-all" style={{
-                                    height: `${barH}%`,
-                                    background: isProfit
-                                      ? 'linear-gradient(to top, rgba(34,197,94,0.3), rgba(34,197,94,0.6))'
-                                      : 'linear-gradient(to top, rgba(244,63,94,0.3), rgba(244,63,94,0.6))',
-                                    border: `1px solid ${isProfit ? 'rgba(34,197,94,0.3)' : 'rgba(244,63,94,0.3)'}`,
-                                  }} />
-                                  <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                                    {m.month.slice(5)}月
-                                  </span>
-                                </div>
-                              );
-                            });
-                          })()}
-                        </div>
-
-                        {/* 月次テーブル */}
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                                <th className="text-left py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>月</th>
-                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>配信数</th>
-                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>時間</th>
-                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>ネット売上</th>
-                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>人件費</th>
-                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>固定費</th>
-                                <th className="text-right py-2 px-1.5 font-bold" style={{ color: 'var(--text-muted)' }}>粗利</th>
-                                <th className="text-right py-2 px-1.5" style={{ color: 'var(--text-muted)' }}>利益率</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {monthlyPL.map((m, i) => {
-                                const isProfit = m.gross_profit_jpy >= 0;
-                                return (
-                                  <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                                    <td className="py-1.5 px-1.5 font-medium">{m.month}</td>
-                                    <td className="py-1.5 px-1.5 text-right tabular-nums">{m.total_sessions}</td>
-                                    <td className="py-1.5 px-1.5 text-right tabular-nums">{m.total_hours}h</td>
-                                    <td className="py-1.5 px-1.5 text-right tabular-nums">
-                                      {Math.round(m.net_revenue_jpy).toLocaleString()}円
-                                    </td>
-                                    <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
-                                      -{Math.round(m.total_cast_cost_jpy).toLocaleString()}
-                                    </td>
-                                    <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
-                                      {m.monthly_fixed_cost_jpy > 0 ? `-${m.monthly_fixed_cost_jpy.toLocaleString()}` : '—'}
-                                    </td>
-                                    <td className="py-1.5 px-1.5 text-right tabular-nums font-bold"
-                                      style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
-                                      {isProfit ? '+' : ''}{Math.round(m.gross_profit_jpy).toLocaleString()}円
-                                    </td>
-                                    <td className="py-1.5 px-1.5 text-right tabular-nums"
-                                      style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
-                                      {m.profit_margin > 0 ? '+' : ''}{m.profit_margin}%
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </>
-                    )}
-                  </div>
-
-                  {/* ── Revenue Share ── */}
-                  <div className="glass-card p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-bold flex items-center gap-2">
-                        <span style={{ color: 'var(--accent-primary)' }}>$</span>
-                        レベニューシェア（週次）
-                      </h3>
-                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        直近90日 / coin_transactions.tokens / 月曜03:00 JST境界
-                      </span>
-                    </div>
-
-                    {revenueShareLoading ? (
-                      <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                    ) : revenueShare.length === 0 ? (
-                      <div className="text-center py-6 rounded-xl" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
-                        <p className="text-xs" style={{ color: 'var(--accent-amber)' }}>データなし</p>
-                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                          cast_cost_settings に設定がないか、該当期間の取引がありません
-                        </p>
-                      </div>
-                    ) : (() => {
-                      const rsTotals = revenueShare.reduce(
-                        (acc, r) => ({
-                          tokens: acc.tokens + r.total_tokens,
-                          txCount: acc.txCount + r.transaction_count,
-                          gross: acc.gross + r.gross_usd,
-                          fee: acc.fee + r.platform_fee_usd,
-                          net: acc.net + r.net_usd,
-                          payment: acc.payment + r.cast_payment_usd,
-                        }),
-                        { tokens: 0, txCount: 0, gross: 0, fee: 0, net: 0, payment: 0 },
-                      );
-                      const fmtUsd = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-                      return (
-                        <>
-                          {/* Summary cards */}
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                            <div className="glass-panel p-3 rounded-xl text-center">
-                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>グロス売上</p>
-                              <p className="text-lg font-bold font-mono">{fmtUsd(rsTotals.gross)}</p>
-                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                                {formatTokens(rsTotals.tokens)} × ${revenueShare[0]?.setting_token_to_usd ?? 0.05}
-                              </p>
-                            </div>
-                            <div className="glass-panel p-3 rounded-xl text-center">
-                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>PF手数料</p>
-                              <p className="text-lg font-bold font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(rsTotals.fee)}</p>
-                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                                {revenueShare[0]?.setting_platform_fee_pct ?? 40}%
-                              </p>
-                            </div>
-                            <div className="glass-panel p-3 rounded-xl text-center">
-                              <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>ネット売上</p>
-                              <p className="text-lg font-bold font-mono">{fmtUsd(rsTotals.net)}</p>
-                            </div>
-                            <div className="glass-panel p-3 rounded-xl text-center" style={{ border: '1px solid rgba(56,189,248,0.15)' }}>
-                              <p className="text-[10px]" style={{ color: 'var(--accent-primary)' }}>キャスト支払い</p>
-                              <p className="text-xl font-bold font-mono" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(rsTotals.payment)}</p>
-                              <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
-                                ネット × {revenueShare[0]?.setting_revenue_share_pct ?? 50}%
-                              </p>
-                            </div>
-                          </div>
-
-                          {/* Weekly table */}
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-[11px]">
-                              <thead>
-                                <tr style={{ color: 'var(--text-muted)' }}>
-                                  <th className="text-left pb-2 font-medium">週</th>
-                                  <th className="text-right pb-2 font-medium">トークン</th>
-                                  <th className="text-right pb-2 font-medium">グロス</th>
-                                  <th className="text-right pb-2 font-medium">手数料</th>
-                                  <th className="text-right pb-2 font-medium">ネット</th>
-                                  <th className="text-right pb-2 font-medium" style={{ color: 'var(--accent-primary)' }}>支払い</th>
-                                  <th className="text-center pb-2 font-medium">根拠</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {revenueShare.map(r => (
-                                  <tr key={r.week_start} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
-                                    <td className="py-1.5 font-mono">{r.week_label}</td>
-                                    <td className="py-1.5 text-right tabular-nums">{r.total_tokens.toLocaleString()}</td>
-                                    <td className="py-1.5 text-right tabular-nums font-mono">{fmtUsd(r.gross_usd)}</td>
-                                    <td className="py-1.5 text-right tabular-nums font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(r.platform_fee_usd)}</td>
-                                    <td className="py-1.5 text-right tabular-nums font-mono">{fmtUsd(r.net_usd)}</td>
-                                    <td className="py-1.5 text-right tabular-nums font-mono font-bold" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(r.cast_payment_usd)}</td>
-                                    <td className="py-1.5 text-center">
-                                      <button
-                                        className="text-[10px] hover:text-sky-400 transition-colors"
-                                        style={{ color: 'var(--text-muted)' }}
-                                        onClick={() => setRevenueShareExpanded(revenueShareExpanded === r.week_start ? null : r.week_start)}
-                                      >
-                                        {revenueShareExpanded === r.week_start ? '閉じる' : '詳細'}
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                                {revenueShareExpanded && (() => {
-                                  const r = revenueShare.find(r => r.week_start === revenueShareExpanded);
-                                  if (!r) return null;
-                                  return (
-                                    <tr>
-                                      <td colSpan={7} className="p-0">
-                                        <div className="p-3 space-y-1.5 text-[10px] font-mono" style={{ background: 'rgba(56,189,248,0.03)', borderTop: '1px solid rgba(56,189,248,0.1)', borderBottom: '1px solid rgba(56,189,248,0.1)' }}>
-                                          <p style={{ color: 'var(--text-muted)' }}>
-                                            設定: 1tk=${r.setting_token_to_usd} / PF手数料={r.setting_platform_fee_pct}% / 分配率={r.setting_revenue_share_pct}%
-                                          </p>
-                                          <p>1. グロス: <span style={{ color: 'var(--text-primary)' }}>{r.formula_gross}</span></p>
-                                          <p>2. PF手数料: <span style={{ color: 'var(--accent-pink)' }}>{r.formula_fee}</span></p>
-                                          <p>3. ネット: <span style={{ color: 'var(--text-primary)' }}>{r.formula_net}</span></p>
-                                          <p>4. キャスト支払い: <span style={{ color: 'var(--accent-primary)' }}>{r.formula_payment}</span></p>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  );
-                                })()}
-                              </tbody>
-                              <tfoot>
-                                <tr className="font-bold" style={{ borderTop: '2px solid rgba(56,189,248,0.15)' }}>
-                                  <td className="py-2">合計 ({revenueShare.length}週)</td>
-                                  <td className="py-2 text-right tabular-nums">{rsTotals.tokens.toLocaleString()}</td>
-                                  <td className="py-2 text-right tabular-nums font-mono">{fmtUsd(rsTotals.gross)}</td>
-                                  <td className="py-2 text-right tabular-nums font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(rsTotals.fee)}</td>
-                                  <td className="py-2 text-right tabular-nums font-mono">{fmtUsd(rsTotals.net)}</td>
-                                  <td className="py-2 text-right tabular-nums font-mono" style={{ color: 'var(--accent-primary)' }}>{fmtUsd(rsTotals.payment)}</td>
-                                  <td />
-                                </tr>
-                              </tfoot>
-                            </table>
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </div>
                 </>
               )}
             </div>
           )}
+
+
 
 
           {/* ============ SCREENSHOTS — M-6: データ0件のため非表示。SPY基盤安定後に復元 ============ */}
@@ -5624,196 +5592,7 @@ function CastDetailInner() {
             </div>
           )}
 
-          {/* ============ OVERLAP (競合分析) ============ */}
-          {activeTab === 'analytics' && (
-            <div className="space-y-4">
-              {overlapLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map(i => (
-                    <div key={i} className="h-24 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                  ))}
-                </div>
-              ) : (
-                <>
-                  {/* Section 1: データ更新 */}
-                  <div className="glass-card p-4">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h3 className="text-sm font-bold flex items-center gap-2">
-                          🔄 プロフィール集計
-                        </h3>
-                        <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                          spy_messages からユーザー×キャスト別にトークン・出現回数を集計
-                        </p>
-                        {lastProfileUpdate && (
-                          <p className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>
-                            最終更新: {formatJST(lastProfileUpdate)}
-                          </p>
-                        )}
-                      </div>
-                      <button
-                        onClick={handleRefreshProfiles}
-                        disabled={overlapRefreshing}
-                        className="btn-primary text-xs px-4 py-2"
-                        style={{ opacity: overlapRefreshing ? 0.5 : 1 }}
-                      >
-                        {overlapRefreshing ? '集計中...' : '集計を更新'}
-                      </button>
-                    </div>
-                  </div>
 
-                  {/* Section 2: サマリーカード */}
-                  {(() => {
-                    const totalSpyUsers = new Set(spyTopUsers.map(u => u.user_name)).size;
-                    const overlapUserSet = new Set(
-                      spyTopUsers.filter(u => u.own_total_coins > 0).map(u => u.user_name)
-                    );
-                    const overlapRate = totalSpyUsers > 0
-                      ? Math.round((overlapUserSet.size / totalSpyUsers) * 100)
-                      : 0;
-                    const avgSpyTokens = spyTopUsers.length > 0
-                      ? Math.round(spyTopUsers.reduce((s, u) => s + u.spy_total_tokens, 0) / spyTopUsers.length)
-                      : 0;
-                    const prospectCount = spyTopUsers.filter(
-                      u => u.own_total_coins === 0 && u.spy_total_tokens >= 100
-                    ).length;
-                    return (
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                        {[
-                          { label: '他社ユーザー数', value: totalSpyUsers.toLocaleString(), icon: '👥' },
-                          { label: '自社との重複率', value: `${overlapRate}%`, icon: '🔗' },
-                          { label: '平均他社tk', value: formatTokens(avgSpyTokens), icon: '💰' },
-                          { label: '獲得候補数', value: prospectCount.toLocaleString(), icon: '🎯' },
-                        ].map((card, i) => (
-                          <div key={i} className="glass-card p-3 text-center">
-                            <p className="text-lg mb-1">{card.icon}</p>
-                            <p className="text-base font-bold" style={{ color: 'var(--text-primary)' }}>{card.value}</p>
-                            <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{card.label}</p>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })()}
-
-                  {/* Section 3: 重複マトリクス */}
-                  <div className="glass-card p-4">
-                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                      📊 ユーザー重複マトリクス
-                    </h3>
-                    {overlapMatrix.length === 0 ? (
-                      <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>
-                        データなし — 「集計を更新」を実行してください
-                      </p>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                              <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>他社キャスト</th>
-                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複ユーザー</th>
-                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複tk</th>
-                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>重複率</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {overlapMatrix.map((row, i) => {
-                              const rate = row.own_total_users > 0
-                                ? Math.round((row.overlap_users / row.own_total_users) * 100)
-                                : 0;
-                              const heatBg = `rgba(56,189,248,${Math.min(rate / 100, 0.4).toFixed(2)})`;
-                              return (
-                                <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)', background: heatBg }}>
-                                  <td className="py-2 px-2 font-medium">{row.spy_cast}</td>
-                                  <td className="py-2 px-2 text-right">{row.overlap_users}</td>
-                                  <td className="py-2 px-2 text-right" style={{ color: 'var(--accent-amber)' }}>
-                                    {formatTokens(row.overlap_tokens)}
-                                  </td>
-                                  <td className="py-2 px-2 text-right font-bold">{rate}%</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Section 4: ユーザーランキング */}
-                  <div className="glass-card p-4">
-                    <h3 className="text-sm font-bold mb-3 flex items-center gap-2">
-                      🏆 他社高額応援ユーザーランキング
-                    </h3>
-                    {spyTopUsers.length === 0 ? (
-                      <p className="text-xs text-center py-8" style={{ color: 'var(--text-muted)' }}>
-                        データなし — 「集計を更新」を実行してください
-                      </p>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                              <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>#</th>
-                              <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>ユーザー</th>
-                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>他社tk</th>
-                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>キャスト数</th>
-                              <th className="text-right py-2 px-2" style={{ color: 'var(--text-muted)' }}>自社tk</th>
-                              <th className="text-left py-2 px-2" style={{ color: 'var(--text-muted)' }}>セグメント</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {spyTopUsers.map((u, i) => {
-                              const segBadge: Record<string, { icon: string; color: string }> = {
-                                whale: { icon: '🐋', color: 'var(--accent-purple)' },
-                                vip: { icon: '👑', color: 'var(--accent-amber)' },
-                                regular: { icon: '⭐', color: 'var(--accent-green)' },
-                                light: { icon: '💡', color: 'var(--text-secondary)' },
-                                new: { icon: '🆕', color: 'var(--accent-primary)' },
-                                churned: { icon: '💤', color: 'var(--text-muted)' },
-                              };
-                              const seg = u.own_segment ? segBadge[u.own_segment] : null;
-                              return (
-                                <tr key={i} style={{ borderBottom: '1px solid var(--border-glass)' }}>
-                                  <td className="py-2 px-2" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
-                                  <td className="py-2 px-2">
-                                    <a href={`/users/${encodeURIComponent(u.user_name)}`}
-                                      className="hover:underline truncate block max-w-[180px]" style={{ color: 'var(--accent-primary)' }}>
-                                      {u.user_name}
-                                    </a>
-                                    <p className="text-[9px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                                      {(u.spy_casts || []).slice(0, 3).join(', ')}{(u.spy_casts || []).length > 3 ? ` +${u.spy_casts.length - 3}` : ''}
-                                    </p>
-                                  </td>
-                                  <td className="py-2 px-2 text-right font-medium" style={{ color: 'var(--accent-amber)' }}>
-                                    {formatTokens(u.spy_total_tokens)}
-                                  </td>
-                                  <td className="py-2 px-2 text-right">{u.cast_count}</td>
-                                  <td className="py-2 px-2 text-right">
-                                    {u.own_total_coins > 0 ? formatTokens(u.own_total_coins) : (
-                                      <span style={{ color: 'var(--text-muted)' }}>—</span>
-                                    )}
-                                  </td>
-                                  <td className="py-2 px-2">
-                                    {seg ? (
-                                      <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full"
-                                        style={{ background: `${seg.color}20`, color: seg.color }}>
-                                        {seg.icon} {u.own_segment}
-                                      </span>
-                                    ) : (
-                                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>未応援</span>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
 
           {/* ============ HEALTH (健全性) ============ */}
           {activeTab === 'settings' && (
