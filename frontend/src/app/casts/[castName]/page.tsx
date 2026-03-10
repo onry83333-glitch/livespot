@@ -16,13 +16,14 @@ import DmSegmentSender from '@/components/dm-segment-sender';
 import DataSyncPanel from '@/components/data-sync-panel';
 import { Accordion } from '@/components/accordion';
 import CastReportsTab from '@/components/cast-reports-tab';
+import { PersonaTab } from '@/components/persona-tab';
 
 
 /* ============================================================
    Types
    ============================================================ */
 // M-6: screenshots タブはデータ0件のため非表示。SPY基盤安定後に再表示
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'reports' | 'settings' | 'competitors';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'reports' | 'settings' | 'competitors' | 'persona';
 
 interface CastStatsData {
   total_messages: number;
@@ -256,6 +257,7 @@ const BASE_TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'analytics',  icon: '📈', label: 'アナリティクス' },
   { key: 'reports',    icon: '📋', label: '配信レポート' },
   { key: 'competitors', icon: '⚔', label: '競合分析' },
+  { key: 'persona',    icon: '🧠', label: 'AIペルソナ' },
   { key: 'settings',   icon: '⚙', label: '設定' },
 ];
 
@@ -6335,6 +6337,11 @@ function CastDetailInner() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* ============ PERSONA (AIペルソナ) ============ */}
+          {activeTab === 'persona' && accountId && (
+            <PersonaTab castName={castName} accountId={accountId} />
           )}
 
 

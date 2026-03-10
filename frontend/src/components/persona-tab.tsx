@@ -63,9 +63,19 @@ export function PersonaTab({ castName, accountId }: PersonaTabProps) {
   const [toneThankyou, setToneThankyou] = useState(DEFAULT_PERSONA.dm_tone_examples.thankyou);
   const [toneChurn, setToneChurn] = useState(DEFAULT_PERSONA.dm_tone_examples.churn);
 
-  // Preview
+  // Preview (legacy DM-only preview)
   const [previewing, setPreviewing] = useState(false);
   const [previewResult, setPreviewResult] = useState<string | null>(null);
+
+  // Engine task_type switching
+  type EngineTaskType = 'dm' | 'x_post' | 'content';
+  const [engineTask, setEngineTask] = useState<EngineTaskType>('dm');
+  const [engineGenerating, setEngineGenerating] = useState(false);
+  const [engineResult, setEngineResult] = useState<Record<string, unknown> | null>(null);
+  const [engineRawText, setEngineRawText] = useState<string | null>(null);
+  const [engineError, setEngineError] = useState<string | null>(null);
+  const [feedbackSending, setFeedbackSending] = useState(false);
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
   // Load persona
   useEffect(() => {
@@ -185,6 +195,66 @@ export function PersonaTab({ castName, accountId }: PersonaTabProps) {
     }
     setPreviewing(false);
   }, [castName, sb]);
+
+  // Engine generation
+  const handleEngineGenerate = useCallback(async () => {
+    setEngineGenerating(true);
+    setEngineResult(null);
+    setEngineRawText(null);
+    setEngineError(null);
+    setFeedbackMsg(null);
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) { setEngineError('認証エラー'); setEngineGenerating(false); return; }
+
+      const contextMap: Record<EngineTaskType, Record<string, unknown>> = {
+        dm: { user_name: 'preview_user', cast_name: castName, scenario_type: 'thankyou_regular', step_number: 1 },
+        x_post: { cast_name: castName, mood: '日常' },
+        content: { cast_name: castName, content_type: 'caption' },
+      };
+
+      const res = await fetch('/api/persona/engine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ task_type: engineTask, cast_name: castName, account_id: accountId, context: contextMap[engineTask] }),
+      });
+      const json = await res.json();
+      if (json.error) { setEngineError(json.error); } else {
+        setEngineResult(typeof json.output === 'object' ? json.output : { raw: json.output });
+        setEngineRawText(json.raw_text || null);
+      }
+    } catch (e) { setEngineError((e as Error).message); }
+    setEngineGenerating(false);
+  }, [engineTask, castName, accountId, sb]);
+
+  // Feedback submission
+  const handleFeedback = useCallback(async (isGood: boolean) => {
+    if (!engineRawText && !engineResult) return;
+    setFeedbackSending(true);
+    setFeedbackMsg(null);
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      if (!session) { setFeedbackMsg('認証エラー'); setFeedbackSending(false); return; }
+      const outputStr = engineRawText || JSON.stringify(engineResult);
+      const res = await fetch('/api/persona/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          cast_name: castName,
+          task_type: engineTask,
+          output: outputStr,
+          score: isGood ? 90 : 30,
+          score_source: 'manual',
+          account_id: accountId,
+          metadata: { source: 'persona_tab_preview' },
+        }),
+      });
+      const json = await res.json();
+      if (json.error) { setFeedbackMsg(`エラー: ${json.error}`); } else { setFeedbackMsg(isGood ? '高評価を記録しました' : '低評価を記録しました'); }
+    } catch (e) { setFeedbackMsg((e as Error).message); }
+    setFeedbackSending(false);
+    setTimeout(() => setFeedbackMsg(null), 3000);
+  }, [engineRawText, engineResult, castName, engineTask, accountId, sb]);
 
   if (loading) {
     return <div className="text-center py-8 text-xs" style={{ color: 'var(--text-muted)' }}>読み込み中...</div>;
@@ -359,23 +429,104 @@ export function PersonaTab({ castName, accountId }: PersonaTabProps) {
         </div>
       </div>
 
-      {/* Preview */}
+      {/* AI生成テスト */}
       <div className="glass-card p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h4 className="text-[11px] font-bold">DM生成プレビュー</h4>
-          <button onClick={handlePreview} disabled={previewing}
-            className="text-[11px] px-3 py-1.5 rounded-lg font-semibold transition-all disabled:opacity-50"
-            style={{ background: 'rgba(168,85,247,0.15)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.3)' }}>
-            {previewing ? '生成中...' : 'サンプルDM生成'}
-          </button>
-        </div>
-        <p className="text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
-          現在のペルソナ設定でDMサンプルを生成して確認できます。保存前でもデフォルト値でテスト可能です。
+        <h4 className="text-[11px] font-bold mb-3">AI生成テスト</h4>
+        <p className="text-[10px] mb-3" style={{ color: 'var(--text-muted)' }}>
+          ペルソナ設定を使ってAIコンテンツを生成します。生成後にフィードバックすると精度が向上します。
         </p>
-        {previewResult && (
-          <div className="p-3 rounded-lg text-xs whitespace-pre-wrap"
-            style={{ background: 'rgba(15,23,42,0.6)', border: '1px solid var(--border-glass)', color: 'var(--text-secondary)' }}>
-            {previewResult}
+
+        {/* Task type selector */}
+        <div className="flex gap-1.5 mb-4">
+          {([
+            { key: 'dm' as const, icon: '💬', label: 'DM生成' },
+            { key: 'x_post' as const, icon: '𝕏', label: 'X投稿' },
+            { key: 'content' as const, icon: '📄', label: 'コンテンツ' },
+          ]).map(t => (
+            <button key={t.key} onClick={() => { setEngineTask(t.key); setEngineResult(null); setEngineRawText(null); setEngineError(null); setFeedbackMsg(null); }}
+              className="text-[11px] px-3 py-1.5 rounded-lg font-semibold transition-all flex-1"
+              style={{
+                background: engineTask === t.key ? 'rgba(168,85,247,0.15)' : 'rgba(15,23,42,0.4)',
+                color: engineTask === t.key ? '#a855f7' : 'var(--text-secondary)',
+                border: engineTask === t.key ? '1px solid rgba(168,85,247,0.3)' : '1px solid var(--border-glass)',
+              }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Generate button */}
+        <button onClick={handleEngineGenerate} disabled={engineGenerating}
+          className="w-full text-[11px] px-3 py-2 rounded-lg font-semibold transition-all disabled:opacity-50 mb-3"
+          style={{ background: 'linear-gradient(135deg, rgba(168,85,247,0.2), rgba(56,189,248,0.2))', color: '#a855f7', border: '1px solid rgba(168,85,247,0.3)' }}>
+          {engineGenerating ? '生成中...' : `${engineTask === 'dm' ? 'DM文面' : engineTask === 'x_post' ? 'X投稿' : 'コンテンツ'}を生成`}
+        </button>
+
+        {/* Error */}
+        {engineError && (
+          <div className="p-3 rounded-lg text-xs mb-3"
+            style={{ background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.3)', color: '#f43f5e' }}>
+            {engineError}
+          </div>
+        )}
+
+        {/* Result */}
+        {engineResult && !engineGenerating && (
+          <div className="space-y-2">
+            <div className="p-3 rounded-lg text-xs whitespace-pre-wrap"
+              style={{ background: 'rgba(15,23,42,0.6)', border: '1px solid var(--border-glass)', color: 'var(--text-primary)' }}>
+              {engineTask === 'dm' && typeof engineResult.message === 'string' && (
+                <div>
+                  <p className="font-semibold mb-1" style={{ color: 'var(--accent-purple)' }}>DM文面:</p>
+                  <p>{engineResult.message}</p>
+                </div>
+              )}
+              {engineTask === 'x_post' && typeof engineResult.post_text === 'string' && (
+                <div>
+                  <p className="font-semibold mb-1" style={{ color: 'var(--accent-primary)' }}>投稿文:</p>
+                  <p>{engineResult.post_text}</p>
+                  {Array.isArray(engineResult.hashtags) && (
+                    <p className="mt-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      {(engineResult.hashtags as string[]).join(' ')}
+                    </p>
+                  )}
+                </div>
+              )}
+              {engineTask === 'content' && typeof engineResult.content === 'string' && (
+                <div>
+                  <p className="font-semibold mb-1" style={{ color: 'var(--accent-green)' }}>コンテンツ:</p>
+                  <p>{engineResult.content}</p>
+                </div>
+              )}
+              {typeof engineResult.message !== 'string' && typeof engineResult.post_text !== 'string' && typeof engineResult.content !== 'string' && typeof engineResult.raw === 'string' && (
+                <p>{engineResult.raw}</p>
+              )}
+              {typeof engineResult.reasoning === 'string' && (
+                <p className="mt-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                  理由: {engineResult.reasoning}
+                </p>
+              )}
+            </div>
+
+            {/* Feedback buttons */}
+            <div className="flex items-center gap-2">
+              <button onClick={() => handleFeedback(true)} disabled={feedbackSending}
+                className="text-[11px] px-3 py-1.5 rounded-lg font-semibold transition-all disabled:opacity-50"
+                style={{ background: 'rgba(34,197,94,0.1)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
+                ✅ 良い
+              </button>
+              <button onClick={() => handleFeedback(false)} disabled={feedbackSending}
+                className="text-[11px] px-3 py-1.5 rounded-lg font-semibold transition-all disabled:opacity-50"
+                style={{ background: 'rgba(244,63,94,0.1)', color: '#f43f5e', border: '1px solid rgba(244,63,94,0.3)' }}>
+                ❌ 改善が必要
+              </button>
+              {feedbackMsg && (
+                <span className="text-[10px] px-2 py-0.5 rounded-lg"
+                  style={{ background: feedbackMsg.startsWith('エラー') ? 'rgba(244,63,94,0.1)' : 'rgba(34,197,94,0.1)', color: feedbackMsg.startsWith('エラー') ? '#f43f5e' : '#22c55e' }}>
+                  {feedbackMsg}
+                </span>
+              )}
+            </div>
           </div>
         )}
       </div>
