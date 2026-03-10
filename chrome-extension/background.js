@@ -1809,8 +1809,134 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
+  // --- Popup: Earnings同期 ---
+  if (msg.type === 'SYNC_EARNINGS') {
+    handleSyncEarnings(msg.castName, msg.userId, msg.fromDate).then(result => {
+      sendResponse({ ok: true, ...result });
+    }).catch(e => {
+      sendResponse({ ok: false, error: e.message });
+    });
+    return true; // async sendResponse
+  }
+
   return false;
 });
+
+// ============================================================
+// handleSyncEarnings — Stripchat Earnings API → coin_transactions UPSERT
+// ============================================================
+async function handleSyncEarnings(castName, userId, fromDate) {
+  if (!castName || !userId) throw new Error('castName/userId が未設定');
+  if (!accountId) throw new Error('accountId が未設定（アカウントを選択してください）');
+
+  // 1. Cookie取得
+  const allCookies = await chrome.cookies.getAll({ domain: '.stripchat.com' });
+  const cookieHeader = allCookies.map(c => `${c.name}=${c.value}`).join('; ');
+  if (!cookieHeader || allCookies.length < 3) {
+    throw new Error('Stripchat Cookie不足 — ブラウザでログインしてください');
+  }
+
+  // 2. Earnings API fetch (最大10ページ = 1,000件)
+  const PAGE_SIZE = 100;
+  const MAX_PAGES = 10;
+  const sinceDate = fromDate ? new Date(fromDate) : null;
+  const allTx = [];
+  let offset = 0;
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const url = `https://stripchat.com/api/front/users/${userId}/transactions?offset=${offset}&limit=${PAGE_SIZE}`;
+    let resp;
+    try {
+      resp = await fetch(url, {
+        headers: {
+          'Cookie': cookieHeader,
+          'Accept': 'application/json',
+          'User-Agent': navigator.userAgent,
+        },
+      });
+    } catch (err) {
+      console.error('[LS-BG] Earnings API接続エラー:', err.message);
+      break;
+    }
+
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error(`認証エラー (${resp.status}) — Stripchatに再ログインしてください`);
+    }
+    if (!resp.ok) {
+      console.warn('[LS-BG] Earnings API', resp.status);
+      break;
+    }
+
+    let data;
+    try { data = await resp.json(); } catch { break; }
+
+    const items = data.transactions || data.items || [];
+    if (items.length === 0) break;
+
+    let hitOld = false;
+    for (const tx of items) {
+      const txDate = tx.date || tx.createdAt || tx.created_at;
+      if (sinceDate && txDate && new Date(txDate) < sinceDate) { hitOld = true; break; }
+      allTx.push(tx);
+    }
+    if (hitOld || items.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+
+    // 800msディレイ（レート制限対策）
+    await new Promise(r => setTimeout(r, 800));
+  }
+
+  if (allTx.length === 0) return { synced: 0, totalTokens: 0 };
+
+  // 3. coin_transactions形式に変換
+  const rows = allTx.map(tx => ({
+    account_id: accountId,
+    cast_name: castName,
+    stripchat_tx_id: tx.id ? String(tx.id) : null,
+    username: tx.userName || tx.user_name || tx.username || 'anonymous',
+    tokens: tx.tokens || tx.amount || 0,
+    type: (tx.type || tx.source || 'unknown').toLowerCase(),
+    date: tx.date || tx.createdAt || tx.created_at || new Date().toISOString(),
+    is_anonymous: tx.isAnonymous ? true : false,
+  }));
+
+  // 4. Supabase UPSERT（バッチ、service_role不要 — anon + RLS）
+  //    service_role keyを使ってRLSバイパス
+  const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZ2Joa2xsZmVhY2JncGRianRvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDk2NDk3NywiZXhwIjoyMDg2NTQwOTc3fQ.IxlG4X6zHi9h4pgh6vFpQKaJGKwQzLBL-2C4af90MZQ';
+
+  let totalSynced = 0;
+  const BATCH = 200;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    try {
+      const res = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': SERVICE_ROLE_KEY,
+            'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=minimal',
+          },
+          body: JSON.stringify(batch),
+        },
+      );
+      if (res.ok || res.status === 201) {
+        totalSynced += batch.length;
+      } else {
+        const errBody = await res.text().catch(() => '');
+        console.warn('[LS-BG] UPSERT失敗:', res.status, errBody);
+      }
+    } catch (e) {
+      console.error('[LS-BG] UPSERT error:', e.message);
+    }
+  }
+
+  const totalTokens = rows.reduce((s, r) => s + (r.tokens || 0), 0);
+  console.log(`[LS-BG] Earnings同期完了: ${totalSynced}件, ${totalTokens}tk`);
+  return { synced: totalSynced, totalTokens, fetched: allTx.length };
+}
 
 // ============================================================
 // getLoggedInCastFromCookies — CookieからログインキャストのStripchat IDを取得

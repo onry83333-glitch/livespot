@@ -172,6 +172,18 @@ async function detectLoggedInCast() {
       icon.innerHTML = '&#9679;';
       text.innerHTML = `ログイン中: <span class="cast-identity-name">${response.displayName || response.castName}</span>`;
       clearBtn.style.display = 'block';
+
+      // Earnings同期カードを表示・有効化
+      const syncCard = $('earningsSyncCard');
+      const syncBtn = $('earningsSyncBtn');
+      const castLabel = $('earningsCastLabel');
+      if (syncCard && syncBtn) {
+        syncCard.style.display = 'block';
+        castLabel.textContent = `キャスト: ${response.displayName || response.castName}`;
+        syncBtn.disabled = false;
+        syncBtn.dataset.castName = response.castName;
+        syncBtn.dataset.userId = response.userId;
+      }
     } else {
       // ログインしているがキャストが不明（未登録のstripchat_user_id）
       section.className = 'cast-identity warning';
@@ -441,6 +453,50 @@ $('clearCookiesBtn').addEventListener('click', () => {
 
 // --- Account Selection Change → Re-detect cast ---
 // (also triggers on page load if account was pre-selected)
+
+// --- Earnings Sync ---
+$('earningsSyncBtn').addEventListener('click', async () => {
+  const btn = $('earningsSyncBtn');
+  const resultEl = $('earningsSyncResult');
+  const errorEl = $('earningsSyncError');
+  resultEl.classList.remove('show');
+  errorEl.classList.remove('show');
+
+  btn.disabled = true;
+  btn.textContent = '同期中...';
+
+  // 7日前からfetch
+  const fromDate = new Date();
+  fromDate.setDate(fromDate.getDate() - 7);
+
+  chrome.runtime.sendMessage(
+    {
+      type: 'SYNC_EARNINGS',
+      castName: btn.dataset.castName,
+      userId: btn.dataset.userId,
+      fromDate: fromDate.toISOString(),
+    },
+    (response) => {
+      btn.disabled = false;
+      btn.textContent = 'Earnings 同期';
+
+      if (chrome.runtime.lastError) {
+        errorEl.textContent = chrome.runtime.lastError.message;
+        errorEl.classList.add('show');
+        return;
+      }
+
+      if (!response || !response.ok) {
+        errorEl.textContent = response?.error || '同期に失敗しました';
+        errorEl.classList.add('show');
+        return;
+      }
+
+      resultEl.textContent = `${response.synced}件同期完了 (${response.totalTokens}tk)`;
+      resultEl.classList.add('show');
+    },
+  );
+});
 
 // --- Logout ---
 $('logoutLink').addEventListener('click', async (e) => {
