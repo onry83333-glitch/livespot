@@ -22,7 +22,7 @@ import CastReportsTab from '@/components/cast-reports-tab';
    Types
    ============================================================ */
 // M-6: screenshots タブはデータ0件のため非表示。SPY基盤安定後に再表示
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'reports' | 'settings';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'reports' | 'settings' | 'competitors';
 
 interface CastStatsData {
   total_messages: number;
@@ -249,14 +249,31 @@ const ALERT_RULE_LABELS: Record<string, { icon: string; label: string; defaultTh
   viewer_milestone: { icon: '👀', label: '視聴者数マイルストーン', defaultThreshold: 50 },
 };
 
-const TABS: { key: TabKey; icon: string; label: string }[] = [
+const BASE_TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'overview',   icon: '📊', label: '概要' },
   { key: 'sessions',   icon: '📺', label: 'セッション' },
   { key: 'dm',         icon: '💬', label: 'DM' },
   { key: 'analytics',  icon: '📈', label: 'アナリティクス' },
   { key: 'reports',    icon: '📋', label: '配信レポート' },
+  { key: 'competitors', icon: '⚔', label: '競合分析' },
   { key: 'settings',   icon: '⚙', label: '設定' },
 ];
+
+interface CompetitorEntry {
+  competitor_cast_name: string;
+  category: string | null;
+}
+
+interface CompetitorDiffReport {
+  revenue_gap?: string;
+  timing_gap?: string;
+  style_gap?: string;
+  audience_gap?: string;
+  actionable_insights?: string[];
+  competitive_advantage?: string;
+  competitive_weakness?: string;
+  raw?: string;
+}
 
 /* getWeekStartJST is imported from @/lib/utils */
 
@@ -282,6 +299,19 @@ function CastDetailInner() {
   const [stats, setStats] = useState<CastStatsData | null>(null);
   const [fans, setFans] = useState<FanItem[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Competitors
+  const [competitors, setCompetitors] = useState<CompetitorEntry[]>([]);
+  const [competitorReport, setCompetitorReport] = useState<CompetitorDiffReport | null>(null);
+  const [competitorAnalyzing, setCompetitorAnalyzing] = useState(false);
+  const [competitorTarget, setCompetitorTarget] = useState<string | null>(null);
+  const [competitorError, setCompetitorError] = useState<string | null>(null);
+
+  // Dynamic TABS — hide competitors tab if no benchmark data
+  const TABS = useMemo(() =>
+    BASE_TABS.filter(t => t.key !== 'competitors' || competitors.length > 0),
+    [competitors.length],
+  );
 
   // Overview: weekly revenue
   const [thisWeekCoins, setThisWeekCoins] = useState(0);
@@ -643,6 +673,31 @@ function CastDetailInner() {
     router.push(`/casts/${encodeURIComponent(castName)}?tab=${tab}`, { scroll: false });
   }, [router, castName]);
 
+  // Competitor diff analysis
+  const runCompetitorDiff = useCallback(async (competitorName: string) => {
+    setCompetitorAnalyzing(true);
+    setCompetitorError(null);
+    setCompetitorReport(null);
+    setCompetitorTarget(competitorName);
+    try {
+      const res = await fetch('/api/analysis/run-competitor-diff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cast_name: castName, competitor_cast_name: competitorName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setCompetitorError(data.error || '分析に失敗しました');
+      } else {
+        setCompetitorReport(data.diff_report || null);
+      }
+    } catch {
+      setCompetitorError('通信エラーが発生しました');
+    } finally {
+      setCompetitorAnalyzing(false);
+    }
+  }, [castName]);
+
   // ============================================================
   // Load account + cast info
   // ============================================================
@@ -652,6 +707,14 @@ function CastDetailInner() {
       if (data) setAccountId(data.id);
     });
   }, [user, sb]);
+
+  // Load competitor benchmarks
+  useEffect(() => {
+    fetch(`/api/data/competitors?cast_name=${encodeURIComponent(castName)}`)
+      .then(r => r.json())
+      .then(d => { if (d.competitors) setCompetitors(d.competitors); })
+      .catch(() => {});
+  }, [castName]);
 
   useEffect(() => {
     if (!accountId) return;
@@ -6558,6 +6621,183 @@ function CastDetailInner() {
                   </div>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* ============ COMPETITORS (競合分析) ============ */}
+          {activeTab === 'competitors' && competitors.length > 0 && (
+            <div className="space-y-4 anim-fade-up">
+              {/* 競合一覧 */}
+              <div className="glass-card p-5">
+                <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+                  ⚔ 競合キャスト一覧
+                </h3>
+                <div className="space-y-2">
+                  {competitors.map(c => (
+                    <div key={c.competitor_cast_name} className="glass-panel px-4 py-3 rounded-xl flex items-center justify-between">
+                      <div>
+                        <span className="text-sm font-semibold">{c.competitor_cast_name}</span>
+                        {c.category && (
+                          <span className="ml-2 text-[10px] px-2 py-0.5 rounded"
+                            style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
+                            {c.category}
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => runCompetitorDiff(c.competitor_cast_name)}
+                        disabled={competitorAnalyzing}
+                        className="text-[11px] px-3 py-1.5 rounded-lg font-semibold transition-all"
+                        style={{
+                          background: competitorTarget === c.competitor_cast_name && competitorAnalyzing
+                            ? 'rgba(56,189,248,0.1)'
+                            : 'linear-gradient(135deg, var(--accent-primary), #0284c7)',
+                          color: 'white',
+                          opacity: competitorAnalyzing ? 0.6 : 1,
+                        }}>
+                        {competitorTarget === c.competitor_cast_name && competitorAnalyzing ? '分析中...' : '分析する'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* ローディング */}
+              {competitorAnalyzing && (
+                <div className="glass-card p-6 text-center">
+                  <div className="inline-block w-8 h-8 rounded-full border-2 border-t-transparent animate-spin mb-3"
+                    style={{ borderColor: 'var(--accent-primary)', borderTopColor: 'transparent' }} />
+                  <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                    分析中...（30秒ほどかかります）
+                  </p>
+                  <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                    {castName} vs {competitorTarget} の差分をAIが分析しています
+                  </p>
+                </div>
+              )}
+
+              {/* エラー */}
+              {competitorError && !competitorAnalyzing && (
+                <div className="glass-card p-4 rounded-xl" style={{ border: '1px solid rgba(244,63,94,0.3)' }}>
+                  <p className="text-sm" style={{ color: 'var(--accent-pink)' }}>
+                    ⚠ {competitorError}
+                  </p>
+                </div>
+              )}
+
+              {/* レポート表示 */}
+              {competitorReport && !competitorAnalyzing && (
+                <div className="space-y-3">
+                  <h3 className="text-sm font-bold flex items-center gap-2">
+                    📄 {castName} vs {competitorTarget} 差分レポート
+                  </h3>
+
+                  {/* actionable_insights — 目立つ緑系カード */}
+                  {competitorReport.actionable_insights && competitorReport.actionable_insights.length > 0 && (
+                    <div className="glass-card p-5 rounded-xl" style={{ border: '1px solid rgba(34,197,94,0.3)', background: 'rgba(34,197,94,0.05)' }}>
+                      <h4 className="text-xs font-bold mb-3 flex items-center gap-1.5" style={{ color: 'var(--accent-green)' }}>
+                        💡 具体的な打ち手
+                      </h4>
+                      <div className="space-y-2">
+                        {competitorReport.actionable_insights.map((insight, i) => (
+                          <div key={i} className="flex gap-2 items-start">
+                            <span className="text-sm font-bold mt-0.5" style={{ color: 'var(--accent-green)' }}>{i + 1}.</span>
+                            <p className="text-xs leading-relaxed" style={{ color: 'var(--text-primary)' }}>{insight}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    {/* revenue_gap */}
+                    {competitorReport.revenue_gap && (
+                      <div className="glass-card p-4">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--accent-amber)' }}>
+                          💰 売上差分
+                        </h4>
+                        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {competitorReport.revenue_gap}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* timing_gap */}
+                    {competitorReport.timing_gap && (
+                      <div className="glass-card p-4">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--accent-primary)' }}>
+                          🕐 配信時間帯の違い
+                        </h4>
+                        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {competitorReport.timing_gap}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* style_gap */}
+                    {competitorReport.style_gap && (
+                      <div className="glass-card p-4">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--accent-purple, #a78bfa)' }}>
+                          🎭 配信スタイルの違い
+                        </h4>
+                        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {competitorReport.style_gap}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* audience_gap */}
+                    {competitorReport.audience_gap && (
+                      <div className="glass-card p-4">
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--accent-pink)' }}>
+                          👥 客層の違い
+                        </h4>
+                        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {competitorReport.audience_gap}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    {/* competitive_advantage */}
+                    {competitorReport.competitive_advantage && (
+                      <div className="glass-card p-4" style={{ borderLeft: '3px solid var(--accent-green)' }}>
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--accent-green)' }}>
+                          ✅ 自社の強み
+                        </h4>
+                        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {competitorReport.competitive_advantage}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* competitive_weakness */}
+                    {competitorReport.competitive_weakness && (
+                      <div className="glass-card p-4" style={{ borderLeft: '3px solid var(--accent-pink)' }}>
+                        <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--accent-pink)' }}>
+                          ⚠ 自社の弱み
+                        </h4>
+                        <p className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                          {competitorReport.competitive_weakness}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* raw fallback */}
+                  {competitorReport.raw && !competitorReport.revenue_gap && (
+                    <div className="glass-card p-4">
+                      <h4 className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
+                        レポート（Raw）
+                      </h4>
+                      <p className="text-xs leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                        {competitorReport.raw}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
