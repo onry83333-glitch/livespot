@@ -18,6 +18,7 @@
     "test:screenshots:headed": "playwright test 20-screenshot-gallery --workers=1 --headed"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@supabase/ssr": "^0.5.0",
     "@supabase/supabase-js": "^2.45.0",
     "clsx": "^2.1.0",
