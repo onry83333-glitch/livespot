@@ -1175,6 +1175,16 @@ https://www.notion.so/312a72d9e03b819ebc70e99d748b9ac2
 
 ---
 
+## セッション開始時の自動タスク取得
+1. Supabase REST APIで agent_tasks (status='in_progress', assigned_agent='Claude Code') を取得
+2. 各タスクの task_type と skill_files を確認
+3. skill_files が指定されていれば先に読み込む
+4. execution_prompt の内容に従って実行
+5. 完了後、verification_notes に結果を記録し、status を 'verification' に変更
+6. Telegram通知: 「🧐 [{project}] {task_name} 実装完了。検証してください」
+
+---
+
 ## 必読リファレンス（セッション開始時に必ず確認）
 
 | リソース | 用途 | ID/パス |
