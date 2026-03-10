@@ -2184,8 +2184,7 @@ function CastDetailInner() {
         <>
           {/* ============ OVERVIEW ============ */}
           {activeTab === 'overview' && (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              <div className="lg:col-span-2 space-y-4">
+            <div className="space-y-4">
                 {/* Weekly revenue */}
                 <div className="grid grid-cols-3 gap-3">
                   <div className="glass-card p-4 text-center">
@@ -2225,135 +2224,6 @@ function CastDetailInner() {
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>ユニークユーザー</p>
                   </div>
                 </div>
-
-                <Accordion id={`cast-${castName}-new-paying`} title="新規応援ユーザー（24h）" icon="🆕" defaultOpen={false}>
-                {/* New paying users */}
-                {newPayingUsers.length > 0 && (() => {
-                  const MAX_COLLAPSED = 5;
-                  const MAX_EXPANDED = 20;
-                  const visibleUsers = newPayingExpanded
-                    ? newPayingUsers.slice(0, MAX_EXPANDED)
-                    : newPayingUsers.slice(0, MAX_COLLAPSED);
-                  const hasMore = newPayingUsers.length > MAX_COLLAPSED;
-                  return (
-                    <div className="glass-card p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-sm font-bold">新規応援ユーザー（24h）</h3>
-                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                          {newPayingUsers.length}名 / {formatTokens(newPayingUsers.reduce((s, u) => s + u.total_coins, 0))}
-                          {' '}
-                          <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(newPayingUsers.reduce((s, u) => s + u.total_coins, 0), coinRate)}</span>
-                        </span>
-                      </div>
-                      <div className="space-y-0.5">
-                        {visibleUsers.map(u => (
-                          <div key={u.user_name} className="flex items-center justify-between text-[11px] px-2 py-1 rounded"
-                            style={{ background: 'rgba(255,255,255,0.02)' }}>
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              {u.is_completely_new && (
-                                <span className="text-[8px] px-1 py-0.5 rounded font-bold"
-                                  style={{ background: 'rgba(34,197,94,0.15)', color: 'var(--accent-green)' }}>NEW</span>
-                              )}
-                              <span className="font-semibold truncate">{u.user_name}</span>
-                              {u.tx_count > 1 && (
-                                <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>×{u.tx_count}</span>
-                              )}
-                            </div>
-                            <span className="font-bold flex-shrink-0 ml-2 text-[10px]">
-                              <span style={{ color: 'var(--accent-amber)' }}>{formatTokens(u.total_coins)}</span>
-                              {' '}
-                              <span style={{ color: 'var(--accent-green)' }}>{tokensToJPY(u.total_coins, coinRate)}</span>
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                      {hasMore && (
-                        <button
-                          onClick={() => setNewPayingExpanded(!newPayingExpanded)}
-                          className="w-full mt-2 text-[10px] py-1 rounded hover:opacity-80 transition-opacity"
-                          style={{ color: 'var(--accent-primary)', background: 'rgba(56,189,248,0.05)' }}
-                        >
-                          {newPayingExpanded
-                            ? '閉じる'
-                            : `もっと見る（残り${Math.min(newPayingUsers.length - MAX_COLLAPSED, MAX_EXPANDED - MAX_COLLAPSED)}名）`}
-                          {!newPayingExpanded && newPayingUsers.length > MAX_EXPANDED && (
-                            <span style={{ color: 'var(--text-muted)' }}> / 全{newPayingUsers.length}名</span>
-                          )}
-                        </button>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                </Accordion>
-
-                <Accordion id={`cast-${castName}-recent-sessions`} title="直近の配信" icon="📺" badge={`${sessions.length}件`} defaultOpen={false}>
-                {/* Recent sessions */}
-                <div className="glass-card p-4">
-                  <h3 className="text-sm font-bold mb-3">直近の配信</h3>
-                  {sessions.length === 0 ? (
-                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>配信データなし</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {sessions.slice(0, 5).map(s => (
-                        <div key={s.session_start} className="glass-panel p-3 flex items-center justify-between">
-                          <div>
-                            <p className="text-xs font-semibold">
-                              {s.session_date}
-                              {s.broadcast_title && (
-                                <span className="ml-2 text-[10px] font-normal" style={{ color: 'var(--accent-purple)' }}>
-                                  {s.broadcast_title}
-                                </span>
-                              )}
-                            </p>
-                            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                              {formatJST(s.session_start).split(' ')[1]?.slice(0, 5)} - {formatJST(s.session_end).split(' ')[1]?.slice(0, 5)} / {s.message_count} msg / {s.unique_users} users
-                            </p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-xs font-bold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(s.total_coins)}</p>
-                            <p className="text-[10px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(s.total_coins, coinRate)}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                </Accordion>
-              </div>
-
-              {/* Data sync panel */}
-              {accountId && (
-                <DataSyncPanel supabase={sb} accountId={accountId} castName={castName} />
-              )}
-
-              <Accordion id={`cast-${castName}-top-fans`} title="トップファン" icon="💰" badge={`${fans.length}名`} defaultOpen={false}>
-              {/* Top fans */}
-              <div className="glass-card p-4">
-                <h3 className="text-sm font-bold mb-3">💰 トップファン</h3>
-                {fans.length === 0 ? (
-                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>データなし</p>
-                ) : (
-                  <div className="space-y-2">
-                    {fans.map((f, i) => (
-                      <div key={f.user_name} className="flex items-center justify-between text-[11px]">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="font-bold w-4 text-center" style={{
-                            color: i === 0 ? '#FFD700' : i === 1 ? '#C0C0C0' : i === 2 ? '#CD7F32' : 'var(--text-muted)'
-                          }}>{i + 1}</span>
-                          <span className="truncate font-medium" style={{ color: getUserColorFromCoins(f.total_tokens || 0) }}>{f.user_name}</span>
-                        </div>
-                        <div className="flex-shrink-0 text-right">
-                          <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{formatTokens(f.total_tokens)}</span>
-                          <p className="text-[9px]" style={{ color: 'var(--accent-green)' }}>{tokensToJPY(f.total_tokens, coinRate)}</p>
-                          <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{f.msg_count} msg</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-              </Accordion>
             </div>
           )}
 
