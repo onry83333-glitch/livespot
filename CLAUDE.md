@@ -1172,3 +1172,21 @@ claude
 
 ### Notionレポート
 https://www.notion.so/312a72d9e03b819ebc70e99d748b9ac2
+
+---
+
+## 必読リファレンス（セッション開始時に必ず確認）
+
+| リソース | 用途 | ID/パス |
+|---|---|---|
+| Notionタスクボード | タスク取得・ステータス更新 | collection://48e5a7f8-642b-476b-98b2-2f0f0baba967 |
+| 統合コンテキスト | プロジェクト横断の状況把握 | 30ba72d9e03b817892e1ebd9c1124453 |
+| 引き継ぎ & セッション記録 | セッション終了時の記録先 | collection://22044c3c-c6aa-4d4e-ac97-5e8037adf0f0 |
+| agent_tasks | DAGタスク管理（verification flow対応） | Supabase: agent_tasks テーブル |
+| 理念ページ | 判断基準の原点 | 31ea72d9e03b81c39eedf0eb576ee1bd |
+
+### セッション開始チェックリスト
+1. タスクボードから自分のNextタスクを取得
+2. 統合コンテキストで他プロジェクトの状況を確認
+3. agent_tasksのverification待ちタスクがあれば報告
+4. data_dependencyのblocked状態を確認
