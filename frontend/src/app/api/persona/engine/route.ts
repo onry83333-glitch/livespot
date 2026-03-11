@@ -594,32 +594,39 @@ async function collect5AxisData(
         });
     }
 
-    // Top10 + 残りサマリー + 各チッパーの履歴情報付き
-    const topN = Math.min(10, allTippers.length);
+    // 新規/リピーター分離 + ランキング作成
     const returningMap = new Map(returningTippers.map(r => [r.username, r]));
-    const tipperLines = allTippers.slice(0, topN).map((u, i) => {
+    const newTipperSet = new Set(trueNewTippers);
+
+    // 新規チッパー全員リスト（tk降順）
+    const newTipperDetails = allTippers
+      .filter(t => newTipperSet.has(t.username))
+      .map(t => `- ${t.username}: ${t.total}tk (${t.count}回) ← 初チップ`);
+    const newTipperTotalTk = allTippers.filter(t => newTipperSet.has(t.username)).reduce((s, t) => s + t.total, 0);
+
+    // リピーターTop10ランキング（履歴情報付き）
+    const returningTippersSorted = allTippers.filter(t => !newTipperSet.has(t.username));
+    const topN = Math.min(10, returningTippersSorted.length);
+    const tipperLines = returningTippersSorted.slice(0, topN).map((u, i) => {
       const hist = returningMap.get(u.username);
       const tag = hist
-        ? `[常連: 初回${hist.firstTipDate.slice(0, 10)}, 累計${hist.historyTokens}tk/${hist.historyTxCount}回]`
-        : '[★新規]';
+        ? `[初回${hist.firstTipDate.slice(0, 10)}, 累計${hist.historyTokens}tk/${hist.historyTxCount}回]`
+        : '';
       return `${i + 1}. ${u.username}: ${u.total}tk (${u.count}回) ${tag}`;
     }).join('\n');
-    const restCount = allTippers.length - topN;
-    const restTokens = allTippers.slice(topN).reduce((s, u) => s + u.total, 0);
-
-    // 新規チッパーの合計tk
-    const newTipperSet = new Set(trueNewTippers);
-    const newTipperTotalTk = allTippers.filter(t => newTipperSet.has(t.username)).reduce((s, t) => s + t.total, 0);
+    const restCount = returningTippersSorted.length - topN;
+    const restTokens = returningTippersSorted.slice(topN).reduce((s, u) => s + u.total, 0);
 
     result.tipperStructure = `[事実] 合計: ${totalTokens}tk / ${latest.tx_count}件 / ${latest.duration_minutes}分
 [事実] ユニークチッパー: ${uniqueTipperCount}人（匿名: ${anonymousCount}件/${anonymousTokens}tk）
 [事実] Top3集中度: ${concentration}%
-[事実] 新規チッパー（このキャストへの初チップ）: ${trueNewTippers.length}人 / ${newTipperTotalTk}tk${trueNewTippers.length > 0 ? `\n  ${trueNewTippers.slice(0, 10).join(', ')}${trueNewTippers.length > 10 ? ` 他${trueNewTippers.length - 10}人` : ''}` : ''}
-[事実] リピーター: ${returningTippers.length}人
 [判定根拠] 新規判定=coin_transactions全履歴でセッション開始前にこのキャストへのチップが0件の人
 
---- チッパーランキング（全${uniqueTipperCount}人）---
-${tipperLines}${restCount > 0 ? `\n（他${restCount}人: 合計${restTokens}tk）` : ''}`;
+## 新規チッパー（${trueNewTippers.length}人 / ${newTipperTotalTk}tk）
+${newTipperDetails.length > 0 ? newTipperDetails.join('\n') : '(なし)'}
+
+## リピーター Top10（${returningTippers.length}人）
+${tipperLines || '(なし)'}${restCount > 0 ? `\n（他${restCount}人: 合計${restTokens}tk）` : ''}`;
 
     // ================================================================
     // 軸2: チップトリガー（時間帯分析 + チップ種類別構成）
