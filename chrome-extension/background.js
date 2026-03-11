@@ -1809,6 +1809,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // async sendResponse
   }
 
+  // --- Content Script: コイン取引バッチ（ストリーミングUPSERT） ---
+  if (msg.type === 'COIN_BATCH') {
+    // content_coin_sync.jsから随時送られるバッチをUPSERTキューに追加
+    const txs = msg.transactions || [];
+    if (txs.length > 0 && _coinStreamState.active) {
+      _coinStreamState.totalReceived += txs.length;
+      _coinStreamUpsertQueue(txs);
+    }
+    sendResponse({ ok: true, queued: txs.length });
+    return false;
+  }
+
   // --- Popup: Earnings同期 ---
   if (msg.type === 'SYNC_EARNINGS') {
     handleSyncEarnings(msg.castName, msg.fromDate).then(result => {
@@ -1821,6 +1833,75 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   return false;
 });
+
+// ============================================================
+// コインストリーミングUPSERT — content scriptから随時バッチ受信してDB保存
+// ============================================================
+const _coinStreamState = {
+  active: false,
+  accountId: null,
+  castName: null,
+  serviceRoleKey: null,
+  totalReceived: 0,
+  totalSynced: 0,
+  queue: [],
+  processing: false,
+};
+
+async function _coinStreamUpsertQueue(newTxs) {
+  const st = _coinStreamState;
+  if (!st.active || !st.serviceRoleKey) return;
+
+  st.queue.push(...newTxs);
+
+  // 既にprocessing中なら追加分は次回に処理される
+  if (st.processing) return;
+  st.processing = true;
+
+  try {
+    while (st.queue.length > 0) {
+      const BATCH = 500;
+      const batch = st.queue.splice(0, BATCH);
+      const rows = batch.map(tx => ({
+        account_id: st.accountId,
+        cast_name: st.castName,
+        stripchat_tx_id: tx.id != null ? String(tx.id) : null,
+        user_name: tx.userName || tx.user_name || tx.username || 'anonymous',
+        tokens: Math.max(0, tx.tokens || tx.amount || 0),
+        type: (tx.type || tx.sourceType || 'unknown').toLowerCase(),
+        date: tx.date || tx.created_at || tx.createdAt || new Date().toISOString(),
+        is_anonymous: tx.isAnonymous ? true : false,
+      }));
+
+      try {
+        const res = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions?on_conflict=account_id,stripchat_tx_id`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': st.serviceRoleKey,
+              'Authorization': `Bearer ${st.serviceRoleKey}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=merge-duplicates,return=minimal',
+            },
+            body: JSON.stringify(rows),
+          },
+        );
+        if (res.ok || res.status === 201) {
+          st.totalSynced += rows.length;
+          console.log(`[LS-BG] [stream] UPSERT成功: ${rows.length}件（累計 ${st.totalSynced}件）`);
+        } else {
+          const errBody = await res.text().catch(() => '');
+          console.warn(`[LS-BG] [stream] UPSERT失敗: ${res.status}`, errBody);
+        }
+      } catch (e) {
+        console.error(`[LS-BG] [stream] UPSERT error:`, e.message);
+      }
+    }
+  } finally {
+    st.processing = false;
+  }
+}
 
 // ============================================================
 // handleSyncEarnings — content script経由でEarnings API取得 → Supabase UPSERT
@@ -1878,90 +1959,72 @@ async function handleSyncEarnings(castName, fromDate) {
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  // 3. content scriptにFETCH_COINSメッセージ送信
-  const sinceISO = fromDate || null;
-  console.log('[LS-BG] Earnings同期: FETCH_COINS送信 sinceISO=', sinceISO);
-  const result = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Earnings取得タイムアウト（10分）')), 10 * 60 * 1000);
-    chrome.tabs.sendMessage(
-      targetTab.id,
-      { type: 'FETCH_COINS', options: { sinceISO, maxPages: 20 } },
-      (response) => {
-        clearTimeout(timeout);
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        if (!response) {
-          reject(new Error('content scriptから応答なし'));
-          return;
-        }
-        resolve(response);
-      },
-    );
-  });
-
-  if (result.error) {
-    throw new Error(result.message || result.error);
-  }
-
-  const transactions = result.transactions || [];
-  if (transactions.length === 0) {
-    return { synced: 0, totalTokens: 0, fetched: 0 };
-  }
-
-  // 4. coin_transactions形式に変換してSupabase UPSERT
-  // Service Role Key は chrome.storage.local から取得（ソースコードにハードコードしない）
+  // 3. Service Role Key 取得（ストリーミングUPSERT用に先に取得）
   const storageData = await chrome.storage.local.get(['service_role_key']);
   const SERVICE_ROLE_KEY = storageData.service_role_key;
   if (!SERVICE_ROLE_KEY) {
     throw new Error('Service Role Key が未設定です。Chrome拡張のポップアップ設定から入力してください');
   }
 
-  const rows = transactions.map(tx => ({
-    account_id: accountId,
-    cast_name: castName,
-    stripchat_tx_id: tx.id != null ? String(tx.id) : null,
-    username: tx.userName || tx.user_name || tx.username || 'anonymous',
-    tokens: Math.max(0, tx.tokens || tx.amount || 0),
-    type: (tx.type || tx.sourceType || 'unknown').toLowerCase(),
-    date: tx.date || tx.created_at || tx.createdAt || new Date().toISOString(),
-    is_anonymous: tx.isAnonymous ? true : false,
-  }));
+  // 4. ストリーミングUPSERT状態を初期化（COIN_BATCHハンドラが使用）
+  _coinStreamState.active = true;
+  _coinStreamState.accountId = accountId;
+  _coinStreamState.castName = castName;
+  _coinStreamState.serviceRoleKey = SERVICE_ROLE_KEY;
+  _coinStreamState.totalReceived = 0;
+  _coinStreamState.totalSynced = 0;
+  _coinStreamState.queue = [];
+  _coinStreamState.processing = false;
 
-  let totalSynced = 0;
-  const BATCH = 500;
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const batch = rows.slice(i, i + BATCH);
-    try {
-      const res = await fetch(
-        `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions`,
-        {
-          method: 'POST',
-          headers: {
-            'apikey': SERVICE_ROLE_KEY,
-            'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'resolution=merge-duplicates,return=minimal',
-          },
-          body: JSON.stringify(batch),
+  // 5. content scriptにFETCH_COINSメッセージ送信（streaming: trueで随時COIN_BATCH送信）
+  const sinceISO = fromDate || null;
+  console.log('[LS-BG] Earnings同期: FETCH_COINS送信（ストリーミングモード） sinceISO=', sinceISO);
+  let result;
+  try {
+    result = await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Earnings取得タイムアウト（30分）')), 30 * 60 * 1000);
+      chrome.tabs.sendMessage(
+        targetTab.id,
+        { type: 'FETCH_COINS', options: { sinceISO } },
+        (response) => {
+          clearTimeout(timeout);
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (!response) {
+            reject(new Error('content scriptから応答なし'));
+            return;
+          }
+          resolve(response);
         },
       );
-      if (res.ok || res.status === 201) {
-        totalSynced += batch.length;
-      } else {
-        const errBody = await res.text().catch(() => '');
-        console.warn('[LS-BG] UPSERT失敗:', res.status, errBody);
-      }
-    } catch (e) {
-      console.error('[LS-BG] UPSERT error:', e.message);
+    });
+  } finally {
+    // ストリーミング終了 — 残りのキューを処理してから無効化
+    if (_coinStreamState.queue.length > 0) {
+      await _coinStreamUpsertQueue([]);
     }
+    // processing完了を待つ（最大10秒）
+    for (let i = 0; i < 20 && _coinStreamState.processing; i++) {
+      await new Promise(r => setTimeout(r, 500));
+    }
+    _coinStreamState.active = false;
   }
 
-  const totalTokens = rows.reduce((s, r) => s + (r.tokens || 0), 0);
-  console.log(`[LS-BG] Earnings同期完了: ${totalSynced}件, ${totalTokens}tk`);
+  if (result.error) {
+    throw new Error(result.message || result.error);
+  }
 
-  // 5. paying users があればpaid_usersテーブルにUPSERT
+  const totalFetched = result.totalFetched || 0;
+  const totalSynced = _coinStreamState.totalSynced;
+  console.log(`[LS-BG] Earnings同期完了: 取得=${totalFetched}件, UPSERT=${totalSynced}件`);
+
+  if (totalFetched === 0) {
+    return { synced: 0, totalTokens: 0, fetched: 0 };
+  }
+
+  // 6. paying users があればpaid_usersテーブルにUPSERT
   let puSynced = 0;
   if (result.payingUsers && result.payingUsers.length > 0) {
     console.log(`[LS-BG] 有料ユーザー ${result.payingUsers.length}名のUPSERT開始`);
@@ -1983,11 +2046,12 @@ async function handleSyncEarnings(castName, fromDate) {
         };
       });
 
+    const BATCH = 500;
     for (let i = 0; i < puRows.length; i += BATCH) {
       const batch = puRows.slice(i, i + BATCH);
       try {
         const res = await fetch(
-          `${CONFIG.SUPABASE_URL}/rest/v1/paid_users`,
+          `${CONFIG.SUPABASE_URL}/rest/v1/paid_users?on_conflict=account_id,user_name`,
           {
             method: 'POST',
             headers: {
@@ -2012,7 +2076,7 @@ async function handleSyncEarnings(castName, fromDate) {
     console.log(`[LS-BG] 有料ユーザー同期完了: ${puSynced}/${puRows.length}名`);
   }
 
-  return { synced: totalSynced, totalTokens, fetched: transactions.length, pages: result.pages || 0, payingUsers: puSynced };
+  return { synced: totalSynced, totalTokens: 0, fetched: totalFetched, pages: result.pages || 0, payingUsers: puSynced };
 }
 
 // ============================================================
