@@ -80,6 +80,7 @@ interface FiveAxisData {
   diffFromPrevious: string;
   benchmark: string;
   dmActionLists: string;  // Group D: #11離脱予兆, #12初回課金後再訪率, #13復帰きっかけ
+  userBehavior: string;   // Group A: #1リテンション, #2来訪間隔, #3課金エスカレーション, #4課金タイプ変遷
 }
 
 const DEFAULT_PERSONA: CastPersona = {
@@ -345,6 +346,7 @@ ${additionalData ? `追加データ:\n${additionalData}` : ''}
 - 以下のユーザーリストは全員そのまま転記すること。1人も省略するな:
   「## 新規チッパー」「## 高額新規」「## リピーター」「## 復帰ユーザー」「## DM用ユーザー名リスト」
   「## #11 離脱予兆ユーザー」「## #12 初回課金後2回目来訪率」「## #13 復帰ユーザーの復帰きっかけ」
+  「## #1 セッション間リテンション」「## #2 来訪間隔パターン」「## #3 課金エスカレーション」「## #4 課金タイプ変遷」
 - [判定根拠] タグは判定ロジックの説明。
 - [注意] タグはデータ欠損や制限事項。
 - 上記以外の推測・分析を行う場合は必ず「推測:」「分析:」と明示すること。
@@ -369,6 +371,9 @@ ${fiveAxis?.benchmark || 'データなし'}
 ### 軸6: DM施策直結データ
 ${fiveAxis?.dmActionLists || 'データなし'}
 
+### 軸7: ユーザー行動パターン
+${fiveAxis?.userBehavior || 'データなし'}
+
 ## 分析指示
 - 事実データに基づく分析と、推測に基づく提案を明確に分けること
 - 「新規」の定義: このキャストへの初チップが今回セッション内の人。paid_usersテーブルの値ではない
@@ -376,7 +381,9 @@ ${fiveAxis?.dmActionLists || 'データなし'}
 - チャットデータがない場合、チャット関連の推測は「チャットデータ未収集のため推測不可」と明示すること
 - DMだけでなく、配信構成・ゴール設定・コミュニケーション施策も提案すること
 - 軸6のDM施策直結データは「## 📩 DM施策アクションリスト」セクションとしてレポート末尾にまとめること
-- 離脱予兆ユーザーには「また来てね」系DM、初回→未再訪には「初回ありがとう」系DM、復帰ユーザーには「おかえり」系DMを提案すること`;
+- 離脱予兆ユーザーには「また来てね」系DM、初回→未再訪には「初回ありがとう」系DM、復帰ユーザーには「おかえり」系DMを提案すること
+- 課金減少ユーザーにはフォローDM、課金増加ユーザーには感謝DMを提案すること
+- リテンション率と来訪頻度パターンから、配信スケジュールや集客施策の提案も含めること`;
     }
 
     default:
@@ -481,6 +488,10 @@ Markdownで出力してください。以下の構造を守ること:
   - 「## #11 離脱予兆ユーザー」— 全員のユーザー名・参加回数・累計tk
   - 「## #12 初回課金後2回目来訪率」— セッション別再訪率 + 未再訪ユーザーリスト全員
   - 「## #13 復帰ユーザーの復帰きっかけ」— 全員のユーザー名・日数・取引タイプ
+  - 「## #1 セッション間リテンション」— セッション別残存率
+  - 「## #2 来訪間隔パターン」— 頻度帯別ユーザーリスト
+  - 「## #3 課金エスカレーション」— 増加/減少/安定ユーザーリスト
+  - 「## #4 課金タイプ変遷」— タイプ変更ユーザー + 全体構成変化
 - 推測・解釈を書く場合は必ず「推測:」「分析:」と明示すること
 - 改善提案は「次の配信で」実行可能な具体策のみ
 - 抽象的な提案禁止（×「コミュニケーションを増やす」→ ○「配信開始10分以内にチャットで名前を3人呼ぶ」）
@@ -508,6 +519,7 @@ async function collect5AxisData(
     diffFromPrevious: 'データなし',
     benchmark: 'データなし',
     dmActionLists: 'データなし',
+    userBehavior: 'データなし',
   };
 
   try {
@@ -958,14 +970,17 @@ ${actionText}
     }
 
     // ================================================================
+    // セッション横断チッパーマップ（グループD・A共通）
+    // ================================================================
+    const sessionTipperMaps: Array<{ sessionIdx: number; start: string; end: string; tippers: Set<string> }> = [];
+
+    // ================================================================
     // グループD: DM施策直結データ
     // #11 離脱予兆ユーザーリスト
     // #12 初回課金後2回目来訪率
     // #13 復帰ユーザーの復帰きっかけ
     // ================================================================
     try {
-      // 全セッションのチッパーマップを構築（セッション単位で誰がいたか）
-      const sessionTipperMaps: Array<{ sessionIdx: number; start: string; end: string; tippers: Set<string> }> = [];
 
       // 最新セッション(index 0)は既にallTipperNamesで取得済み
       sessionTipperMaps.push({
@@ -1015,7 +1030,7 @@ ${actionText}
 
         // 3回以上出現 かつ 最新2セッション不在
         const churnRisk: Array<{ username: string; sessions: number; cumulativeTk: number; lastSeenIdx: number }> = [];
-        for (const [name, count] of attendanceCount.entries()) {
+        for (const [name, count] of Array.from(attendanceCount.entries())) {
           if (count >= 3 && !last2.has(name)) {
             // 最後に見たセッション（index小さい=新しい）
             let lastSeenIdx = recentN;
@@ -1172,6 +1187,273 @@ ${comebackDetailLines.join('\n')}
     } catch (groupDErr) {
       console.error('[5-Axis GroupD] Error:', groupDErr);
       result.dmActionLists = '[注意] グループDデータ収集でエラー発生';
+    }
+
+    // ================================================================
+    // グループA: ユーザー行動データ
+    // #1 セッション間リテンション
+    // #2 来訪間隔パターン
+    // #3 課金エスカレーション
+    // #4 課金タイプ変遷
+    // ================================================================
+    try {
+      const behaviorParts: string[] = [];
+
+      // sessionTipperMapsが未構築の場合のフォールバック（Group Dでエラーが起きた場合）
+      let sMaps = sessionTipperMaps;
+      if (!sMaps || sMaps.length === 0) {
+        // 最低限、最新セッションだけ
+        sMaps = [{ sessionIdx: 0, start: sessionStartISO, end: sessionEndISO, tippers: new Set(allTipperNames) }];
+      }
+
+      // ── #1 セッション間リテンション ──
+      // セッションN → セッションN-1 のチッパー残存率
+      if (sMaps.length >= 2) {
+        const retentionLines: string[] = [];
+        for (let i = sMaps.length - 1; i >= 1; i--) {
+          const older = sMaps[i];
+          const newer = sMaps[i - 1];
+          const olderArr = Array.from(older.tippers);
+          const retained = olderArr.filter(n => newer.tippers.has(n));
+          const rate = olderArr.length > 0 ? ((retained.length / olderArr.length) * 100).toFixed(0) : 'N/A';
+          retentionLines.push(
+            `- ${older.start.slice(0, 10)} → ${newer.start.slice(0, 10)}: ${olderArr.length}人 → ${retained.length}人残存 (${rate}%)`
+          );
+        }
+
+        // 平均リテンション率
+        let totalRates = 0;
+        let rateCount = 0;
+        for (let i = sMaps.length - 1; i >= 1; i--) {
+          const olderSize = sMaps[i].tippers.size;
+          if (olderSize > 0) {
+            const retainedN = Array.from(sMaps[i].tippers).filter(n => sMaps[i - 1].tippers.has(n)).length;
+            totalRates += retainedN / olderSize;
+            rateCount++;
+          }
+        }
+        const avgRetention = rateCount > 0 ? ((totalRates / rateCount) * 100).toFixed(0) : 'N/A';
+
+        behaviorParts.push(`## #1 セッション間リテンション
+[事実] 平均チッパー残存率: ${avgRetention}%
+${retentionLines.join('\n')}`);
+      }
+
+      // ── #2 来訪間隔パターン ──
+      // リピーターの来訪頻度（何セッションに1回来るか）
+      if (sMaps.length >= 3 && returningTippers.length > 0) {
+        // 各リピーターが何セッションに出現したかカウント
+        const visitorFreq = new Map<string, number>();
+        for (const sm of sMaps) {
+          for (const name of Array.from(sm.tippers)) {
+            if (!newTipperSet.has(name)) {
+              visitorFreq.set(name, (visitorFreq.get(name) || 0) + 1);
+            }
+          }
+        }
+
+        // 頻度帯別に分類
+        const freqBands: Record<string, string[]> = {
+          '毎回': [],       // sessions.length回
+          '常連': [],       // 50%以上
+          'たまに': [],     // 20-49%
+          'まれ': [],       // 1-19%
+        };
+
+        for (const [name, count] of Array.from(visitorFreq.entries())) {
+          const rate = count / sMaps.length;
+          if (count === sMaps.length) freqBands['毎回'].push(name);
+          else if (rate >= 0.5) freqBands['常連'].push(name);
+          else if (rate >= 0.2) freqBands['たまに'].push(name);
+          else freqBands['まれ'].push(name);
+        }
+
+        const freqLines = Object.entries(freqBands)
+          .filter(([, users]) => users.length > 0)
+          .map(([label, users]) => {
+            const userList = users.slice(0, 10).join(', ');
+            const more = users.length > 10 ? ` 他${users.length - 10}人` : '';
+            return `- ${label}(${users.length}人): ${userList}${more}`;
+          });
+
+        behaviorParts.push(`## #2 来訪間隔パターン（直近${sMaps.length}セッション）
+[事実] 来訪頻度帯:
+${freqLines.join('\n')}
+
+### DM用（毎回来る常連）
+\`\`\`
+${freqBands['毎回'].join('\n') || '(なし)'}
+\`\`\`
+
+### DM用（来訪減少=たまに+まれ）
+\`\`\`
+${[...freqBands['たまに'], ...freqBands['まれ']].join('\n') || '(なし)'}
+\`\`\``);
+      }
+
+      // ── #3 課金エスカレーション ──
+      // リピーターの課金額変化（増加/減少/安定）
+      if (sMaps.length >= 2 && returningTippers.length > 0) {
+        // 各セッションのチッパー別tk取得（最新2セッション比較）
+        const latestTippers = tipperMap; // 最新セッション（既に取得済み）
+
+        // 1つ前のセッションのチッパー別tk
+        const prevSession = sessions[1];
+        const { data: prevTxRows } = await sb
+          .from('coin_transactions')
+          .select('user_name, tokens')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .gte('date', prevSession.session_start as string)
+          .lte('date', prevSession.session_end as string)
+          .gt('tokens', 0);
+
+        const prevTipperMap = new Map<string, number>();
+        for (const row of prevTxRows || []) {
+          const name = row.user_name || '';
+          if (!name || name === 'anonymous') continue;
+          prevTipperMap.set(name, (prevTipperMap.get(name) || 0) + row.tokens);
+        }
+
+        // 両セッションに出現するリピーターの変化
+        const escalation: Array<{ username: string; prevTk: number; currTk: number; change: number; pct: string }> = [];
+        for (const [name, currData] of Array.from(latestTippers.entries())) {
+          const prevTk = prevTipperMap.get(name);
+          if (prevTk !== undefined) {
+            const change = currData.total - prevTk;
+            const pct = prevTk > 0 ? ((change / prevTk) * 100).toFixed(0) : 'NEW';
+            escalation.push({ username: name, prevTk, currTk: currData.total, change, pct });
+          }
+        }
+        escalation.sort((a, b) => b.change - a.change);
+
+        const increased = escalation.filter(e => e.change > 0);
+        const decreased = escalation.filter(e => e.change < 0);
+        const stable = escalation.filter(e => e.change === 0);
+
+        const escLines: string[] = [];
+        if (increased.length > 0) {
+          escLines.push(`### 課金増加（${increased.length}人）`);
+          escLines.push(...increased.map(e => `- ${e.username}: ${e.prevTk}tk → ${e.currTk}tk (+${e.change}tk, +${e.pct}%)`));
+        }
+        if (decreased.length > 0) {
+          escLines.push(`### 課金減少（${decreased.length}人）`);
+          escLines.push(...decreased.map(e => `- ${e.username}: ${e.prevTk}tk → ${e.currTk}tk (${e.change}tk, ${e.pct}%)`));
+        }
+        if (stable.length > 0) {
+          escLines.push(`### 課金安定（${stable.length}人）: ${stable.map(e => e.username).join(', ')}`);
+        }
+
+        const decreasedDmCopy = decreased.map(e => e.username).join('\n');
+        const increasedDmCopy = increased.map(e => e.username).join('\n');
+
+        behaviorParts.push(`## #3 課金エスカレーション（前回→今回）
+[事実] 継続チッパー${escalation.length}人中: 増加${increased.length}人 / 減少${decreased.length}人 / 安定${stable.length}人
+${escLines.join('\n')}
+
+### DM用（課金減少ユーザー=フォロー対象）
+\`\`\`
+${decreasedDmCopy || '(なし)'}
+\`\`\`
+
+### DM用（課金増加ユーザー=感謝DM対象）
+\`\`\`
+${increasedDmCopy || '(なし)'}
+\`\`\``);
+      }
+
+      // ── #4 課金タイプ変遷 ──
+      // リピーターの取引タイプが前回から変わったか
+      if (sMaps.length >= 2) {
+        const prevSession = sessions[1];
+        const { data: prevTypeTxRows } = await sb
+          .from('coin_transactions')
+          .select('user_name, type, tokens')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .gte('date', prevSession.session_start as string)
+          .lte('date', prevSession.session_end as string)
+          .gt('tokens', 0);
+
+        // 前回のユーザー別メイン取引タイプ
+        const prevUserTypes = new Map<string, Map<string, number>>();
+        for (const row of prevTypeTxRows || []) {
+          const name = row.user_name || '';
+          if (!name || name === 'anonymous') continue;
+          if (!prevUserTypes.has(name)) prevUserTypes.set(name, new Map());
+          const typeMap2 = prevUserTypes.get(name)!;
+          const t = ((row.type || 'unknown') as string).toLowerCase();
+          typeMap2.set(t, (typeMap2.get(t) || 0) + row.tokens);
+        }
+
+        // 今回のユーザー別メイン取引タイプ（allTxRowsから）
+        const currUserTypes = new Map<string, Map<string, number>>();
+        for (const row of allTxRows || []) {
+          const name = (row as { user_name: string }).user_name || '';
+          if (!name || name === 'anonymous') continue;
+          if (!currUserTypes.has(name)) currUserTypes.set(name, new Map());
+          const typeMap2 = currUserTypes.get(name)!;
+          const t = (((row as { type: string }).type || 'unknown') as string).toLowerCase();
+          typeMap2.set(t, (typeMap2.get(t) || 0) + (row as { tokens: number }).tokens);
+        }
+
+        // 両セッションに出現するユーザーの変遷
+        const typeChanges: Array<{ username: string; prevMain: string; currMain: string; changed: boolean }> = [];
+        for (const [name, currTypes] of Array.from(currUserTypes.entries())) {
+          const prevTypes = prevUserTypes.get(name);
+          if (!prevTypes) continue;
+
+          const getMain = (m: Map<string, number>) => {
+            let maxType = 'unknown';
+            let maxTk = 0;
+            for (const [t, tk] of Array.from(m.entries())) {
+              if (tk > maxTk) { maxTk = tk; maxType = t; }
+            }
+            return maxType;
+          };
+
+          const prevMain = getMain(prevTypes);
+          const currMain = getMain(currTypes);
+          typeChanges.push({ username: name, prevMain, currMain, changed: prevMain !== currMain });
+        }
+
+        const changed = typeChanges.filter(c => c.changed);
+        const unchanged = typeChanges.filter(c => !c.changed);
+
+        const changeLines = changed.map(c => `- ${c.username}: ${c.prevMain} → ${c.currMain}`);
+
+        // タイプ全体の変遷サマリー
+        const prevTypeTotal = new Map<string, number>();
+        const currTypeTotal = new Map<string, number>();
+        for (const [, types] of Array.from(prevUserTypes.entries())) {
+          for (const [t, tk] of Array.from(types.entries())) prevTypeTotal.set(t, (prevTypeTotal.get(t) || 0) + tk);
+        }
+        for (const [, types] of Array.from(currUserTypes.entries())) {
+          for (const [t, tk] of Array.from(types.entries())) currTypeTotal.set(t, (currTypeTotal.get(t) || 0) + tk);
+        }
+
+        const allTypes = new Set([...Array.from(prevTypeTotal.keys()), ...Array.from(currTypeTotal.keys())]);
+        const typeSummaryLines = Array.from(allTypes).map(t => {
+          const prev = prevTypeTotal.get(t) || 0;
+          const curr = currTypeTotal.get(t) || 0;
+          const diff = curr - prev;
+          return `- ${t}: ${prev}tk → ${curr}tk (${diff >= 0 ? '+' : ''}${diff}tk)`;
+        });
+
+        behaviorParts.push(`## #4 課金タイプ変遷（前回→今回）
+[事実] 継続ユーザー${typeChanges.length}人中: タイプ変更${changed.length}人 / 変更なし${unchanged.length}人
+${changed.length > 0 ? `\n### タイプ変更ユーザー\n${changeLines.join('\n')}` : ''}
+
+### 全体タイプ構成変化
+${typeSummaryLines.join('\n')}`);
+      }
+
+      if (behaviorParts.length > 0) {
+        result.userBehavior = behaviorParts.join('\n\n');
+      }
+    } catch (groupAErr) {
+      console.error('[5-Axis GroupA] Error:', groupAErr);
+      result.userBehavior = '[注意] グループAデータ収集でエラー発生';
     }
 
     return result;
