@@ -1911,7 +1911,12 @@ async function handleSyncEarnings(castName, fromDate) {
   }
 
   // 4. coin_transactions形式に変換してSupabase UPSERT
-  const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVqZ2Joa2xsZmVhY2JncGRianRvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MDk2NDk3NywiZXhwIjoyMDg2NTQwOTc3fQ.IxlG4X6zHi9h4pgh6vFpQKaJGKwQzLBL-2C4af90MZQ';
+  // Service Role Key は chrome.storage.local から取得（ソースコードにハードコードしない）
+  const storageData = await chrome.storage.local.get(['service_role_key']);
+  const SERVICE_ROLE_KEY = storageData.service_role_key;
+  if (!SERVICE_ROLE_KEY) {
+    throw new Error('Service Role Key が未設定です。Chrome拡張のポップアップ設定から入力してください');
+  }
 
   const rows = transactions.map(tx => ({
     account_id: accountId,
@@ -1956,12 +1961,58 @@ async function handleSyncEarnings(castName, fromDate) {
   const totalTokens = rows.reduce((s, r) => s + (r.tokens || 0), 0);
   console.log(`[LS-BG] Earnings同期完了: ${totalSynced}件, ${totalTokens}tk`);
 
-  // 5. paying users もあれば処理
+  // 5. paying users があればpaid_usersテーブルにUPSERT
+  let puSynced = 0;
   if (result.payingUsers && result.payingUsers.length > 0) {
-    console.log(`[LS-BG] 有料ユーザー ${result.payingUsers.length}名も取得済み`);
+    console.log(`[LS-BG] 有料ユーザー ${result.payingUsers.length}名のUPSERT開始`);
+
+    const now = new Date().toISOString();
+    const puRows = result.payingUsers
+      .filter(u => (u.username || u.userName) && u.userId)
+      .map(u => {
+        const userName = u.username || u.userName || '';
+        return {
+          account_id: accountId,
+          cast_name: castName,
+          user_name: userName,
+          total_coins: u.totalTokens || 0,
+          last_payment_date: u.lastPaid || null,
+          user_id_stripchat: String(u.userId),
+          profile_url: `https://stripchat.com/user/${userName}`,
+          updated_at: now,
+        };
+      });
+
+    for (let i = 0; i < puRows.length; i += BATCH) {
+      const batch = puRows.slice(i, i + BATCH);
+      try {
+        const res = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/paid_users`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': SERVICE_ROLE_KEY,
+              'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=merge-duplicates,return=minimal',
+            },
+            body: JSON.stringify(batch),
+          },
+        );
+        if (res.ok || res.status === 201) {
+          puSynced += batch.length;
+        } else {
+          const errBody = await res.text().catch(() => '');
+          console.warn('[LS-BG] paid_users UPSERT失敗:', res.status, errBody);
+        }
+      } catch (e) {
+        console.error('[LS-BG] paid_users UPSERT error:', e.message);
+      }
+    }
+    console.log(`[LS-BG] 有料ユーザー同期完了: ${puSynced}/${puRows.length}名`);
   }
 
-  return { synced: totalSynced, totalTokens, fetched: transactions.length, pages: result.pages || 0 };
+  return { synced: totalSynced, totalTokens, fetched: transactions.length, pages: result.pages || 0, payingUsers: puSynced };
 }
 
 // ============================================================

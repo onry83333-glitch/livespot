@@ -497,6 +497,45 @@ $('earningsSyncBtn').addEventListener('click', async () => {
   );
 });
 
+// --- Service Role Key ---
+$('saveServiceRoleKeyBtn').addEventListener('click', async () => {
+  const key = $('serviceRoleKeyInput').value.trim();
+  const resultEl = $('serviceRoleKeyResult');
+  if (!key) {
+    resultEl.textContent = 'キーを入力してください';
+    resultEl.style.color = '#f43f5e';
+    resultEl.classList.add('show');
+    return;
+  }
+  // 簡易バリデーション: JWTフォーマットかつservice_roleロールか確認
+  try {
+    const payload = JSON.parse(atob(key.split('.')[1]));
+    if (payload.role !== 'service_role') {
+      resultEl.textContent = 'これはService Role Keyではありません（role: ' + payload.role + '）';
+      resultEl.style.color = '#f43f5e';
+      resultEl.classList.add('show');
+      return;
+    }
+  } catch {
+    resultEl.textContent = '無効なキー形式です';
+    resultEl.style.color = '#f43f5e';
+    resultEl.classList.add('show');
+    return;
+  }
+  await chrome.storage.local.set({ service_role_key: key });
+  resultEl.textContent = 'Service Role Key を保存しました';
+  resultEl.style.color = '#22c55e';
+  resultEl.classList.add('show');
+  $('serviceRoleKeyInput').value = '';
+});
+
+// 起動時にService Role Keyの設定状態を表示
+chrome.storage.local.get(['service_role_key'], (data) => {
+  if (data.service_role_key) {
+    $('serviceRoleKeyInput').placeholder = '設定済み (変更する場合は新しいキーを入力)';
+  }
+});
+
 // --- Logout ---
 $('logoutLink').addEventListener('click', async (e) => {
   e.preventDefault();
