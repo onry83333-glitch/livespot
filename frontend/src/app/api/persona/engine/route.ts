@@ -79,6 +79,7 @@ interface FiveAxisData {
   chatTemperature: string;
   diffFromPrevious: string;
   benchmark: string;
+  dmActionLists: string;  // Group D: #11離脱予兆, #12初回課金後再訪率, #13復帰きっかけ
 }
 
 const DEFAULT_PERSONA: CastPersona = {
@@ -343,6 +344,7 @@ ${additionalData ? `追加データ:\n${additionalData}` : ''}
 - [事実] タグ付きの数値は検証済み。1文字も変更せずそのまま引用すること。独自に数え直すな。
 - 以下のユーザーリストは全員そのまま転記すること。1人も省略するな:
   「## 新規チッパー」「## 高額新規」「## リピーター」「## 復帰ユーザー」「## DM用ユーザー名リスト」
+  「## #11 離脱予兆ユーザー」「## #12 初回課金後2回目来訪率」「## #13 復帰ユーザーの復帰きっかけ」
 - [判定根拠] タグは判定ロジックの説明。
 - [注意] タグはデータ欠損や制限事項。
 - 上記以外の推測・分析を行う場合は必ず「推測:」「分析:」と明示すること。
@@ -364,12 +366,17 @@ ${fiveAxis?.diffFromPrevious || 'データなし'}
 ### 軸5: ベンチマーク
 ${fiveAxis?.benchmark || 'データなし'}
 
+### 軸6: DM施策直結データ
+${fiveAxis?.dmActionLists || 'データなし'}
+
 ## 分析指示
 - 事実データに基づく分析と、推測に基づく提案を明確に分けること
 - 「新規」の定義: このキャストへの初チップが今回セッション内の人。paid_usersテーブルの値ではない
 - チッパーの履歴情報（初回日・累計tk）がある場合、常連の貢献度や離脱リスクの分析に使うこと
 - チャットデータがない場合、チャット関連の推測は「チャットデータ未収集のため推測不可」と明示すること
-- DMだけでなく、配信構成・ゴール設定・コミュニケーション施策も提案すること`;
+- DMだけでなく、配信構成・ゴール設定・コミュニケーション施策も提案すること
+- 軸6のDM施策直結データは「## 📩 DM施策アクションリスト」セクションとしてレポート末尾にまとめること
+- 離脱予兆ユーザーには「また来てね」系DM、初回→未再訪には「初回ありがとう」系DM、復帰ユーザーには「おかえり」系DMを提案すること`;
     }
 
     default:
@@ -471,6 +478,9 @@ Markdownで出力してください。以下の構造を守ること:
   - 「## リピーター」— 全員のユーザー名・tk・回数・履歴
   - 「## 復帰ユーザー」— 全員のユーザー名・日数・tk
   - 「## DM用ユーザー名リスト」— コードブロック内のユーザー名リストをそのまま転記
+  - 「## #11 離脱予兆ユーザー」— 全員のユーザー名・参加回数・累計tk
+  - 「## #12 初回課金後2回目来訪率」— セッション別再訪率 + 未再訪ユーザーリスト全員
+  - 「## #13 復帰ユーザーの復帰きっかけ」— 全員のユーザー名・日数・取引タイプ
 - 推測・解釈を書く場合は必ず「推測:」「分析:」と明示すること
 - 改善提案は「次の配信で」実行可能な具体策のみ
 - 抽象的な提案禁止（×「コミュニケーションを増やす」→ ○「配信開始10分以内にチャットで名前を3人呼ぶ」）
@@ -497,6 +507,7 @@ async function collect5AxisData(
     chatTemperature: 'データなし',
     diffFromPrevious: 'データなし',
     benchmark: 'データなし',
+    dmActionLists: 'データなし',
   };
 
   try {
@@ -504,7 +515,7 @@ async function collect5AxisData(
     const { data: sessions } = await sb.rpc('get_coin_sessions', {
       p_account_id: accountId,
       p_cast_name: castName,
-      p_limit: 5,
+      p_limit: 10,
     });
 
     if (!sessions || sessions.length === 0) return result;
@@ -944,6 +955,223 @@ ${actionText}
 [事実] 今回 vs 平均: ${latestVsAvg}%
 [事実] 最高: ${Math.max(...allTokens)}tk
 [事実] 最低: ${Math.min(...allTokens)}tk`;
+    }
+
+    // ================================================================
+    // グループD: DM施策直結データ
+    // #11 離脱予兆ユーザーリスト
+    // #12 初回課金後2回目来訪率
+    // #13 復帰ユーザーの復帰きっかけ
+    // ================================================================
+    try {
+      // 全セッションのチッパーマップを構築（セッション単位で誰がいたか）
+      const sessionTipperMaps: Array<{ sessionIdx: number; start: string; end: string; tippers: Set<string> }> = [];
+
+      // 最新セッション(index 0)は既にallTipperNamesで取得済み
+      sessionTipperMaps.push({
+        sessionIdx: 0,
+        start: sessionStartISO,
+        end: sessionEndISO,
+        tippers: new Set(allTipperNames),
+      });
+
+      // 過去セッション(index 1〜)のチッパーを並列取得
+      const pastSessionFetches = sessions.slice(1).map(async (s: { session_start: string; session_end: string }, idx: number) => {
+        const { data: rows } = await sb
+          .from('coin_transactions')
+          .select('user_name')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .gte('date', s.session_start)
+          .lte('date', s.session_end)
+          .gt('tokens', 0)
+          .not('user_name', 'is', null)
+          .neq('user_name', 'anonymous');
+        const names = new Set((rows || []).map((r: { user_name: string }) => r.user_name).filter(Boolean));
+        return { sessionIdx: idx + 1, start: s.session_start, end: s.session_end, tippers: names };
+      });
+      const pastMaps = await Promise.all(pastSessionFetches);
+      sessionTipperMaps.push(...pastMaps);
+      sessionTipperMaps.sort((a, b) => a.sessionIdx - b.sessionIdx);
+
+      const dmParts: string[] = [];
+
+      // ── #11 離脱予兆ユーザーリスト ──
+      // 直近5セッション中3回以上来たが、最新2セッションに不在
+      if (sessionTipperMaps.length >= 3) {
+        const recentN = Math.min(sessionTipperMaps.length, 5);
+        const recentMaps = sessionTipperMaps.slice(0, recentN);
+        const last2 = new Set<string>();
+        Array.from(recentMaps[0].tippers).forEach(n => last2.add(n));
+        if (recentMaps[1]) Array.from(recentMaps[1].tippers).forEach(n => last2.add(n));
+
+        // 全ユニークユーザーの出現回数
+        const attendanceCount = new Map<string, number>();
+        for (const sm of recentMaps) {
+          for (const name of Array.from(sm.tippers)) {
+            attendanceCount.set(name, (attendanceCount.get(name) || 0) + 1);
+          }
+        }
+
+        // 3回以上出現 かつ 最新2セッション不在
+        const churnRisk: Array<{ username: string; sessions: number; cumulativeTk: number; lastSeenIdx: number }> = [];
+        for (const [name, count] of attendanceCount.entries()) {
+          if (count >= 3 && !last2.has(name)) {
+            // 最後に見たセッション（index小さい=新しい）
+            let lastSeenIdx = recentN;
+            for (let i = 0; i < recentMaps.length; i++) {
+              if (recentMaps[i].tippers.has(name)) { lastSeenIdx = i; break; }
+            }
+            // 累計tk取得（returningTippersから）
+            const hist = returningTippers.find(r => r.username === name);
+            churnRisk.push({
+              username: name,
+              sessions: count,
+              cumulativeTk: hist?.historyTokens || 0,
+              lastSeenIdx,
+            });
+          }
+        }
+        churnRisk.sort((a, b) => b.cumulativeTk - a.cumulativeTk);
+
+        const churnLines = churnRisk.map(u =>
+          `- ${u.username}: ${u.sessions}/${recentN}回参加, 累計${u.cumulativeTk}tk, 最終=${u.lastSeenIdx}セッション前`
+        );
+        const churnDmCopy = churnRisk.map(u => u.username).join('\n');
+
+        dmParts.push(`## #11 離脱予兆ユーザー（直近${recentN}セッション中3回以上来訪→最新2回不在: ${churnRisk.length}人）
+[判定根拠] 直近${recentN}セッションで3回以上チップしたが、最新2セッションに不在のユーザー
+${churnLines.length > 0 ? churnLines.join('\n') : '(該当なし)'}
+
+### DM用（離脱予兆）
+\`\`\`
+${churnDmCopy || '(なし)'}
+\`\`\``);
+      }
+
+      // ── #12 初回課金後2回目来訪率 ──
+      // 各セッションの新規チッパーが次セッションに戻ったか
+      if (sessionTipperMaps.length >= 2) {
+        const returnRateLines: string[] = [];
+        const allNonReturners: Array<{ username: string; sessionDate: string; tk: number }> = [];
+
+        // セッションN（古い方）の新規 → セッションN-1（新しい方）に来たか
+        for (let i = sessionTipperMaps.length - 1; i >= 1; i--) {
+          const olderSession = sessionTipperMaps[i];
+          const newerSession = sessionTipperMaps[i - 1];
+
+          // このセッションの新規=それより前のセッションに一度も出てない人
+          const priorTippers = new Set<string>();
+          for (let j = i + 1; j < sessionTipperMaps.length; j++) {
+            Array.from(sessionTipperMaps[j].tippers).forEach(n => priorTippers.add(n));
+          }
+          // さらにcoin_transactions全履歴で判定（セッション開始前にチップ有無）
+          const sessionNewTippers: string[] = [];
+          for (const name of Array.from(olderSession.tippers)) {
+            if (!priorTippers.has(name)) {
+              // 念のためこのセッション開始前に過去チップがあるか確認
+              const hist = returningTippers.find(r => r.username === name);
+              if (!hist) sessionNewTippers.push(name);
+            }
+          }
+
+          if (sessionNewTippers.length === 0) continue;
+
+          const returnedCount = sessionNewTippers.filter(n => newerSession.tippers.has(n)).length;
+          const rate = ((returnedCount / sessionNewTippers.length) * 100).toFixed(0);
+          const sessionDate = olderSession.start.slice(0, 10);
+          returnRateLines.push(`- ${sessionDate}: 新規${sessionNewTippers.length}人 → 次回来訪${returnedCount}人 (${rate}%)`);
+
+          // 戻ってこなかった人をDMリストに
+          for (const name of sessionNewTippers) {
+            if (!newerSession.tippers.has(name)) {
+              const tipData = tipperMap.get(name);
+              allNonReturners.push({ username: name, sessionDate, tk: tipData?.total || 0 });
+            }
+          }
+        }
+
+        const nonReturnerDmCopy = allNonReturners.map(u => u.username).join('\n');
+
+        dmParts.push(`## #12 初回課金後2回目来訪率
+[事実] セッション別の新規→次回来訪率:
+${returnRateLines.length > 0 ? returnRateLines.join('\n') : '(データ不足: 2セッション以上の新規追跡が必要)'}
+
+### 2回目来訪なしユーザー（${allNonReturners.length}人）— DM施策ターゲット
+${allNonReturners.length > 0 ? allNonReturners.map(u => `- ${u.username}: ${u.sessionDate}に${u.tk}tk → 次回不在`).join('\n') : '(なし)'}
+
+### DM用（初回課金→未再訪）
+\`\`\`
+${nonReturnerDmCopy || '(なし)'}
+\`\`\``);
+      }
+
+      // ── #13 復帰ユーザーの復帰きっかけ ──
+      // 30日以上ぶりの復帰ユーザーが、今回何で戻ったか（取引タイプ分析）
+      if (comebackUsers.length > 0) {
+        // 復帰ユーザーの今回セッション内取引タイプを取得
+        const comebackNames = comebackUsers.map(u => u.username);
+        const comebackTxDetails: Array<{
+          username: string; daysSince: number; types: Array<{ type: string; tokens: number; count: number }>;
+          firstTxType: string;
+        }> = [];
+
+        for (const cu of comebackUsers) {
+          // このユーザーのセッション内取引を抽出（allTxRowsから）
+          const userTxs = (allTxRows || []).filter(
+            (r: { user_name: string }) => r.user_name === cu.username
+          );
+          const txTypeMap = new Map<string, { tokens: number; count: number }>();
+          for (const tx of userTxs) {
+            const t = ((tx as { type: string }).type || 'unknown').toLowerCase();
+            const entry = txTypeMap.get(t) || { tokens: 0, count: 0 };
+            entry.tokens += (tx as { tokens: number }).tokens;
+            entry.count++;
+            txTypeMap.set(t, entry);
+          }
+          const types = Array.from(txTypeMap.entries())
+            .map(([type, data]) => ({ type, tokens: data.tokens, count: data.count }))
+            .sort((a, b) => b.tokens - a.tokens);
+
+          // 最初の取引タイプ（復帰のきっかけ）
+          const firstTxType = types.length > 0 ? types[0].type : 'unknown';
+
+          comebackTxDetails.push({
+            username: cu.username,
+            daysSince: cu.daysSince,
+            types,
+            firstTxType,
+          });
+        }
+
+        // きっかけ別集計
+        const triggerSummary = new Map<string, number>();
+        for (const d of comebackTxDetails) {
+          triggerSummary.set(d.firstTxType, (triggerSummary.get(d.firstTxType) || 0) + 1);
+        }
+        const triggerLines = Array.from(triggerSummary.entries())
+          .sort((a, b) => b[1] - a[1])
+          .map(([type, count]) => `${type}: ${count}人`);
+
+        const comebackDetailLines = comebackTxDetails.map(d => {
+          const typeStr = d.types.map(t => `${t.type}(${t.tokens}tk/${t.count}回)`).join(', ');
+          return `- ${d.username}: ${d.daysSince}日ぶり → ${typeStr}`;
+        });
+
+        dmParts.push(`## #13 復帰ユーザーの復帰きっかけ（30日以上ぶり: ${comebackUsers.length}人）
+[事実] 復帰きっかけ取引タイプ: ${triggerLines.join(', ')}
+
+${comebackDetailLines.join('\n')}
+
+[判定根拠] 最も金額が大きい取引タイプを「きっかけ」として判定（tip=投げ銭、ticketshow=チケット購入、photo=写真購入）`);
+      }
+
+      if (dmParts.length > 0) {
+        result.dmActionLists = dmParts.join('\n\n');
+      }
+    } catch (groupDErr) {
+      console.error('[5-Axis GroupD] Error:', groupDErr);
+      result.dmActionLists = '[注意] グループDデータ収集でエラー発生';
     }
 
     return result;
