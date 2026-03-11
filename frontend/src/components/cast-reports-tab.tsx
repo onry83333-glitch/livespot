@@ -9,6 +9,7 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, PieChart, Pie, Cell, Legend,
 } from 'recharts';
+import ReactMarkdown from 'react-markdown';
 
 /* ============================================================
    Types
@@ -143,6 +144,9 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiReport, setAiReport] = useState<Record<string, unknown> | null>(null);
+  const [fbReportMarkdown, setFbReportMarkdown] = useState<string | null>(null);
+  const [fbFeedbackSent, setFbFeedbackSent] = useState(false);
+  const [copySuccess, setCopySuccess] = useState(false);
 
   // データ取得
   const fetchRecords = useCallback(() => {
@@ -170,34 +174,27 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
 
   useEffect(() => { fetchRecords(); }, [fetchRecords]);
 
-  // AI総合分析レポート生成
+  // 配信FBレポート生成（エンジンAPI経由）
   const handleGenerateAiReport = useCallback(async () => {
     setAiGenerating(true);
     setAiError(null);
     setAiReport(null);
+    setFbReportMarkdown(null);
+    setFbFeedbackSent(false);
+    setCopySuccess(false);
     try {
       const sb = createClient();
-      // 最新セッションを取得
-      const { data: latestSession } = await sb
-        .from('sessions')
-        .select('session_id')
-        .eq('cast_name', castName)
-        .eq('account_id', accountId)
-        .order('started_at', { ascending: false })
-        .limit(1)
-        .single();
+      const { data: { session } } = await sb.auth.getSession();
+      const token = session?.access_token || '';
 
-      if (!latestSession) {
-        setAiError('分析対象のセッションがありません');
-        return;
-      }
-
-      const res = await fetch('/api/analysis/run-session-report', {
+      const res = await fetch('/api/analysis/run-fb-report', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
         body: JSON.stringify({
           cast_name: castName,
-          session_id: latestSession.session_id,
           account_id: accountId,
         }),
       });
@@ -208,8 +205,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         return;
       }
 
-      setAiReport(data.report);
-      // 生成後にレコードを再取得して一覧に反映
+      setFbReportMarkdown(data.report_markdown);
       fetchRecords();
     } catch {
       setAiError('通信エラーが発生しました');
@@ -217,6 +213,51 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       setAiGenerating(false);
     }
   }, [accountId, castName, fetchRecords]);
+
+  // レポートコピー
+  const handleCopyReport = useCallback(async () => {
+    if (!fbReportMarkdown) return;
+    try {
+      await navigator.clipboard.writeText(fbReportMarkdown);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    } catch {
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = fbReportMarkdown;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setCopySuccess(true);
+      setTimeout(() => setCopySuccess(false), 2000);
+    }
+  }, [fbReportMarkdown]);
+
+  // フィードバック送信
+  const handleFeedback = useCallback(async (positive: boolean) => {
+    if (!fbReportMarkdown || fbFeedbackSent) return;
+    try {
+      const sb = createClient();
+      const { data: { session } } = await sb.auth.getSession();
+      const token = session?.access_token || '';
+
+      await fetch('/api/analysis/run-fb-report', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          cast_name: castName,
+          account_id: accountId,
+          report_markdown: fbReportMarkdown,
+          score: positive ? 1 : -1,
+        }),
+      });
+      setFbFeedbackSent(true);
+    } catch { /* ignore */ }
+  }, [fbReportMarkdown, fbFeedbackSent, castName, accountId]);
 
   // レポート分類
   const latestBriefing = useMemo(() =>
@@ -260,10 +301,10 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
             disabled={aiGenerating}
             className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {aiGenerating ? 'AI分析中...' : 'AIで総合分析レポートを生成'}
+            {aiGenerating ? '4エージェント分析中...' : '配信FBレポートを生成'}
           </button>
           <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
-            最新セッションをSonnet 4で深層分析します
+            5軸データ × 4人格エージェントで配信を深層分析します
           </p>
           {aiError && (
             <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--accent-pink)' }}>
@@ -271,6 +312,13 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
             </p>
           )}
         </div>
+        {fbReportMarkdown && (
+          <div className="glass-card p-5">
+            <div className="prose prose-invert prose-sm max-w-none" style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+              <ReactMarkdown>{fbReportMarkdown}</ReactMarkdown>
+            </div>
+          </div>
+        )}
         {aiReport && <AiAnalysisCard report={aiReport} />}
       </div>
     );
@@ -288,17 +336,17 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         <InsightsCard insights={latestBriefing.insights_json} />
       )}
 
-      {/* ========== AI総合分析ボタン + 結果 ========== */}
+      {/* ========== 配信FBレポート生成ボタン + 結果 ========== */}
       <div className="glass-card p-4">
         <button
           onClick={handleGenerateAiReport}
           disabled={aiGenerating}
           className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {aiGenerating ? 'AI分析中...' : 'AIで総合分析レポートを生成'}
+          {aiGenerating ? '4エージェント分析中...' : '配信FBレポートを生成'}
         </button>
         <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
-          最新セッションをSonnet 4で深層分析します（売上構造・客層・改善提案）
+          5軸データ × 4人格エージェントで配信を深層分析します
         </p>
         {aiError && (
           <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--accent-pink)' }}>
@@ -307,7 +355,59 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         )}
       </div>
 
-      {/* 生成直後のAIレポート表示 */}
+      {/* 配信FBレポート（Markdown） */}
+      {fbReportMarkdown && (
+        <div className="glass-card p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-bold flex items-center gap-2">
+              配信FBレポート
+            </h3>
+            <div className="flex items-center gap-2">
+              {!fbFeedbackSent ? (
+                <>
+                  <button
+                    onClick={() => handleFeedback(true)}
+                    className="px-2 py-1 rounded-lg text-[11px] transition-colors hover:bg-white/10"
+                    style={{ border: '1px solid rgba(34,197,94,0.3)', color: 'var(--accent-green)' }}
+                    title="良いレポート"
+                  >
+                    Good
+                  </button>
+                  <button
+                    onClick={() => handleFeedback(false)}
+                    className="px-2 py-1 rounded-lg text-[11px] transition-colors hover:bg-white/10"
+                    style={{ border: '1px solid rgba(244,63,94,0.3)', color: 'var(--accent-pink)' }}
+                    title="改善が必要"
+                  >
+                    Bad
+                  </button>
+                </>
+              ) : (
+                <span className="text-[10px]" style={{ color: 'var(--accent-green)' }}>
+                  FB送信済み
+                </span>
+              )}
+              <button
+                onClick={handleCopyReport}
+                className="px-3 py-1 rounded-lg text-[11px] font-semibold transition-colors"
+                style={{
+                  background: copySuccess ? 'rgba(34,197,94,0.15)' : 'rgba(56,189,248,0.1)',
+                  border: `1px solid ${copySuccess ? 'rgba(34,197,94,0.3)' : 'rgba(56,189,248,0.2)'}`,
+                  color: copySuccess ? 'var(--accent-green)' : 'var(--accent-primary)',
+                }}
+              >
+                {copySuccess ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+          </div>
+          <div className="prose prose-invert prose-sm max-w-none fb-report-markdown"
+            style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: '13px' }}>
+            <ReactMarkdown>{fbReportMarkdown}</ReactMarkdown>
+          </div>
+        </div>
+      )}
+
+      {/* 生成直後のAIレポート表示（レガシー） */}
       {aiReport && (
         <AiAnalysisCard report={aiReport} />
       )}

@@ -17,7 +17,7 @@ const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || '').replace(/[\s\r\n
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-type EngineTaskType = 'dm' | 'x_post' | 'recruitment' | 'content';
+type EngineTaskType = 'dm' | 'x_post' | 'recruitment' | 'content' | 'fb_report';
 
 interface EngineRequest {
   task_type: EngineTaskType;
@@ -60,6 +60,25 @@ interface FeedbackRow {
   score: number;
   input_context: Record<string, unknown>;
   metadata: Record<string, unknown>;
+}
+
+interface AgentProfile {
+  agent_name: string;
+  agent_icon: string;
+  role_description: string;
+  personality_mbti: string | null;
+  personality_traits: string[];
+  thinking_style: string | null;
+  reference_framework: string | null;
+  output_format: string | null;
+}
+
+interface FiveAxisData {
+  tipperStructure: string;
+  tipTriggers: string;
+  chatTemperature: string;
+  diffFromPrevious: string;
+  benchmark: string;
 }
 
 const DEFAULT_PERSONA: CastPersona = {
@@ -201,7 +220,7 @@ function buildFeedbackContext(feedback: FeedbackRow[]): string {
 // ============================================================
 // Layer C — タスク固有ルール（統一エンジン版）
 // ============================================================
-const ENGINE_LAYER_C: Record<EngineTaskType, string> = {
+const ENGINE_LAYER_C: Record<string, string> = {
   dm: `=== DM生成ルール ===
 - 120文字以内。絶対に超えない。
 - ユーザー名を必ず1回入れる。
@@ -312,6 +331,33 @@ ${additionalData ? `追加データ:\n${additionalData}` : ''}
 上記の条件でコンテンツを生成してください。`;
     }
 
+    case 'fb_report': {
+      const fiveAxis = context.five_axis as FiveAxisData | undefined;
+      const castDisplayName = context.cast_display_name as string || context.cast_name as string || '';
+      return `# 配信FBレポート生成依頼
+
+キャスト名: ${castDisplayName}
+
+## 5軸データ
+
+### 軸1: チッパー構造
+${fiveAxis?.tipperStructure || 'データなし'}
+
+### 軸2: チップトリガー
+${fiveAxis?.tipTriggers || 'データなし'}
+
+### 軸3: チャット温度
+${fiveAxis?.chatTemperature || 'データなし'}
+
+### 軸4: 前回との差分
+${fiveAxis?.diffFromPrevious || 'データなし'}
+
+### 軸5: ベンチマーク
+${fiveAxis?.benchmark || 'データなし'}
+
+上記の5軸データに基づき、4エージェントチームとして配信FBレポートをMarkdownで生成してください。`;
+    }
+
     default:
       return JSON.stringify(context);
   }
@@ -362,6 +408,156 @@ async function callClaude(systemPrompt: string, userPrompt: string, maxTokens = 
 }
 
 // ============================================================
+// agent_profiles から動的 Layer C を構築（fb_report用）
+// ============================================================
+async function fetchAgentProfiles(token: string): Promise<AgentProfile[]> {
+  try {
+    const sb = getAuthClient(token);
+    const { data } = await sb
+      .from('agent_profiles')
+      .select('agent_name, agent_icon, role_description, personality_mbti, personality_traits, thinking_style, reference_framework, output_format')
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true });
+    return (data as AgentProfile[]) || [];
+  } catch {
+    return [];
+  }
+}
+
+function buildFbReportLayerC(agents: AgentProfile[]): string {
+  const agentInstructions = agents.map(a => {
+    const traits = a.personality_traits?.length ? a.personality_traits.join('・') : '';
+    return `### ${a.agent_icon} ${a.agent_name}${a.personality_mbti ? ` (${a.personality_mbti})` : ''}
+役割: ${a.role_description}
+${traits ? `特性: ${traits}` : ''}
+${a.thinking_style ? `思考法: ${a.thinking_style}` : ''}
+${a.reference_framework ? `参照フレーム: ${a.reference_framework}` : ''}
+${a.output_format ? `出力形式: ${a.output_format}` : ''}`;
+  }).join('\n\n');
+
+  return `=== 配信FBレポート生成ルール ===
+
+あなたは4人のエージェントチームです。1回のレスポンスで全員の視点を含むMarkdownレポートを生成してください。
+
+## エージェント定義
+${agentInstructions}
+
+## 出力フォーマット
+Markdownで出力してください。以下の構造を守ること:
+
+1. 冒頭に1行サマリー（配信の総合評価を1文で）
+2. 各エージェントのセクション（上記の出力形式ヘッダーを使用）
+3. 最後に「## 📋 次回配信アクションプラン」として具体的なアクション3つ
+
+## ルール
+- 数値データがあれば必ず引用する（「○○tkのうちXX%がTop3」等）
+- 改善提案は「次の配信で」実行可能な具体策のみ
+- 抽象的な提案禁止（×「コミュニケーションを増やす」→ ○「配信開始10分以内にチャットで名前を3人呼ぶ」）
+- 安藤式7原則・BYAF法に触れる場合は具体例付きで
+- JSON出力禁止。Markdownのみ。`;
+}
+
+// ============================================================
+// 5軸データ収集（fb_report用）
+// ============================================================
+async function collect5AxisData(
+  token: string,
+  castName: string,
+  accountId: string,
+  sessionData?: Record<string, unknown>,
+): Promise<FiveAxisData> {
+  const sb = getAuthClient(token);
+  const empty: FiveAxisData = {
+    tipperStructure: 'データなし',
+    tipTriggers: 'データなし',
+    chatTemperature: 'データなし',
+    diffFromPrevious: 'データなし',
+    benchmark: 'データなし',
+  };
+
+  try {
+    // 軸1: チッパー構造 — get_coin_sessions から最新セッション取得
+    const { data: sessions } = await sb.rpc('get_coin_sessions', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_limit: 5,
+    });
+
+    if (!sessions || sessions.length === 0) return empty;
+
+    const latest = sessions[0];
+    const topUsers = latest.top_users || [];
+    const totalTokens = latest.total_tokens || 0;
+
+    // チッパー集中度
+    const top3Tokens = topUsers.slice(0, 3).reduce((s: number, u: { total: number }) => s + u.total, 0);
+    const concentration = totalTokens > 0 ? ((top3Tokens / totalTokens) * 100).toFixed(1) : '0';
+    const tipperLines = topUsers.slice(0, 5).map((u: { username: string; total: number; count: number }, i: number) =>
+      `${i + 1}. ${u.username}: ${u.total}tk (${u.count}回)`
+    ).join('\n');
+
+    empty.tipperStructure = `合計: ${totalTokens}tk / ${latest.tx_count}件 / ${latest.duration_minutes}分
+Top3集中度: ${concentration}%
+${tipperLines}`;
+
+    // 軸2: チップトリガー（時間帯分析）
+    const sessionStart = new Date(latest.session_start);
+    const sessionEnd = new Date(latest.session_end);
+    const hour = sessionStart.getUTCHours() + 9; // JST
+    const jstHour = hour >= 24 ? hour - 24 : hour;
+    const speed = latest.duration_minutes > 0 ? (totalTokens / latest.duration_minutes).toFixed(1) : '0';
+    empty.tipTriggers = `配信時間帯: ${jstHour}時台
+配信時間: ${latest.duration_minutes}分
+チップ速度: ${speed} tk/分
+取引密度: ${latest.tx_count}件/${latest.duration_minutes}分 = ${(latest.tx_count / Math.max(latest.duration_minutes, 1) * 60).toFixed(1)}件/時`;
+
+    // 軸3: チャット温度（coin_transactionsの取引数 ≈ インタラクション密度）
+    const interactionRate = latest.tx_count / Math.max(latest.duration_minutes, 1);
+    const tempLabel = interactionRate > 1 ? '高温（活発）' : interactionRate > 0.3 ? '中温（普通）' : '低温（静か）';
+    empty.chatTemperature = `インタラクション密度: ${interactionRate.toFixed(2)}回/分 → ${tempLabel}
+ユニークチッパー: ${topUsers.length}人
+匿名チップ比率: 不明（coin_transactionsベース）`;
+
+    // 軸4: 前回との差分
+    if (sessions.length >= 2) {
+      const prev = sessions[1];
+      const prevTotal = prev.total_tokens || 0;
+      const diff = totalTokens - prevTotal;
+      const diffPct = prevTotal > 0 ? ((diff / prevTotal) * 100).toFixed(1) : 'N/A';
+      const prevTopUsers = prev.top_users || [];
+      const currentNames = new Set(topUsers.map((u: { username: string }) => u.username));
+      const prevNames = new Set(prevTopUsers.map((u: { username: string }) => u.username));
+      const returning = Array.from(currentNames).filter(n => prevNames.has(n as string));
+      const newUsers = Array.from(currentNames).filter(n => !prevNames.has(n as string));
+
+      empty.diffFromPrevious = `前回比: ${diff >= 0 ? '+' : ''}${diff}tk (${diffPct}%)
+前回: ${prevTotal}tk / ${prev.duration_minutes}分 / ${prev.tx_count}件
+リピーター: ${returning.length}人 (${returning.join(', ') || 'なし'})
+新規チッパー: ${newUsers.length}人 (${newUsers.join(', ') || 'なし'})`;
+    }
+
+    // 軸5: ベンチマーク（過去5セッション平均）
+    if (sessions.length >= 2) {
+      const allTokens = sessions.map((s: { total_tokens: number }) => s.total_tokens);
+      const allDurations = sessions.map((s: { duration_minutes: number }) => s.duration_minutes);
+      const avgTokens = Math.round(allTokens.reduce((a: number, b: number) => a + b, 0) / allTokens.length);
+      const avgDuration = Math.round(allDurations.reduce((a: number, b: number) => a + b, 0) / allDurations.length);
+      const latestVsAvg = avgTokens > 0 ? (((totalTokens - avgTokens) / avgTokens) * 100).toFixed(1) : 'N/A';
+
+      empty.benchmark = `過去${sessions.length}回平均: ${avgTokens}tk / ${avgDuration}分
+今回 vs 平均: ${latestVsAvg}%
+最高: ${Math.max(...allTokens)}tk
+最低: ${Math.min(...allTokens)}tk`;
+    }
+
+    return empty;
+  } catch (err) {
+    console.error('[5-Axis] Error collecting data:', err);
+    return empty;
+  }
+}
+
+// ============================================================
 // Layer A 選択
 // ============================================================
 function selectLayerA(taskType: EngineTaskType, personaBase: string | null): string {
@@ -380,9 +576,9 @@ export async function POST(req: NextRequest) {
   if (!task_type || !cast_name) {
     return NextResponse.json({ error: 'task_type と cast_name は必須です' }, { status: 400 });
   }
-  if (!ENGINE_LAYER_C[task_type]) {
+  if (!ENGINE_LAYER_C[task_type] && task_type !== 'fb_report') {
     return NextResponse.json(
-      { error: `未対応のtask_type: ${task_type}。対応: dm, x_post, recruitment, content` },
+      { error: `未対応のtask_type: ${task_type}。対応: dm, x_post, recruitment, content, fb_report` },
       { status: 400 },
     );
   }
@@ -426,15 +622,30 @@ export async function POST(req: NextRequest) {
       ? `\n=== キャスト分析ナレッジ（直近の配信データに基づく） ===\n${ragContext.summary}\n`
       : '';
 
+    // ── fb_report: 5軸データ収集 + agent_profiles から動的 Layer C ──
+    let fiveAxisData: FiveAxisData | undefined;
+    let dynamicLayerC = '';
+    if (task_type === 'fb_report') {
+      const effectiveAccountId = reqAccountId || (auth.accountIds?.[0]) || '';
+      fiveAxisData = await collect5AxisData(auth.token, cast_name, effectiveAccountId, context);
+      const agents = await fetchAgentProfiles(auth.token);
+      dynamicLayerC = agents.length > 0
+        ? buildFbReportLayerC(agents)
+        : '配信FBレポートを生成してください。Markdown形式で出力。';
+    }
+
     // ── Layer A 選択 ──
     const layerA = selectLayerA(task_type, activePersona.system_prompt_base);
 
-    // ── Layer B: recruitment はエージェンシーブランド、それ以外はキャスト人格 ──
+    // ── Layer B: タスク別分岐 ──
     const layerB = task_type === 'recruitment'
       ? `=== あなたの役割 ===\nライブ配信エージェンシーの採用マーケター。\n温かく、共感的で、押しつけがましくない。\n「この人なら相談できそう」と思わせるトーン。`
+      : task_type === 'fb_report'
+      ? `=== あなたの役割 ===\nライブ配信の配信FBレポートを生成する4人のエージェントチーム。\nキャスト「${activePersona.display_name || cast_name}」の配信データを分析し、具体的な改善策を提案する。`
       : buildLayerB(activePersona, detail);
 
     // ── System Prompt 組み立て: Layer A + B + RAG + Feedback + Context + C ──
+    const layerC = task_type === 'fb_report' ? dynamicLayerC : ENGINE_LAYER_C[task_type];
     const systemPrompt = [
       layerA,
       '',
@@ -446,17 +657,41 @@ export async function POST(req: NextRequest) {
         ? `=== 直近コンテキスト ===\n${activePersona.system_prompt_context}`
         : '',
       '',
-      ENGINE_LAYER_C[task_type],
+      layerC,
     ].filter(Boolean).join('\n');
 
-    // ── User Prompt ──
-    const userPrompt = buildUserPrompt(task_type, context || {});
+    // ── User Prompt（fb_report は5軸データをcontextに注入） ──
+    const effectiveContext = task_type === 'fb_report'
+      ? { ...context, five_axis: fiveAxisData, cast_name }
+      : context || {};
+    const userPrompt = buildUserPrompt(task_type, effectiveContext);
 
-    // ── API 呼び出し ──
-    const maxTokens = task_type === 'dm' ? 500 : 1000;
+    // ── API 呼び出し（fb_report は長い出力が必要） ──
+    const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 4000 : 1000;
     const result = await callClaude(systemPrompt, userPrompt, maxTokens);
 
-    // ── レスポンスパース ──
+    // ── レスポンス処理（fb_report はMarkdown、それ以外はJSON） ──
+    if (task_type === 'fb_report') {
+      return NextResponse.json({
+        output: result.text,
+        output_format: 'markdown',
+        confidence: 0.85,
+        cost_tokens: result.tokensUsed,
+        cost_usd: result.costUsd,
+        model: 'claude-sonnet-4-20250514',
+        task_type,
+        cast_name,
+        persona_used: activePersona.display_name || activePersona.cast_name,
+        persona_found: !!persona,
+        feedback_examples_used: topFeedback.length,
+        rag_data_points: ragContext.dataPoints,
+        rag_last_updated: ragContext.lastUpdated || null,
+        five_axis_collected: !!fiveAxisData,
+        agents_used: 4,
+      });
+    }
+
+    // ── レスポンスパース（JSON系タスク） ──
     let parsed: Record<string, unknown> | null = null;
     try {
       const jsonMatch = result.text.match(/\{[\s\S]*\}/);
@@ -464,7 +699,7 @@ export async function POST(req: NextRequest) {
     } catch { /* ignore */ }
 
     // ── confidence 算出 ──
-    const requiredFields: Record<EngineTaskType, string[]> = {
+    const requiredFields: Record<string, string[]> = {
       dm: ['message', 'reasoning'],
       x_post: ['post_text', 'mode'],
       recruitment: ['copy', 'step_breakdown'],
