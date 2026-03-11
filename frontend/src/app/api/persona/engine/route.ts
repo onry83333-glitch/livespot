@@ -338,12 +338,13 @@ ${additionalData ? `追加データ:\n${additionalData}` : ''}
 
 キャスト名: ${castDisplayName}
 
-## データソースについて
+## データソースについて（絶対遵守）
 以下のデータはエージェント1（データコレクター）がSQL + ルールベースで収集した構造化データです。
-- [事実] タグ付きの情報は検証済みの事実データです。数値を変えずにそのまま引用してください。
-- [判定根拠] タグは判定ロジックの説明です。
-- [注意] タグはデータ欠損や制限事項を示します。
-- 上記以外の推測・分析を行う場合は必ず「推測:」「分析:」と明示してください。
+- [事実] タグ付きの数値は検証済み。1文字も変更せずそのまま引用すること。独自に数え直すな。
+- 「## 新規チッパー」のユーザーリストは全員そのまま転記すること。省略するな。
+- [判定根拠] タグは判定ロジックの説明。
+- [注意] タグはデータ欠損や制限事項。
+- 上記以外の推測・分析を行う場合は必ず「推測:」「分析:」と明示すること。
 
 ## 5軸データ
 
@@ -461,8 +462,9 @@ Markdownで出力してください。以下の構造を守ること:
 2. 各エージェントのセクション（上記の出力形式ヘッダーを使用）
 3. 最後に「## 📋 次回配信アクションプラン」として具体的なアクション3つ
 
-## ルール
-- [事実] タグ付きデータは数値を変えずにそのまま引用すること
+## ルール（絶対遵守）
+- [事実] タグ付きデータの数値は1文字も変更するな。「新規20人」と書いてあるなら「新規20人」と出力しろ。独自に数え直すな。
+- 「## 新規チッパー」セクションのリストはそのまま全員転記しろ。省略するな。
 - 推測・解釈を書く場合は必ず「推測:」「分析:」と明示すること
 - 改善提案は「次の配信で」実行可能な具体策のみ
 - 抽象的な提案禁止（×「コミュニケーションを増やす」→ ○「配信開始10分以内にチャットで名前を3人呼ぶ」）
@@ -559,39 +561,90 @@ async function collect5AxisData(
 
     // ── 新規判定: coin_transactions全履歴ベース（paid_usersは使わない） ──
     // このキャストのcoin_transactionsにセッション開始前のレコードが1件もない = 新規
+    //
+    // 重要: 全履歴クエリは数千行超（例: Risa_06で5,884行）になり
+    // Supabaseのデフォルト1000行制限で切り捨てられて誤判定の原因になる。
+    // → ユーザー単位で limit(1) の存在チェック（最大49クエリ、各0-1行）
     let trueNewTippers: string[] = [];
     let returningTippers: Array<{ username: string; historyTxCount: number; historyTokens: number; firstTipDate: string }> = [];
 
     if (allTipperNames.length > 0) {
-      // 各チッパーの「このキャストでの全履歴」を取得（セッション開始前のみ）
-      const { data: historyRows } = await sb
-        .from('coin_transactions')
-        .select('user_name, tokens, date')
-        .eq('account_id', accountId)
-        .eq('cast_name', castName)
-        .lt('date', sessionStartISO)
-        .gt('tokens', 0)
-        .in('user_name', allTipperNames);
+      // Step1: 各チッパーについて、セッション開始前にチップ履歴が1件でもあるか確認
+      const existingNames = new Set<string>();
+      const existChecks = allTipperNames.map(async (name) => {
+        const { data } = await sb
+          .from('coin_transactions')
+          .select('user_name')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .eq('user_name', name)
+          .lt('date', sessionStartISO)
+          .gt('tokens', 0)
+          .limit(1);
+        if (data && data.length > 0) existingNames.add(name);
+      });
+      await Promise.all(existChecks);
 
-      // ユーザー別に履歴を集計
+      trueNewTippers = allTipperNames.filter(n => !existingNames.has(n));
+      const returningNames = allTipperNames.filter(n => existingNames.has(n));
+
+      // Step2: リピーターTop10の履歴サマリー（初回日・件数・累計tk）
+      // ランキング上位のリピーターだけ詳細を取得（クエリ数を抑制）
+      const returningByTk = returningNames
+        .map(n => ({ name: n, sessionTk: tipperMap.get(n)?.total || 0 }))
+        .sort((a, b) => b.sessionTk - a.sessionTk);
+      const top10Returners = returningByTk.slice(0, 10).map(r => r.name);
+
       const historyMap = new Map<string, { txCount: number; totalTokens: number; firstDate: string }>();
-      for (const row of historyRows || []) {
-        const name = row.user_name;
-        if (!name) continue;
-        const entry = historyMap.get(name) || { txCount: 0, totalTokens: 0, firstDate: row.date as string };
-        entry.txCount++;
-        entry.totalTokens += row.tokens;
-        if ((row.date as string) < entry.firstDate) entry.firstDate = row.date as string;
-        historyMap.set(name, entry);
-      }
+      const historyChecks = top10Returners.map(async (name) => {
+        // 最古のチップ日
+        const { data: oldest } = await sb
+          .from('coin_transactions')
+          .select('date')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .eq('user_name', name)
+          .gt('tokens', 0)
+          .order('date', { ascending: true })
+          .limit(1);
+        // 件数（head: trueでcount取得、行データは不要）
+        const { count } = await sb
+          .from('coin_transactions')
+          .select('id', { count: 'exact', head: true })
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .eq('user_name', name)
+          .gt('tokens', 0);
+        // 累計tk（1000行制限回避: count * avg ではなく、limitを十分に設定）
+        const { data: tkRows } = await sb
+          .from('coin_transactions')
+          .select('tokens')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .eq('user_name', name)
+          .gt('tokens', 0)
+          .limit(10000);
+        const totalTk = (tkRows || []).reduce((s, r) => s + (r.tokens || 0), 0);
 
-      trueNewTippers = allTipperNames.filter(n => !historyMap.has(n));
-      returningTippers = allTipperNames
-        .filter(n => historyMap.has(n))
-        .map(n => {
-          const h = historyMap.get(n)!;
-          return { username: n, historyTxCount: h.txCount, historyTokens: h.totalTokens, firstTipDate: h.firstDate };
-        });
+        if (oldest?.[0]?.date) {
+          historyMap.set(name, {
+            txCount: count || 0,
+            totalTokens: totalTk,
+            firstDate: oldest[0].date as string,
+          });
+        }
+      });
+      await Promise.all(historyChecks);
+
+      returningTippers = returningNames.map(n => {
+        const h = historyMap.get(n);
+        return {
+          username: n,
+          historyTxCount: h?.txCount || 0,
+          historyTokens: h?.totalTokens || 0,
+          firstTipDate: h?.firstDate || '',
+        };
+      });
     }
 
     // 新規/リピーター分離 + ランキング作成
@@ -917,6 +970,9 @@ export async function POST(req: NextRequest) {
     if (task_type === 'fb_report') {
       const effectiveAccountId = reqAccountId || (auth.accountIds?.[0]) || '';
       fiveAxisData = await collect5AxisData(auth.token, cast_name, effectiveAccountId, context);
+      // デバッグ: LLMに渡す前の5軸データを確認
+      console.log('[fb_report] 5-Axis tipperStructure:', fiveAxisData.tipperStructure?.slice(0, 500));
+      console.log('[fb_report] 5-Axis chatTemperature:', fiveAxisData.chatTemperature?.slice(0, 200));
       const agents = await fetchAgentProfiles(auth.token);
       dynamicLayerC = agents.length > 0
         ? buildFbReportLayerC(agents)
