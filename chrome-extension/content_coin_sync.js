@@ -30,8 +30,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'FETCH_COINS') {
     console.log(LOG, '名簿同期リクエスト受信');
 
-    // 全体タイムアウト（9分 — background側の10分より短く）
-    const OVERALL_TIMEOUT_MS = 9 * 60 * 1000;
+    // 全体タイムアウト（25分 — background側の30分より短く）
+    const OVERALL_TIMEOUT_MS = 25 * 60 * 1000;
     let responded = false;
 
     const safeRespond = (result) => {
@@ -49,7 +49,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       safeRespond({ error: 'timeout', message: '取得タイムアウト' });
     }, OVERALL_TIMEOUT_MS);
 
-    fetchCoinHistory(msg.options || {})
+    fetchCoinHistory({ ...msg.options, streaming: true })
       .then(result => {
         clearTimeout(timeoutId);
         safeRespond(result);
@@ -185,7 +185,7 @@ async function fetchCoinHistory(options = {}) {
       }
     }
 
-    if (result.ok && result.transactions.length > 0) {
+    if (result.ok && (result.totalFetched > 0 || result.transactions.length > 0)) {
       return result;
     }
     console.warn(LOG, 'Morning Hook API失敗またはデータなし → v2 earnings APIにフォールバック');
@@ -204,20 +204,17 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
   const limit = options.limit || 100;
   const MAX_RETRIES = 3;          // coin_api.py: _MAX_RETRIES = 3
   const RATE_LIMIT_SLEEP = 10000; // coin_api.py: _RATE_LIMIT_SLEEP = 10
-  const allTransactions = [];
+  const STREAM_BATCH = 500;       // background.jsに送るバッチサイズ
+  const streaming = !!options.streaming; // ストリーミングモード（sendResponseサイズ制限回避）
+  let totalFetched = 0;
+  let streamBuf = [];              // ストリーミング用バッファ
   let offset = 0;
   let page = 0;
   let retryCount = 0;
   let numberOfTransactions = null; // APIレスポンスの全件数
 
-  // 差分同期: sinceISOが指定されている場合、1日バッファ付きのカットオフ日を設定
+  // sinceISOは取得開始日としてAPIパラメータに使用（カットオフ打ち切りは行わない）
   const sinceISO = options.sinceISO || null;
-  const cutoffDate = sinceISO
-    ? new Date(new Date(sinceISO).getTime() - 24 * 60 * 60 * 1000)
-    : null;
-  if (cutoffDate) {
-    console.log(LOG, `差分同期モード: ${sinceISO} 以降（バッファ: ${cutoffDate.toISOString()}）`);
-  }
 
   // 365日分のデータを取得（coin_api.py: COIN_API_DAYS_BACK = 365）
   const now = new Date();
@@ -227,6 +224,18 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
   const untilISO = now.toISOString().replace(/\.\d{3}Z/, 'Z');
 
   console.log(LOG, `取得期間: ${from.toISOString().split('T')[0]} 〜 ${now.toISOString().split('T')[0]}（365日間）`);
+
+  // ストリーミング: バッファが溜まったらbackground.jsにCOIN_BATCHメッセージで送信
+  const flushStream = async () => {
+    if (!streaming || streamBuf.length === 0) return;
+    const batch = streamBuf.splice(0);
+    try {
+      await chrome.runtime.sendMessage({ type: 'COIN_BATCH', transactions: batch });
+      console.log(LOG, `[stream] ${batch.length}件をbackground.jsに送信（累計 ${totalFetched}件）`);
+    } catch (e) {
+      console.error(LOG, `[stream] COIN_BATCH送信失敗: ${e.message}`);
+    }
+  };
 
   while (page < maxPages) {
     page++;
@@ -255,8 +264,9 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
       if (!res.ok) {
         if (res.status === 401 || res.status === 403) {
           console.warn(LOG, `認証エラー（${res.status}）。Stripchatに再ログインしてください。`);
-          if (allTransactions.length > 0) {
-            return { ok: true, transactions: allTransactions, pages: page - 1, partial: true };
+          await flushStream();
+          if (totalFetched > 0) {
+            return { ok: true, transactions: [], totalFetched, pages: page - 1, partial: true, streamed: streaming };
           }
           return { error: 'auth_expired', message: 'Stripchatにログインしてください' };
         }
@@ -313,8 +323,14 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
       for (const tx of transactions) {
         const parsed = parseTransaction(tx);
         if (parsed) {
-          allTransactions.push(parsed);
+          totalFetched++;
           parsedCount++;
+          if (streaming) {
+            streamBuf.push(parsed);
+            if (streamBuf.length >= STREAM_BATCH) {
+              await flushStream();
+            }
+          }
         }
       }
 
@@ -322,17 +338,7 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
         console.log(LOG, `ページ ${page} パース結果: ${parsedCount}/${transactions.length}件成功`);
       }
 
-      console.log(LOG, `ページ ${page}: ${transactions.length}件取得（累計 ${allTransactions.length}件）`);
-
-      // 差分モード: カットオフ日より前のデータが出たら打ち切り
-      if (cutoffDate && transactions.length > 0) {
-        const lastTx = transactions[transactions.length - 1];
-        const lastDate = new Date(lastTx.date || lastTx.created_at || '');
-        if (lastDate < cutoffDate) {
-          console.log(LOG, `差分取得完了: 最終トランザクション ${lastDate.toISOString()} がカットオフ ${cutoffDate.toISOString()} より前`);
-          break;
-        }
-      }
+      console.log(LOG, `ページ ${page}: ${transactions.length}件取得（累計 ${totalFetched}件）`);
 
       if (transactions.length < limit) {
         console.log(LOG, '最終ページ到達 → 取得完了');
@@ -351,16 +357,21 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
     } catch (err) {
       console.error(LOG, `ネットワークエラー: ${err.message}`);
       console.log(LOG, '取得済み分を返します。');
-      if (allTransactions.length > 0) {
-        return { ok: true, transactions: allTransactions, pages: page - 1, partial: true };
+      await flushStream();
+      if (totalFetched > 0) {
+        return { ok: true, transactions: [], totalFetched, pages: page - 1, partial: true, streamed: streaming };
       }
       return { error: 'network_error', message: err.message };
     }
   }
 
+  // 残りのバッファをフラッシュ
+  await flushStream();
+
   const totalStr = numberOfTransactions !== null ? ` / 全 ${numberOfTransactions.toLocaleString()}件` : '';
-  console.log(LOG, `合計 ${allTransactions.length}件${totalStr} のトランザクションを取得`);
-  return { ok: true, transactions: allTransactions, pages: page, numberOfTransactions, modelUserId: userId };
+  console.log(LOG, `合計 ${totalFetched}件${totalStr} のトランザクションを取得`);
+  // ストリーミングモード: transactionsは空配列（既にCOIN_BATCHで送信済み）
+  return { ok: true, transactions: [], totalFetched, pages: page, numberOfTransactions, modelUserId: userId, streamed: streaming };
 }
 
 /**

@@ -95,6 +95,15 @@ interface CastKnowledgeRecord {
 /* ============================================================
    Props
    ============================================================ */
+interface CoinSession {
+  session_start: string;
+  session_end: string;
+  duration_minutes: number;
+  total_tokens: number;
+  tx_count: number;
+  top_users: { username: string; total: number; count: number }[];
+}
+
 interface CastReportsTabProps {
   accountId: string;
   castId: number;
@@ -129,6 +138,7 @@ const SEGMENT_LABELS: Record<string, string> = {
    ============================================================ */
 export default function CastReportsTab({ accountId, castId, castName }: CastReportsTabProps) {
   const [records, setRecords] = useState<CastKnowledgeRecord[]>([]);
+  const [coinSessions, setCoinSessions] = useState<CoinSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -137,6 +147,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
   // データ取得
   const fetchRecords = useCallback(() => {
     const sb = createClient();
+    // cast_knowledge（SPYベース）
     sb.from('cast_knowledge')
       .select('*')
       .eq('account_id', accountId)
@@ -147,7 +158,15 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         if (!error && data) setRecords(data as CastKnowledgeRecord[]);
         setLoading(false);
       });
-  }, [accountId, castId]);
+    // coin_transactionsベースのセッション集計
+    sb.rpc('get_coin_sessions', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_limit: 50,
+    }).then(({ data, error }) => {
+      if (!error && data) setCoinSessions(data as CoinSession[]);
+    });
+  }, [accountId, castId, castName]);
 
   useEffect(() => { fetchRecords(); }, [fetchRecords]);
 
@@ -304,9 +323,20 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         </Accordion>
       )}
 
-      {/* ========== 配信履歴 ========== */}
+      {/* ========== 売上ベース配信履歴（coin_transactions） ========== */}
+      {coinSessions.length > 0 && (
+        <Accordion id="cast-coin-sessions" title="売上履歴（コインベース）" icon="💰" badge={`${coinSessions.length}件`} defaultOpen>
+          <div className="space-y-3">
+            {coinSessions.map((s, i) => (
+              <CoinSessionCard key={i} session={s} />
+            ))}
+          </div>
+        </Accordion>
+      )}
+
+      {/* ========== 配信履歴（SPYベース） ========== */}
       {sessionReports.length > 0 && (
-        <Accordion id="cast-reports-sessions" title="配信レポート履歴" icon="📺" badge={`${sessionReports.length}件`} defaultOpen>
+        <Accordion id="cast-reports-sessions" title="配信レポート履歴（SPY）" icon="📺" badge={`${sessionReports.length}件`}>
           <div className="space-y-3">
             {sessionReports.map(r => (
               <SessionReportCard key={r.id} record={r} castName={castName} />
@@ -695,6 +725,101 @@ function AiAnalysisCard({ report, periodStart }: { report: Record<string, unknow
           <pre className="text-[10px] whitespace-pre-wrap break-words" style={{ color: 'var(--text-secondary)' }}>
             {report.raw}
           </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   CoinSessionCard（売上ベースセッション）
+   ============================================================ */
+function CoinSessionCard({ session }: { session: CoinSession }) {
+  const [expanded, setExpanded] = useState(false);
+  const startDate = new Date(session.session_start);
+  const dateStr = startDate.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', timeZone: 'Asia/Tokyo' });
+  const timeStr = startDate.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' });
+
+  return (
+    <div className="glass-card overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full p-4 text-left flex items-center gap-3 transition-colors hover:bg-white/[0.02]"
+      >
+        <span className="text-[10px] transition-transform duration-200"
+          style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', color: 'var(--accent-amber)' }}>
+          ▶
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>
+              {dateStr} {timeStr}
+            </span>
+            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+              {session.duration_minutes}分
+            </span>
+          </div>
+          <div className="flex items-center gap-3 mt-1 text-[10px]">
+            <span style={{ color: 'var(--accent-amber)' }}>
+              売上 <span className="font-bold">{formatTokens(session.total_tokens)}</span>
+            </span>
+            <span style={{ color: 'var(--accent-green)' }}>
+              <span className="font-bold">{tokensToJPY(session.total_tokens, COIN_RATE)}</span>
+            </span>
+            <span style={{ color: 'var(--text-muted)' }}>
+              取引 <span className="font-bold text-slate-300">{session.tx_count}</span>件
+            </span>
+          </div>
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t px-4 pb-4 pt-3 space-y-4" style={{ borderColor: 'var(--border-glass)' }}>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+            <MetricCard label="配信時間" value={session.duration_minutes} unit="分" />
+            <MetricCard label="売上" value={formatTokens(session.total_tokens)} color="var(--accent-amber)" />
+            <MetricCard label="円換算" value={tokensToJPY(session.total_tokens, COIN_RATE)} color="var(--accent-green)" />
+            <MetricCard label="取引数" value={session.tx_count} unit="件" />
+          </div>
+
+          {session.top_users && session.top_users.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
+                Top Tippers
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr style={{ color: 'var(--text-muted)' }}>
+                      <th className="text-left py-1.5 px-2">#</th>
+                      <th className="text-left py-1.5 px-2">ユーザー</th>
+                      <th className="text-right py-1.5 px-2">コイン</th>
+                      <th className="text-right py-1.5 px-2">回数</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {session.top_users.map((t, i) => (
+                      <tr key={t.username} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
+                        <td className="py-1.5 px-2" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
+                        <td className="py-1.5 px-2">
+                          <Link href={`/spy/users/${encodeURIComponent(t.username)}`}
+                            className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                            {t.username}
+                          </Link>
+                        </td>
+                        <td className="py-1.5 px-2 text-right font-bold" style={{ color: 'var(--accent-amber)' }}>
+                          {t.total.toLocaleString()}
+                        </td>
+                        <td className="py-1.5 px-2 text-right" style={{ color: 'var(--text-secondary)' }}>
+                          {t.count}回
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
