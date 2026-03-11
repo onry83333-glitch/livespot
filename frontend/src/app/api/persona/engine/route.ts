@@ -81,6 +81,8 @@ interface FiveAxisData {
   benchmark: string;
   dmActionLists: string;  // Group D: #11離脱予兆, #12初回課金後再訪率, #13復帰きっかけ
   userBehavior: string;   // Group A: #1リテンション, #2来訪間隔, #3課金エスカレーション, #4課金タイプ変遷
+  broadcastQuality: string; // Group B: #5新規獲得率推移, #6常連維持率, #7チップ速度カーブ, #8ticketshow最適化
+  realtimeMetrics: string;  // Group E: viewer_stats時系列, ゴール前後変化, ticketshow前後変化
 }
 
 const DEFAULT_PERSONA: CastPersona = {
@@ -347,6 +349,8 @@ ${additionalData ? `追加データ:\n${additionalData}` : ''}
   「## 新規チッパー」「## 高額新規」「## リピーター」「## 復帰ユーザー」「## DM用ユーザー名リスト」
   「## #11 離脱予兆ユーザー」「## #12 初回課金後2回目来訪率」「## #13 復帰ユーザーの復帰きっかけ」
   「## #1 セッション間リテンション」「## #2 来訪間隔パターン」「## #3 課金エスカレーション」「## #4 課金タイプ変遷」
+  「## #5 セッション別新規獲得率」「## #6 常連維持率」「## #7 チップ速度の時間カーブ」「## #8 ticketshow突入タイミング」
+  「## viewer_stats時系列」「## ticketshow前後」
 - [判定根拠] タグは判定ロジックの説明。
 - [注意] タグはデータ欠損や制限事項。
 - 上記以外の推測・分析を行う場合は必ず「推測:」「分析:」と明示すること。
@@ -374,6 +378,12 @@ ${fiveAxis?.dmActionLists || 'データなし'}
 ### 軸7: ユーザー行動パターン
 ${fiveAxis?.userBehavior || 'データなし'}
 
+### 軸8: 配信品質測定
+${fiveAxis?.broadcastQuality || 'データなし'}
+
+### 軸9: リアルタイム推移
+${fiveAxis?.realtimeMetrics || 'データなし'}
+
 ## 分析指示
 - 事実データに基づく分析と、推測に基づく提案を明確に分けること
 - 「新規」の定義: このキャストへの初チップが今回セッション内の人。paid_usersテーブルの値ではない
@@ -383,7 +393,10 @@ ${fiveAxis?.userBehavior || 'データなし'}
 - 軸6のDM施策直結データは「## 📩 DM施策アクションリスト」セクションとしてレポート末尾にまとめること
 - 離脱予兆ユーザーには「また来てね」系DM、初回→未再訪には「初回ありがとう」系DM、復帰ユーザーには「おかえり」系DMを提案すること
 - 課金減少ユーザーにはフォローDM、課金増加ユーザーには感謝DMを提案すること
-- リテンション率と来訪頻度パターンから、配信スケジュールや集客施策の提案も含めること`;
+- リテンション率と来訪頻度パターンから、配信スケジュールや集客施策の提案も含めること
+- チップ速度カーブから序盤・中盤・終盤の盛り上がり分析を行い、配信構成の改善提案をすること
+- ticketshowのCVRとタイミングから最適な突入タイミングを具体的に提案すること（「配信開始XX分後にYY人のコイン持ちが集まってから」等）
+- viewer_statsデータがない場合は「データ不足」と明示し、推測しないこと`;
     }
 
     default:
@@ -492,6 +505,11 @@ Markdownで出力してください。以下の構造を守ること:
   - 「## #2 来訪間隔パターン」— 頻度帯別ユーザーリスト
   - 「## #3 課金エスカレーション」— 増加/減少/安定ユーザーリスト
   - 「## #4 課金タイプ変遷」— タイプ変更ユーザー + 全体構成変化
+  - 「## #5 セッション別新規獲得率」— セッション別新規率推移
+  - 「## #6 常連維持率」— セッション間維持率推移
+  - 「## #7 チップ速度の時間カーブ」— 10分区間別tk推移
+  - 「## #8 ticketshow突入タイミング」— CVR・タイミング分析
+  - 「## viewer_stats時系列」「## ticketshow前後の視聴者変化」— データがある場合のみ
 - 推測・解釈を書く場合は必ず「推測:」「分析:」と明示すること
 - 改善提案は「次の配信で」実行可能な具体策のみ
 - 抽象的な提案禁止（×「コミュニケーションを増やす」→ ○「配信開始10分以内にチャットで名前を3人呼ぶ」）
@@ -520,6 +538,8 @@ async function collect5AxisData(
     benchmark: 'データなし',
     dmActionLists: 'データなし',
     userBehavior: 'データなし',
+    broadcastQuality: 'データなし',
+    realtimeMetrics: 'データなし',
   };
 
   try {
@@ -1456,6 +1476,359 @@ ${typeSummaryLines.join('\n')}`);
       result.userBehavior = '[注意] グループAデータ収集でエラー発生';
     }
 
+    // ================================================================
+    // グループB: 配信品質測定
+    // #5 セッション別新規獲得率の推移（直近10回）
+    // #6 セッション別常連維持率
+    // #7 チップ速度の時間カーブ比較
+    // #8 ticketshow突入タイミングの最適化
+    // ================================================================
+    try {
+      const qualityParts: string[] = [];
+
+      // ── #5 セッション別新規獲得率の推移 ──
+      // 各セッションで全チッパーのうち何%が新規だったか
+      if (sessionTipperMaps.length >= 2) {
+        // セッションごとの新規率を算出（古い順に処理）
+        const newRateBySession: Array<{ date: string; totalTippers: number; newCount: number; rate: string }> = [];
+
+        // 全セッションの累積チッパーリストを古い順に積み上げ
+        const cumulativeTippers = new Set<string>();
+        for (let i = sessionTipperMaps.length - 1; i >= 0; i--) {
+          const sm = sessionTipperMaps[i];
+          const sessionArr = Array.from(sm.tippers);
+          const newInSession = sessionArr.filter(n => !cumulativeTippers.has(n));
+          const rate = sessionArr.length > 0 ? ((newInSession.length / sessionArr.length) * 100).toFixed(0) : '0';
+          newRateBySession.push({
+            date: sm.start.slice(0, 10),
+            totalTippers: sessionArr.length,
+            newCount: newInSession.length,
+            rate,
+          });
+          // 累積に追加
+          sessionArr.forEach(n => cumulativeTippers.add(n));
+        }
+        // 新しい順に反転
+        newRateBySession.reverse();
+
+        const rateLines = newRateBySession.map(r =>
+          `- ${r.date}: ${r.totalTippers}人中${r.newCount}人新規 (${r.rate}%)`
+        );
+
+        // トレンド判定
+        const rates = newRateBySession.map(r => parseFloat(r.rate));
+        const firstHalf = rates.slice(0, Math.ceil(rates.length / 2));
+        const secondHalf = rates.slice(Math.ceil(rates.length / 2));
+        const avgFirst = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+        const avgSecond = secondHalf.reduce((a, b) => a + b, 0) / Math.max(secondHalf.length, 1);
+        const trend = avgSecond > avgFirst + 5 ? '上昇傾向（新規流入増）'
+          : avgSecond < avgFirst - 5 ? '下降傾向（固定客化）'
+          : '安定';
+
+        qualityParts.push(`## #5 セッション別新規獲得率の推移（直近${sessionTipperMaps.length}回）
+[事実] 新規獲得率トレンド: ${trend}
+[判定根拠] 累積ベース: そのキャストへの初チップがそのセッション内の人を「新規」と判定
+${rateLines.join('\n')}`);
+      }
+
+      // ── #6 セッション別常連維持率 ──
+      // 「前回セッションにいたチッパーが今回も来たか」のセッション別推移
+      if (sessionTipperMaps.length >= 2) {
+        const retLines: string[] = [];
+        for (let i = sessionTipperMaps.length - 1; i >= 1; i--) {
+          const older = sessionTipperMaps[i];
+          const newer = sessionTipperMaps[i - 1];
+          const olderArr = Array.from(older.tippers);
+          if (olderArr.length === 0) continue;
+          const retained = olderArr.filter(n => newer.tippers.has(n));
+          const lost = olderArr.filter(n => !newer.tippers.has(n));
+          const rate = ((retained.length / olderArr.length) * 100).toFixed(0);
+          retLines.push(`- ${older.start.slice(0, 10)} → ${newer.start.slice(0, 10)}: ${rate}% (${retained.length}/${olderArr.length}人継続, ${lost.length}人離脱)`);
+        }
+
+        qualityParts.push(`## #6 セッション別常連維持率（前回→今回の継続率）
+${retLines.join('\n')}`);
+      }
+
+      // ── #7 チップ速度の時間カーブ比較（直近5セッション） ──
+      // 各セッションを10分区間に分割し、区間別tkを算出
+      {
+        const curveN = Math.min(sessions.length, 5);
+        const curveLines: string[] = [];
+
+        for (let si = 0; si < curveN; si++) {
+          const sess = sessions[si];
+          const sStart = new Date(sess.session_start as string).getTime();
+          const sEnd = new Date(sess.session_end as string).getTime();
+          const durationMin = Math.max(sess.duration_minutes || 1, 1);
+
+          // セッション内取引を取得
+          const { data: curveTx } = await sb
+            .from('coin_transactions')
+            .select('tokens, date')
+            .eq('account_id', accountId)
+            .eq('cast_name', castName)
+            .gte('date', sess.session_start as string)
+            .lte('date', sess.session_end as string)
+            .gt('tokens', 0);
+
+          // 10分区間に分割
+          const INTERVAL_MS = 10 * 60 * 1000;
+          const bucketCount = Math.max(Math.ceil((sEnd - sStart) / INTERVAL_MS), 1);
+          const buckets = new Array(Math.min(bucketCount, 12)).fill(0); // max 12 buckets (120min)
+
+          for (const tx of curveTx || []) {
+            const txTime = new Date(tx.date as string).getTime();
+            const bucketIdx = Math.min(Math.floor((txTime - sStart) / INTERVAL_MS), buckets.length - 1);
+            if (bucketIdx >= 0) buckets[bucketIdx] += tx.tokens;
+          }
+
+          const bucketStr = buckets.map((tk, i) => `${i * 10}-${(i + 1) * 10}分:${tk}tk`).join(' | ');
+          const sessionDate = (sess.session_start as string).slice(0, 10);
+          curveLines.push(`- ${sessionDate} (${durationMin}分): ${bucketStr}`);
+        }
+
+        // ピーク区間の比較
+        qualityParts.push(`## #7 チップ速度の時間カーブ（10分区間, 直近${curveN}回）
+[判定根拠] 各セッションを10分区間に分割し、区間ごとのtk合計を算出
+${curveLines.join('\n')}
+
+[分析ヒント] 最初の10分でどれだけ稼げるかがセッション全体のtk量と相関。序盤が低い場合は開始直後のゴール設定やチャット盛り上げが課題`);
+      }
+
+      // ── #8 ticketshow突入タイミングの最適化 ──
+      // セッション内のticketshowトランザクションの時間帯と参加者数
+      {
+        const tsAnalysis: Array<{
+          date: string; minuteIn: number; tsTk: number; tsUsers: number;
+          totalSessionTk: number; tsRatio: string; totalTippers: number;
+        }> = [];
+
+        const tsN = Math.min(sessions.length, 10);
+        for (let si = 0; si < tsN; si++) {
+          const sess = sessions[si];
+          const sStart = new Date(sess.session_start as string).getTime();
+
+          // ticketshowトランザクションのみ取得
+          const { data: tsTx } = await sb
+            .from('coin_transactions')
+            .select('user_name, tokens, date')
+            .eq('account_id', accountId)
+            .eq('cast_name', castName)
+            .eq('type', 'ticketshow')
+            .gte('date', sess.session_start as string)
+            .lte('date', sess.session_end as string)
+            .gt('tokens', 0);
+
+          if (!tsTx || tsTx.length === 0) continue;
+
+          // ticketshow開始タイミング（最初のticketshowトランザクション）
+          const tsDates = tsTx.map(t => new Date(t.date as string).getTime()).sort((a, b) => a - b);
+          const tsStartTime = tsDates[0];
+          const minuteIn = Math.round((tsStartTime - sStart) / 60000);
+          const tsTk = tsTx.reduce((s, t) => s + (t.tokens || 0), 0);
+          const tsUserSet = new Set(tsTx.map(t => t.user_name).filter(Boolean));
+
+          // セッション全体のチッパー数
+          const totalTippers = sessionTipperMaps[si]?.tippers.size || 0;
+
+          tsAnalysis.push({
+            date: (sess.session_start as string).slice(0, 10),
+            minuteIn,
+            tsTk,
+            tsUsers: tsUserSet.size,
+            totalSessionTk: sess.total_tokens || 0,
+            tsRatio: sess.total_tokens > 0 ? ((tsTk / sess.total_tokens) * 100).toFixed(0) : '0',
+            totalTippers,
+          });
+        }
+
+        if (tsAnalysis.length > 0) {
+          const tsLines = tsAnalysis.map(t =>
+            `- ${t.date}: 開始${t.minuteIn}分後, ${t.tsUsers}人参加/${t.totalTippers}人中 (CVR ${t.totalTippers > 0 ? ((t.tsUsers / t.totalTippers) * 100).toFixed(0) : '0'}%), ${t.tsTk}tk (セッションの${t.tsRatio}%)`
+          );
+
+          // 最適タイミング分析: CVRが最も高かったセッション
+          const withCvr = tsAnalysis
+            .filter(t => t.totalTippers > 0)
+            .map(t => ({ ...t, cvr: t.tsUsers / t.totalTippers }));
+          withCvr.sort((a, b) => b.cvr - a.cvr);
+          const bestSession = withCvr[0];
+          const avgMinuteIn = Math.round(tsAnalysis.reduce((s, t) => s + t.minuteIn, 0) / tsAnalysis.length);
+
+          qualityParts.push(`## #8 ticketshow突入タイミングの最適化（直近${tsAnalysis.length}セッション）
+[事実] ticketshow実施セッション: ${tsAnalysis.length}回
+[事実] 平均突入タイミング: 配信開始${avgMinuteIn}分後
+${bestSession ? `[事実] 最高CVRセッション: ${bestSession.date} (開始${bestSession.minuteIn}分後, CVR ${(bestSession.cvr * 100).toFixed(0)}%, ${bestSession.tsTk}tk)` : ''}
+
+${tsLines.join('\n')}
+
+[分析ヒント] ticketshowはコイン持ちユーザーが十分集まってから突入すべき。早すぎると未課金ユーザーが多く低CVR`);
+        } else {
+          qualityParts.push(`## #8 ticketshow突入タイミング
+[注意] 直近${tsN}セッションにticketshowデータなし`);
+        }
+      }
+
+      if (qualityParts.length > 0) {
+        result.broadcastQuality = qualityParts.join('\n\n');
+      }
+    } catch (groupBErr) {
+      console.error('[5-Axis GroupB] Error:', groupBErr);
+      result.broadcastQuality = '[注意] グループBデータ収集でエラー発生';
+    }
+
+    // ================================================================
+    // グループE: リアルタイム推移（viewer_stats時系列）
+    // viewer_stats: total, coin_users, others, coin_holders の推移
+    // ゴール前後・ticketshow前後の視聴者変化
+    // ================================================================
+    try {
+      const rtParts: string[] = [];
+
+      // viewer_statsからこのキャストの最新セッション内データを取得
+      const { data: vsRows } = await sb
+        .from('viewer_stats')
+        .select('total, coin_users, others, coin_holders, ultimate_count, others_count, recorded_at')
+        .eq('cast_name', castName)
+        .gte('recorded_at', sessionStartISO)
+        .lte('recorded_at', sessionEndISO)
+        .order('recorded_at', { ascending: true });
+
+      if (vsRows && vsRows.length >= 2) {
+        // 時系列データあり
+        const vsLines = vsRows.map(r => {
+          const time = (r.recorded_at as string).slice(11, 19);
+          return `${time}: total=${r.total} coin_users=${r.coin_users} coin_holders=${r.coin_holders || 0} others=${r.others}`;
+        });
+
+        // ピーク・ボトム
+        const totals = vsRows.map(r => r.total as number);
+        const peakTotal = Math.max(...totals);
+        const bottomTotal = Math.min(...totals);
+        const coinPeak = Math.max(...vsRows.map(r => (r.coin_users as number) || 0));
+
+        rtParts.push(`## viewer_stats時系列（${vsRows.length}ポイント）
+[事実] ピーク視聴者: ${peakTotal}人 / ボトム: ${bottomTotal}人
+[事実] コインユーザーピーク: ${coinPeak}人
+
+--- 時系列データ ---
+${vsLines.join('\n')}`);
+
+        // ゴールイベントとの突合（spy_messagesからgoalイベントが取得済みなら）
+        // ticketshow突入タイミングとの突合
+        const { data: tsFirstTx } = await sb
+          .from('coin_transactions')
+          .select('date')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .eq('type', 'ticketshow')
+          .gte('date', sessionStartISO)
+          .lte('date', sessionEndISO)
+          .gt('tokens', 0)
+          .order('date', { ascending: true })
+          .limit(1);
+
+        if (tsFirstTx && tsFirstTx.length > 0) {
+          const tsTime = new Date(tsFirstTx[0].date as string).getTime();
+          // tsTime直前と直後のviewer_statsを見つける
+          let beforeVs = vsRows[0];
+          let afterVs = vsRows[vsRows.length - 1];
+          for (let i = 0; i < vsRows.length; i++) {
+            const vsTime = new Date(vsRows[i].recorded_at as string).getTime();
+            if (vsTime <= tsTime) beforeVs = vsRows[i];
+            if (vsTime > tsTime && i > 0) { afterVs = vsRows[i]; break; }
+          }
+
+          rtParts.push(`## ticketshow前後の視聴者変化
+[事実] ticketshow開始: ${(tsFirstTx[0].date as string).slice(11, 19)}
+[事実] 直前: total=${beforeVs.total} coin_users=${beforeVs.coin_users} coin_holders=${beforeVs.coin_holders || 0}
+[事実] 直後: total=${afterVs.total} coin_users=${afterVs.coin_users} coin_holders=${afterVs.coin_holders || 0}
+[判定根拠] ticketshow開始時刻の直前・直後のviewer_statsスナップショットを比較`);
+        }
+      } else {
+        // viewer_statsデータなし — 過去セッション全体を確認
+        const { data: allVs } = await sb
+          .from('viewer_stats')
+          .select('cast_name, recorded_at, total, coin_users')
+          .eq('cast_name', castName)
+          .order('recorded_at', { ascending: false })
+          .limit(5);
+
+        if (allVs && allVs.length > 0) {
+          const vsInfo = allVs.map(r => `${(r.recorded_at as string).slice(0, 16)}: total=${r.total} coin=${r.coin_users}`).join('\n');
+          rtParts.push(`## viewer_stats時系列
+[注意] 最新セッション内のviewer_statsデータなし（spy collector停止の可能性）
+[事実] 最新の利用可能データ:
+${vsInfo}`);
+        } else {
+          rtParts.push(`## viewer_stats時系列
+[注意] このキャストのviewer_statsデータなし。spy collectorが停止している可能性が高い。
+→ pm2でviewer_stats収集プロセスを再起動する必要あり`);
+        }
+
+        // viewer_statsなしでもcoin_transactionsからticketshowタイミング分析は可能
+        // セッション内の取引を時系列で分析し、ticketshow前後のチップ流入変化を算出
+        const { data: sessionTxTimeline } = await sb
+          .from('coin_transactions')
+          .select('user_name, tokens, type, date')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .gte('date', sessionStartISO)
+          .lte('date', sessionEndISO)
+          .gt('tokens', 0)
+          .order('date', { ascending: true });
+
+        if (sessionTxTimeline && sessionTxTimeline.length > 0) {
+          // ticketshow最初のトランザクション
+          const firstTs = sessionTxTimeline.find(t => ((t.type as string) || '').toLowerCase() === 'ticketshow');
+          if (firstTs) {
+            const tsTime = new Date(firstTs.date as string).getTime();
+            const sStart = new Date(sessionStartISO).getTime();
+
+            // ticketshow前後のチッパー数とtk比較
+            const beforeTs = sessionTxTimeline.filter(t => new Date(t.date as string).getTime() < tsTime);
+            const afterTs = sessionTxTimeline.filter(t => new Date(t.date as string).getTime() >= tsTime);
+
+            const beforeUsers = new Set(beforeTs.map(t => t.user_name).filter(Boolean));
+            const afterUsers = new Set(afterTs.map(t => t.user_name).filter(Boolean));
+            const beforeTk = beforeTs.reduce((s, t) => s + (t.tokens || 0), 0);
+            const afterTk = afterTs.reduce((s, t) => s + (t.tokens || 0), 0);
+            const tsMins = Math.round((tsTime - sStart) / 60000);
+
+            // ticketshow参加者でticketsshow前にtipしていた人
+            const tsParticipants = afterTs.filter(t => ((t.type as string) || '').toLowerCase() === 'ticketshow');
+            const tsUserNames = new Set(tsParticipants.map(t => t.user_name).filter(Boolean));
+            const preWarmedUsers = Array.from(tsUserNames).filter(n => beforeUsers.has(n as string));
+
+            rtParts.push(`## ticketshow前後のチップ流入分析（coin_transactionsベース）
+[事実] ticketshow突入: 配信開始${tsMins}分後
+[事実] ticketshow前: ${beforeUsers.size}人/${beforeTk}tk
+[事実] ticketshow後（含ts）: ${afterUsers.size}人/${afterTk}tk
+[事実] ticketshow参加者: ${tsUserNames.size}人（うち事前チップあり: ${preWarmedUsers.length}人）
+[判定根拠] ticketshow前にtipしていたユーザー=「温まっていたユーザー」として、ticketshow突入前のウォームアップ効果を測定
+
+### ticketshow参加者（DM用）
+\`\`\`
+${Array.from(tsUserNames).join('\n') || '(なし)'}
+\`\`\`
+
+### ticketshow前にチップ済み→ticketshow購入者（ウォームアップ成功）
+\`\`\`
+${preWarmedUsers.join('\n') || '(なし)'}
+\`\`\``);
+          }
+        }
+      }
+
+      if (rtParts.length > 0) {
+        result.realtimeMetrics = rtParts.join('\n\n');
+      }
+    } catch (groupEErr) {
+      console.error('[5-Axis GroupE] Error:', groupEErr);
+      result.realtimeMetrics = '[注意] グループEデータ収集でエラー発生';
+    }
+
     return result;
   } catch (err) {
     console.error('[5-Axis] Error collecting data:', err);
@@ -1576,7 +1949,7 @@ export async function POST(req: NextRequest) {
     const userPrompt = buildUserPrompt(task_type, effectiveContext);
 
     // ── API 呼び出し（fb_report は長い出力が必要） ──
-    const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 4000 : 1000;
+    const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 8000 : 1000;
     const result = await callClaude(systemPrompt, userPrompt, maxTokens);
 
     // ── レスポンス処理（fb_report はMarkdown、それ以外はJSON） ──
