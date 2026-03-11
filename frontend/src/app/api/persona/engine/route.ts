@@ -458,7 +458,9 @@ Markdownで出力してください。以下の構造を守ること:
 }
 
 // ============================================================
-// 5軸データ収集（fb_report用）
+// 5軸データ収集（fb_report用）— 改修版
+// 調査結果の検証済みSQL準拠
+// Fix1: 全チッパーデータ取得 + Fix2: 新規チッパー定義修正 + Fix3: next_actions突合
 // ============================================================
 async function collect5AxisData(
   token: string,
@@ -467,7 +469,7 @@ async function collect5AxisData(
   sessionData?: Record<string, unknown>,
 ): Promise<FiveAxisData> {
   const sb = getAuthClient(token);
-  const empty: FiveAxisData = {
+  const result: FiveAxisData = {
     tipperStructure: 'データなし',
     tipTriggers: 'データなし',
     chatTemperature: 'データなし',
@@ -476,67 +478,242 @@ async function collect5AxisData(
   };
 
   try {
-    // 軸1: チッパー構造 — get_coin_sessions から最新セッション取得
+    // ── セッション一覧取得（基本データソース） ──
     const { data: sessions } = await sb.rpc('get_coin_sessions', {
       p_account_id: accountId,
       p_cast_name: castName,
       p_limit: 5,
     });
 
-    if (!sessions || sessions.length === 0) return empty;
+    if (!sessions || sessions.length === 0) return result;
 
     const latest = sessions[0];
-    const topUsers = latest.top_users || [];
     const totalTokens = latest.total_tokens || 0;
+    const sessionStartISO = latest.session_start as string;
+    const sessionEndISO = latest.session_end as string;
 
-    // チッパー集中度
-    const top3Tokens = topUsers.slice(0, 3).reduce((s: number, u: { total: number }) => s + u.total, 0);
+    // ================================================================
+    // 軸1: チッパー構造（Fix1: 全チッパーデータ取得）
+    // 調査結果1a: get_coin_sessionsのtop5だけでなく全チッパーを取得
+    // ================================================================
+    const { data: allTipperRows } = await sb
+      .from('coin_transactions')
+      .select('user_name, tokens')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .gte('date', sessionStartISO)
+      .lte('date', sessionEndISO)
+      .gt('tokens', 0);
+
+    // クライアント側で集計（セッション内なので最大数百行）
+    const tipperMap = new Map<string, { total: number; count: number }>();
+    let anonymousTokens = 0;
+    let anonymousCount = 0;
+    for (const row of allTipperRows || []) {
+      const name = row.user_name || '';
+      if (!name || name === 'anonymous') {
+        anonymousTokens += row.tokens;
+        anonymousCount++;
+        continue;
+      }
+      const existing = tipperMap.get(name) || { total: 0, count: 0 };
+      existing.total += row.tokens;
+      existing.count++;
+      tipperMap.set(name, existing);
+    }
+
+    // ソートしてランキング作成
+    const allTippers = Array.from(tipperMap.entries())
+      .map(([name, data]) => ({ username: name, total: data.total, count: data.count }))
+      .sort((a, b) => b.total - a.total);
+
+    const uniqueTipperCount = allTippers.length;
+    const top3Tokens = allTippers.slice(0, 3).reduce((s, u) => s + u.total, 0);
     const concentration = totalTokens > 0 ? ((top3Tokens / totalTokens) * 100).toFixed(1) : '0';
-    const tipperLines = topUsers.slice(0, 5).map((u: { username: string; total: number; count: number }, i: number) =>
+
+    // Top10 + 残りサマリー
+    const topN = Math.min(10, allTippers.length);
+    const tipperLines = allTippers.slice(0, topN).map((u, i) =>
       `${i + 1}. ${u.username}: ${u.total}tk (${u.count}回)`
     ).join('\n');
+    const restCount = allTippers.length - topN;
+    const restTokens = allTippers.slice(topN).reduce((s, u) => s + u.total, 0);
 
-    empty.tipperStructure = `合計: ${totalTokens}tk / ${latest.tx_count}件 / ${latest.duration_minutes}分
+    // ── Fix2: 新規チッパー定義修正 ──
+    // 調査結果1b: paid_users.first_payment_dateを参照して真の新規を判定
+    const allTipperNames = allTippers.map(t => t.username);
+    let trueNewTippers: string[] = [];
+    let returningTippers: string[] = [];
+    if (allTipperNames.length > 0) {
+      const { data: existingPaidUsers } = await sb
+        .from('paid_users')
+        .select('user_name')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .lt('first_payment_date', sessionStartISO)
+        .in('user_name', allTipperNames);
+
+      const existingSet = new Set((existingPaidUsers || []).map(u => u.user_name));
+      trueNewTippers = allTipperNames.filter(n => !existingSet.has(n));
+      returningTippers = allTipperNames.filter(n => existingSet.has(n));
+    }
+
+    result.tipperStructure = `合計: ${totalTokens}tk / ${latest.tx_count}件 / ${latest.duration_minutes}分
+ユニークチッパー: ${uniqueTipperCount}人（匿名: ${anonymousCount}件/${anonymousTokens}tk）
 Top3集中度: ${concentration}%
-${tipperLines}`;
+真の新規チッパー: ${trueNewTippers.length}人${trueNewTippers.length > 0 ? ` (${trueNewTippers.slice(0, 5).join(', ')}${trueNewTippers.length > 5 ? '...' : ''})` : ''}
+リピーター: ${returningTippers.length}人
 
-    // 軸2: チップトリガー（時間帯分析）
-    const sessionStart = new Date(latest.session_start);
-    const sessionEnd = new Date(latest.session_end);
-    const hour = sessionStart.getUTCHours() + 9; // JST
+--- チッパーランキング（全${uniqueTipperCount}人）---
+${tipperLines}${restCount > 0 ? `\n（他${restCount}人: 合計${restTokens}tk）` : ''}`;
+
+    // ================================================================
+    // 軸2: チップトリガー（時間帯分析 + チップ種類別構成）
+    // 調査結果2d: coin_transactions.typeの実際の値
+    // ================================================================
+    const sessionStart = new Date(sessionStartISO);
+    const hour = sessionStart.getUTCHours() + 9;
     const jstHour = hour >= 24 ? hour - 24 : hour;
     const speed = latest.duration_minutes > 0 ? (totalTokens / latest.duration_minutes).toFixed(1) : '0';
-    empty.tipTriggers = `配信時間帯: ${jstHour}時台
+
+    // チップ種類別構成
+    const typeMap = new Map<string, { tokens: number; count: number }>();
+    for (const row of allTipperRows || []) {
+      // allTipperRowsにはtypeがないので別途取得
+    }
+    const { data: typedRows } = await sb
+      .from('coin_transactions')
+      .select('type, tokens')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .gte('date', sessionStartISO)
+      .lte('date', sessionEndISO)
+      .gt('tokens', 0);
+
+    for (const row of typedRows || []) {
+      const t = (row.type || 'unknown').toLowerCase();
+      const existing = typeMap.get(t) || { tokens: 0, count: 0 };
+      existing.tokens += row.tokens;
+      existing.count++;
+      typeMap.set(t, existing);
+    }
+    const typeBreakdown = Array.from(typeMap.entries())
+      .sort((a, b) => b[1].tokens - a[1].tokens)
+      .map(([type, data]) => {
+        const pct = totalTokens > 0 ? ((data.tokens / totalTokens) * 100).toFixed(1) : '0';
+        return `${type}: ${data.tokens}tk (${pct}%, ${data.count}件)`;
+      })
+      .join('\n');
+
+    result.tipTriggers = `配信時間帯: ${jstHour}時台
 配信時間: ${latest.duration_minutes}分
 チップ速度: ${speed} tk/分
-取引密度: ${latest.tx_count}件/${latest.duration_minutes}分 = ${(latest.tx_count / Math.max(latest.duration_minutes, 1) * 60).toFixed(1)}件/時`;
+取引密度: ${(latest.tx_count / Math.max(latest.duration_minutes, 1) * 60).toFixed(1)}件/時
 
-    // 軸3: チャット温度（coin_transactionsの取引数 ≈ インタラクション密度）
+--- チップ種類別構成 ---
+${typeBreakdown}`;
+
+    // ================================================================
+    // 軸3: チャット温度
+    // 調査結果2b: chat_logsから分単位のメッセージ頻度
+    // ================================================================
+    const { data: chatRows } = await sb
+      .from('chat_logs')
+      .select('username, timestamp')
+      .eq('cast_name', castName)
+      .gte('timestamp', sessionStartISO)
+      .lte('timestamp', sessionEndISO);
+
+    const chatCount = chatRows?.length || 0;
+    const uniqueChatters = new Set((chatRows || []).map(r => r.username)).size;
+    const chatSpeed = latest.duration_minutes > 0 ? (chatCount / latest.duration_minutes).toFixed(1) : '0';
+
+    // チップしたユーザーとチャットのみのユーザーを分離
+    const tipperNameSet = new Set(allTipperNames);
+    const chatOnlyUsers = new Set<string>();
+    for (const row of chatRows || []) {
+      if (row.username && !tipperNameSet.has(row.username)) {
+        chatOnlyUsers.add(row.username);
+      }
+    }
+
     const interactionRate = latest.tx_count / Math.max(latest.duration_minutes, 1);
     const tempLabel = interactionRate > 1 ? '高温（活発）' : interactionRate > 0.3 ? '中温（普通）' : '低温（静か）';
-    empty.chatTemperature = `インタラクション密度: ${interactionRate.toFixed(2)}回/分 → ${tempLabel}
-ユニークチッパー: ${topUsers.length}人
-匿名チップ比率: 不明（coin_transactionsベース）`;
 
-    // 軸4: 前回との差分
+    result.chatTemperature = `チャット温度: ${tempLabel}
+チャットメッセージ数: ${chatCount}件 (${chatSpeed}msg/分)
+ユニークチャット参加者: ${uniqueChatters}人
+チップインタラクション密度: ${interactionRate.toFixed(2)}回/分
+チャットのみ（未課金）ユーザー: ${chatOnlyUsers.size}人${chatOnlyUsers.size > 0 ? ` → DM施策ターゲット候補` : ''}`;
+
+    // ================================================================
+    // 軸4: 前回との差分 + フィードバックループ（Fix3: next_actions突合）
+    // 調査結果1c: cast_knowledgeから前回のfb_reportを取得
+    // ================================================================
     if (sessions.length >= 2) {
       const prev = sessions[1];
       const prevTotal = prev.total_tokens || 0;
       const diff = totalTokens - prevTotal;
       const diffPct = prevTotal > 0 ? ((diff / prevTotal) * 100).toFixed(1) : 'N/A';
-      const prevTopUsers = prev.top_users || [];
-      const currentNames = new Set(topUsers.map((u: { username: string }) => u.username));
-      const prevNames = new Set(prevTopUsers.map((u: { username: string }) => u.username));
-      const returning = Array.from(currentNames).filter(n => prevNames.has(n as string));
-      const newUsers = Array.from(currentNames).filter(n => !prevNames.has(n as string));
 
-      empty.diffFromPrevious = `前回比: ${diff >= 0 ? '+' : ''}${diff}tk (${diffPct}%)
+      // 前回セッションの全チッパーとの比較（Fix2適用: 全チッパーベース）
+      const { data: prevTipperRows } = await sb
+        .from('coin_transactions')
+        .select('user_name')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .gte('date', prev.session_start as string)
+        .lte('date', prev.session_end as string)
+        .gt('tokens', 0)
+        .not('user_name', 'is', null)
+        .neq('user_name', '')
+        .neq('user_name', 'anonymous');
+
+      const prevAllNames = new Set((prevTipperRows || []).map(r => r.user_name));
+      const currentAllNames = new Set(allTipperNames);
+      const returningFromPrev = Array.from(currentAllNames).filter(n => prevAllNames.has(n as string));
+      const newFromPrev = Array.from(currentAllNames).filter(n => !prevAllNames.has(n as string));
+      const lostFromPrev = Array.from(prevAllNames).filter(n => !currentAllNames.has(n as string));
+
+      let diffText = `前回比: ${diff >= 0 ? '+' : ''}${diff}tk (${diffPct}%)
 前回: ${prevTotal}tk / ${prev.duration_minutes}分 / ${prev.tx_count}件
-リピーター: ${returning.length}人 (${returning.join(', ') || 'なし'})
-新規チッパー: ${newUsers.length}人 (${newUsers.join(', ') || 'なし'})`;
+継続チッパー: ${returningFromPrev.length}人
+前回→今回の新規: ${newFromPrev.length}人${newFromPrev.length > 0 ? ` (${newFromPrev.slice(0, 5).join(', ')}${newFromPrev.length > 5 ? '...' : ''})` : ''}
+前回→今回の離脱: ${lostFromPrev.length}人${lostFromPrev.length > 0 ? ` (${(lostFromPrev as string[]).slice(0, 5).join(', ')}${lostFromPrev.length > 5 ? '...' : ''})` : ''}`;
+
+      // ── Fix3: 前回レポートのnext_actionsを取得して突合 ──
+      try {
+        const { data: prevReportRow } = await sb
+          .from('cast_knowledge')
+          .select('metrics_json')
+          .eq('account_id', accountId)
+          .eq('report_type', 'session_report')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (prevReportRow?.metrics_json) {
+          const reportMd = (prevReportRow.metrics_json as Record<string, unknown>).report_markdown as string || '';
+          if (reportMd) {
+            // 「次回配信アクションプラン」セクションを抽出
+            const actionMatch = reportMd.match(/##\s*📋\s*次回配信アクションプラン[\s\S]*$/i)
+              || reportMd.match(/##\s*次回.*アクション[\s\S]*$/i);
+            if (actionMatch) {
+              const actionText = actionMatch[0].slice(0, 500);
+              diffText += `\n\n--- 前回レポートの次回アクションプラン ---
+${actionText}
+→ 上記の提案が今回の数字にどう影響したか分析すること`;
+            }
+          }
+        }
+      } catch { /* 前回レポートがない場合は無視 */ }
+
+      result.diffFromPrevious = diffText;
     }
 
+    // ================================================================
     // 軸5: ベンチマーク（過去5セッション平均）
+    // ================================================================
     if (sessions.length >= 2) {
       const allTokens = sessions.map((s: { total_tokens: number }) => s.total_tokens);
       const allDurations = sessions.map((s: { duration_minutes: number }) => s.duration_minutes);
@@ -544,16 +721,16 @@ ${tipperLines}`;
       const avgDuration = Math.round(allDurations.reduce((a: number, b: number) => a + b, 0) / allDurations.length);
       const latestVsAvg = avgTokens > 0 ? (((totalTokens - avgTokens) / avgTokens) * 100).toFixed(1) : 'N/A';
 
-      empty.benchmark = `過去${sessions.length}回平均: ${avgTokens}tk / ${avgDuration}分
+      result.benchmark = `過去${sessions.length}回平均: ${avgTokens}tk / ${avgDuration}分
 今回 vs 平均: ${latestVsAvg}%
 最高: ${Math.max(...allTokens)}tk
 最低: ${Math.min(...allTokens)}tk`;
     }
 
-    return empty;
+    return result;
   } catch (err) {
     console.error('[5-Axis] Error collecting data:', err);
-    return empty;
+    return result;
   }
 }
 

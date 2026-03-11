@@ -29,25 +29,34 @@ export default function SpyCastDetailPage() {
   const [castInfo, setCastInfo] = useState<SpyCast | null>(null);
   const [accountId, setAccountId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) return;
     const supabase = createClient();
-    supabase.from('accounts').select('id').limit(1).single().then(async ({ data }) => {
-      if (!data) { setLoading(false); return; }
-      setAccountId(data.id);
+    (async () => {
+      try {
+        const { data } = await supabase.from('accounts').select('id').limit(1).single();
+        if (!data) { setLoading(false); return; }
+        setAccountId(data.id);
 
-      const { data: cast } = await supabase
-        .from('spy_casts')
-        .select('*')
-        .eq('account_id', data.id)
-        .eq('cast_name', castName)
-        .limit(1)
-        .maybeSingle();
+        const { data: cast, error } = await supabase
+          .from('spy_casts')
+          .select('*')
+          .eq('account_id', data.id)
+          .eq('cast_name', castName)
+          .limit(1)
+          .maybeSingle();
 
-      if (cast) setCastInfo(cast as SpyCast);
-      setLoading(false);
-    });
+        if (error) console.warn('[SpyCastDetail] spy_casts fetch error:', error.message);
+        if (cast) setCastInfo(cast as SpyCast);
+        setLoading(false);
+      } catch (err) {
+        console.error('[SpyCastDetail] failed to load cast info:', err);
+        setLoadError('データの読み込みに失敗しました');
+        setLoading(false);
+      }
+    })();
   }, [user, castName]);
 
   // Update tab from URL changes
@@ -64,6 +73,19 @@ export default function SpyCastDetailPage() {
       <div className="h-[calc(100vh-48px)] flex items-center justify-center">
         <div className="glass-card p-8 text-center">
           <p className="text-sm" style={{ color: 'var(--text-muted)' }}>読み込み中...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="h-[calc(100vh-48px)] flex items-center justify-center">
+        <div className="glass-card p-8 text-center">
+          <p className="text-2xl mb-3">⚠️</p>
+          <p className="text-sm font-bold mb-2">エラー</p>
+          <p className="text-[11px] mb-4" style={{ color: 'var(--text-muted)' }}>{loadError}</p>
+          <Link href="/spy" className="btn-ghost text-[11px] py-1.5 px-4">← SPY一覧に戻る</Link>
         </div>
       </div>
     );
@@ -137,7 +159,7 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
     supabase.rpc('get_spy_cast_stats', { p_account_id: accountId, p_cast_names: [castName] })
       .then(({ data }) => {
         if (data && data.length > 0) setStats(data[0]);
-      });
+      }, (err) => console.warn('[OverviewTab] get_spy_cast_stats error:', err.message));
 
     // Top tippers from chat_logs
     supabase.from('chat_logs')
@@ -157,7 +179,8 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
           const sorted = Array.from(tipMap.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([user_name, total_tokens]) => ({ user_name, total_tokens }));
           setTopTippers(sorted);
         }
-      });
+      })
+      .then(null, (err) => console.warn('[OverviewTab] top tippers error:', err.message));
 
     // Recent messages
     supabase.from('chat_logs')
@@ -168,7 +191,8 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
       .limit(20)
       .then(({ data }) => {
         if (data) setRecentMessages(data.map(mapChatLog).reverse() as SpyMessage[]);
-      });
+      })
+      .then(null, (err) => console.warn('[OverviewTab] recent messages error:', err.message));
 
     // Load cast type if assigned
     if (castInfo?.cast_type_id) {
@@ -177,7 +201,8 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
         .eq('id', castInfo.cast_type_id)
         .limit(1)
         .maybeSingle()
-        .then(({ data }) => { if (data) setCastType(data); });
+        .then(({ data }) => { if (data) setCastType(data); })
+        .then(null, (err) => console.warn('[OverviewTab] cast type error:', err.message));
     }
 
     // Load all available types for assignment dropdown
@@ -185,7 +210,8 @@ function OverviewTab({ castName, accountId, castInfo }: { castName: string; acco
       .select('id, type_name, benchmark_cast, product_route')
       .eq('account_id', accountId)
       .eq('is_active', true)
-      .then(({ data }) => { if (data) setAllTypes(data); });
+      .then(({ data }) => { if (data) setAllTypes(data); })
+      .then(null, (err) => console.warn('[OverviewTab] cast types list error:', err.message));
   }, [accountId, castName, castInfo]);
 
   return (
@@ -380,6 +406,7 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
 
   useEffect(() => {
     const load = async () => {
+      try {
       const supabase = createClient();
 
       const { data, error } = await supabase.rpc('get_session_list_v2', {
@@ -441,18 +468,22 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
       }
 
       setSessions((data || []).map((r: Record<string, unknown>) => ({
-        broadcast_group_id: r.broadcast_group_id as string,
-        session_ids: r.session_ids as string[],
-        started_at: r.started_at as string,
-        ended_at: r.ended_at as string,
-        session_title: r.session_title as string | null,
-        msg_count: (r.msg_count as number) || 0,
+        broadcast_group_id: (r.broadcast_group_id ?? r.id) as string,
+        session_ids: (r.session_ids as string[]) || [(r.id as string)],
+        started_at: (r.started_at ?? r.session_start) as string,
+        ended_at: (r.ended_at ?? r.session_end) as string,
+        session_title: (r.session_title ?? r.broadcast_title ?? null) as string | null,
+        msg_count: ((r.msg_count ?? r.message_count) as number) || 0,
         chat_tokens: (r.chat_tokens as number) || 0,
         tip_count: (r.tip_count as number) || 0,
         duration_minutes: (r.duration_minutes as number) || 0,
-        total_revenue: (r.total_revenue as number) || 0,
+        total_revenue: ((r.total_revenue ?? r.total_coins ?? r.chat_tokens) as number) || 0,
       })));
       setLoading(false);
+      } catch (err) {
+        console.error('[SessionsTab] load error:', err);
+        setLoading(false);
+      }
     };
     load();
   }, [accountId, castName]);
@@ -473,40 +504,44 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
 
     // Fetch child session breakdown from chat_logs
     setLoadingChildren(prev => new Set(prev).add(groupId));
-    const supabase = createClient();
-    const { data: rawData } = await supabase
-      .from('chat_logs')
-      .select('session_id, timestamp, tokens')
-      .eq('account_id', accountId)
-      .eq('cast_name', castName)
-      .in('session_id', s.session_ids)
-      .order('timestamp', { ascending: true });
+    try {
+      const supabase = createClient();
+      const { data: rawData } = await supabase
+        .from('chat_logs')
+        .select('session_id, timestamp, tokens')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .in('session_id', s.session_ids)
+        .order('timestamp', { ascending: true });
 
-    if (rawData) {
-      const map = new Map<string, { times: number[]; tokens: number; tips: number; msgCount: number }>();
-      for (const r of rawData) {
-        if (!r.session_id) continue;
-        if (!map.has(r.session_id)) map.set(r.session_id, { times: [], tokens: 0, tips: 0, msgCount: 0 });
-        const entry = map.get(r.session_id)!;
-        entry.times.push(new Date(r.timestamp).getTime());
-        entry.msgCount++;
-        if (r.tokens > 0) { entry.tokens += r.tokens; entry.tips++; }
+      if (rawData) {
+        const map = new Map<string, { times: number[]; tokens: number; tips: number; msgCount: number }>();
+        for (const r of rawData) {
+          if (!r.session_id) continue;
+          if (!map.has(r.session_id)) map.set(r.session_id, { times: [], tokens: 0, tips: 0, msgCount: 0 });
+          const entry = map.get(r.session_id)!;
+          entry.times.push(new Date(r.timestamp).getTime());
+          entry.msgCount++;
+          if (r.tokens > 0) { entry.tokens += r.tokens; entry.tips++; }
+        }
+        const children: ChildSession[] = Array.from(map.entries()).map(([sid, d]) => {
+          const minT = Math.min(...d.times);
+          const maxT = Math.max(...d.times);
+          return {
+            session_id: sid,
+            started_at: new Date(minT).toISOString(),
+            ended_at: new Date(maxT).toISOString(),
+            msg_count: d.msgCount,
+            tip_count: d.tips,
+            chat_tokens: d.tokens,
+            duration_minutes: Math.round((maxT - minT) / 60000),
+          };
+        }).sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
+
+        setChildSessions(prev => ({ ...prev, [groupId]: children }));
       }
-      const children: ChildSession[] = Array.from(map.entries()).map(([sid, d]) => {
-        const minT = Math.min(...d.times);
-        const maxT = Math.max(...d.times);
-        return {
-          session_id: sid,
-          started_at: new Date(minT).toISOString(),
-          ended_at: new Date(maxT).toISOString(),
-          msg_count: d.msgCount,
-          tip_count: d.tips,
-          chat_tokens: d.tokens,
-          duration_minutes: Math.round((maxT - minT) / 60000),
-        };
-      }).sort((a, b) => new Date(a.started_at).getTime() - new Date(b.started_at).getTime());
-
-      setChildSessions(prev => ({ ...prev, [groupId]: children }));
+    } catch (err) {
+      console.warn('[SessionsTab] child sessions error:', err);
     }
     setLoadingChildren(prev => { const next = new Set(prev); next.delete(groupId); return next; });
   };
@@ -635,6 +670,9 @@ function UsersTab({ castName, accountId }: { castName: string; accountId: string
       p_cast_name: castName,
     }).then(({ data }) => {
       if (data) setUsers(data);
+      setLoading(false);
+    }, (err) => {
+      console.warn('[UsersTab] get_user_retention_status error:', err.message);
       setLoading(false);
     });
   }, [accountId, castName]);
