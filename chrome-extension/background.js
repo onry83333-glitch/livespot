@@ -1775,6 +1775,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // --- CSRF captured from content_jwt_capture.js ---
+  if (msg.type === 'CSRF_CAPTURED') {
+    handleCsrfCaptured(msg);
+    sendResponse({ ok: true });
+    return false;
+  }
+
   // --- Popup: Set active account ---
   if (msg.type === 'SET_ACCOUNT') {
     accountId = msg.account_id;
@@ -3048,6 +3055,59 @@ async function handleJwtCaptured(message) {
   }
 }
 
+/**
+ * CSRF取得ハンドラ: MAIN world content_jwt_capture.js → content_spy.js → ここ
+ * メモリに保持 + stripchat_sessions に即時保存
+ */
+let cachedCsrfToken = null;
+let cachedCsrfTimestamp = null;
+
+async function handleCsrfCaptured(message) {
+  const { csrfToken, csrfTimestamp } = message;
+  if (!csrfToken) return;
+
+  // メモリに保持（exportSessionCookieのupsert時に使用）
+  cachedCsrfToken = csrfToken;
+  cachedCsrfTimestamp = csrfTimestamp || null;
+  console.log('[LS-BG] CSRF cached in memory');
+
+  if (!accountId || !accessToken) {
+    console.log('[LS-BG] CSRF cached but no auth context for DB save');
+    return;
+  }
+
+  // 即時DB保存
+  try {
+    const body = {
+      csrf_token: csrfToken,
+      updated_at: new Date().toISOString(),
+    };
+    if (csrfTimestamp) body.csrf_timestamp = csrfTimestamp;
+
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: CONFIG.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`,
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify(body),
+      }
+    );
+
+    if (res.ok) {
+      console.log('[LS-BG] CSRF saved to stripchat_sessions');
+    } else {
+      console.warn('[LS-BG] CSRF save failed:', res.status);
+    }
+  } catch (err) {
+    console.warn('[LS-BG] CSRF save error:', err.message);
+  }
+}
+
 // ============================================================
 // Viewer Member List Polling (spy_viewers)
 // ============================================================
@@ -3380,27 +3440,10 @@ async function exportSessionCookie() {
       }
     }
 
-    // 4. csrfToken取得を試行（/api/front/v2/config から）
-    let csrfToken = null;
-    let csrfTimestamp = null;
+    // 4. csrfToken は Content Script (content_jwt_capture.js) から
+    //    handleCsrfCaptured() 経由で直接DBに保存される。
+    //    ここでは /api/front/v2/config を叩かない（廃止済みで常に404）。
     let frontVersion = '11.5.57';
-    try {
-      const configRes = await fetch('https://ja.stripchat.com/api/front/v2/config', {
-        headers: {
-          'Accept': 'application/json',
-          'Cookie': `stripchat_com_sessionId=${sessionCookie.value}`,
-        },
-      });
-      if (configRes.ok) {
-        const configData = await configRes.json();
-        csrfToken = configData?.csrfToken || configData?.config?.csrfToken || null;
-        csrfTimestamp = configData?.csrfTimestamp || configData?.config?.csrfTimestamp || null;
-        frontVersion = configData?.frontVersion || configData?.config?.frontVersion || frontVersion;
-        console.log('[LS-BG] SessionExport: config取得成功, csrf:', !!csrfToken, 'frontVersion:', frontVersion);
-      }
-    } catch (e) {
-      console.warn('[LS-BG] SessionExport: config取得失敗:', e.message);
-    }
 
     // 5. Supabaseにupsert
     const expiresAt = sessionCookie.expirationDate
@@ -3420,8 +3463,8 @@ async function exportSessionCookie() {
       updated_at: new Date().toISOString(),
     };
     // null値でDB上の既存データを上書きしないよう、値があるフィールドのみ含める
-    if (csrfToken) body.csrf_token = csrfToken;
-    if (csrfTimestamp) body.csrf_timestamp = csrfTimestamp;
+    if (cachedCsrfToken) body.csrf_token = cachedCsrfToken;
+    if (cachedCsrfTimestamp) body.csrf_timestamp = cachedCsrfTimestamp;
     if (stripchatUserId) body.stripchat_user_id = stripchatUserId;
 
     const upsertRes = await fetch(
@@ -3440,7 +3483,7 @@ async function exportSessionCookie() {
 
     if (upsertRes.ok) {
       console.log('[LS-BG] SessionExport: セッション同期完了',
-        `cast=${sessionCastName}, userId=${stripchatUserId}, csrf=${!!csrfToken}, expires=${expiresAt || 'unknown'}`);
+        `cast=${sessionCastName}, userId=${stripchatUserId}, csrf=${!!cachedCsrfToken}, expires=${expiresAt || 'unknown'}`);
     } else {
       const errText = await upsertRes.text().catch(() => '');
       console.warn('[LS-BG] SessionExport: upsert失敗:', upsertRes.status, errText);

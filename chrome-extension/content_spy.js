@@ -20,6 +20,15 @@
         timestamp: event.data.timestamp,
       });
     }
+    if (event.data?.type === 'LS_CSRF_CAPTURED') {
+      chrome.runtime.sendMessage({
+        type: 'CSRF_CAPTURED',
+        csrfToken: event.data.csrfToken,
+        csrfTimestamp: event.data.csrfTimestamp,
+        csrfNotifyTimestamp: event.data.csrfNotifyTimestamp,
+        timestamp: event.data.timestamp,
+      });
+    }
   });
 
   let observer = null;

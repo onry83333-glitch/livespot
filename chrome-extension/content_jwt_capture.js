@@ -71,5 +71,36 @@
     return origFetch.apply(this, arguments);
   };
 
-  console.log(LOG, 'JWT capture initialized (MAIN world)');
+  // ============================================================
+  // 3. CSRF extraction from window.__logger
+  // ============================================================
+  const CSRF_LOG = '[LS-CSRF]';
+  let lastCsrfToken = null;
+
+  function extractCsrf() {
+    try {
+      const params = window.__logger?.kibanaLogger?.api?.csrfParams;
+      if (params?.csrfToken && params.csrfToken !== lastCsrfToken) {
+        lastCsrfToken = params.csrfToken;
+        console.log(CSRF_LOG, 'CSRF captured from __logger');
+        window.postMessage({
+          type: 'LS_CSRF_CAPTURED',
+          csrfToken: params.csrfToken,
+          csrfTimestamp: params.csrfTimestamp || null,
+          csrfNotifyTimestamp: params.csrfNotifyTimestamp || null,
+          timestamp: Date.now(),
+        }, '*');
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+
+  // Try immediately, then retry with delays (JS may not be loaded yet)
+  if (!extractCsrf()) {
+    const delays = [1000, 3000, 5000, 10000];
+    delays.forEach(d => setTimeout(extractCsrf, d));
+  }
+
+  console.log(LOG, 'JWT + CSRF capture initialized (MAIN world)');
 })();

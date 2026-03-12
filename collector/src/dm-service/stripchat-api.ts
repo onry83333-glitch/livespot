@@ -100,27 +100,10 @@ export class StripchatDMApi {
       };
     }
 
-    // 方法2: /api/front/v2/config からフェッチ
-    try {
-      const res = await fetch('https://ja.stripchat.com/api/front/v2/config', {
-        headers: { Accept: 'application/json', Cookie: this.buildCookieString() },
-      });
-      if (res.ok) {
-        const config = await res.json() as Record<string, unknown>;
-        const inner = config?.config as Record<string, unknown> | undefined;
-        const csrfToken = (config?.csrfToken as string) || (inner?.csrfToken as string) || null;
-        if (csrfToken) {
-          const now = new Date();
-          return {
-            token: csrfToken,
-            timestamp: now.toISOString().replace(/\.\d{3}Z$/, 'Z'),
-            notifyTimestamp: new Date(now.getTime() + 36 * 3600 * 1000)
-              .toISOString().replace(/\.\d{3}Z$/, 'Z'),
-          };
-        }
-      }
-    } catch { /* ignore */ }
-
+    // /api/front/v2/config は廃止済み（常に404）。
+    // CSRFはChrome拡張のContent Script経由でDBに保存される。
+    // DBにCSRFがない場合は明確にエラーログを出す。
+    console.error('[dm-api] csrf_token がDBに保存されていません。Chrome拡張でStripchatページを開いてCSRFを同期してください。');
     return null;
   }
 
