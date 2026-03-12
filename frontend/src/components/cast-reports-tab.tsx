@@ -402,7 +402,96 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
           </div>
           <div className="prose prose-invert prose-sm max-w-none fb-report-markdown"
             style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: '13px' }}>
-            <ReactMarkdown>{fbReportMarkdown}</ReactMarkdown>
+            <style>{`
+              .fb-report-markdown li:has(> :first-child) {
+                /* fallback for browsers without :has */
+              }
+              .fb-report-markdown [data-churn-flag] {
+                background: rgba(239,68,68,0.12);
+                border-left: 3px solid #ef4444;
+                padding: 2px 6px;
+                border-radius: 4px;
+              }
+            `}</style>
+            <ReactMarkdown
+              components={{
+                li: ({ children, ...props }) => {
+                  const text = String(children);
+                  if (text.includes('🚩')) {
+                    return (
+                      <li {...props} style={{
+                        background: 'rgba(239,68,68,0.12)',
+                        borderLeft: '3px solid #ef4444',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        marginBottom: '4px',
+                      }}>
+                        {children}
+                      </li>
+                    );
+                  }
+                  return <li {...props}>{children}</li>;
+                },
+                h3: ({ children, ...props }) => {
+                  const text = String(children);
+                  if (text.includes('🚩') || text.includes('離脱警告')) {
+                    return (
+                      <h3 {...props} style={{
+                        background: 'rgba(239,68,68,0.15)',
+                        border: '1px solid rgba(239,68,68,0.4)',
+                        padding: '8px 12px',
+                        borderRadius: '6px',
+                        color: '#fca5a5',
+                      }}>
+                        {children}
+                      </h3>
+                    );
+                  }
+                  if (text.includes('🔴')) {
+                    return (
+                      <h3 {...props} style={{
+                        background: 'rgba(239,68,68,0.08)',
+                        borderLeft: '3px solid #ef4444',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                      }}>
+                        {children}
+                      </h3>
+                    );
+                  }
+                  if (text.includes('🟡')) {
+                    return (
+                      <h3 {...props} style={{
+                        background: 'rgba(234,179,8,0.08)',
+                        borderLeft: '3px solid #eab308',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                      }}>
+                        {children}
+                      </h3>
+                    );
+                  }
+                  return <h3 {...props}>{children}</h3>;
+                },
+                h2: ({ children, ...props }) => {
+                  const text = String(children);
+                  if (text.includes('離脱予兆アラート') || text.includes('⚠️')) {
+                    return (
+                      <h2 {...props} style={{
+                        background: 'rgba(239,68,68,0.18)',
+                        border: '2px solid rgba(239,68,68,0.5)',
+                        padding: '10px 14px',
+                        borderRadius: '8px',
+                        color: '#fca5a5',
+                      }}>
+                        {children}
+                      </h2>
+                    );
+                  }
+                  return <h2 {...props}>{children}</h2>;
+                },
+              }}
+            >{fbReportMarkdown}</ReactMarkdown>
           </div>
         </div>
       )}

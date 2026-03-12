@@ -83,6 +83,7 @@ interface FiveAxisData {
   userBehavior: string;   // Group A: #1リテンション, #2来訪間隔, #3課金エスカレーション, #4課金タイプ変遷
   broadcastQuality: string; // Group B: #5新規獲得率推移, #6常連維持率, #7チップ速度カーブ, #8ticketshow最適化
   realtimeMetrics: string;  // Group E: viewer_stats時系列, ゴール前後変化, ticketshow前後変化
+  crossCompetitor: string;  // Group C: #9自社ファンの他社出現, #10他社ゴール設定パターン
 }
 
 const DEFAULT_PERSONA: CastPersona = {
@@ -347,10 +348,12 @@ ${additionalData ? `追加データ:\n${additionalData}` : ''}
 - [事実] タグ付きの数値は検証済み。1文字も変更せずそのまま引用すること。独自に数え直すな。
 - 以下のユーザーリストは全員そのまま転記すること。1人も省略するな:
   「## 新規チッパー」「## 高額新規」「## リピーター」「## 復帰ユーザー」「## DM用ユーザー名リスト」
+  「🔴 優先度A」「🟡 優先度B」「🟢 優先度C」「🚩 離脱警告」
   「## #11 離脱予兆ユーザー」「## #12 初回課金後2回目来訪率」「## #13 復帰ユーザーの復帰きっかけ」
   「## #1 セッション間リテンション」「## #2 来訪間隔パターン」「## #3 課金エスカレーション」「## #4 課金タイプ変遷」
   「## #5 セッション別新規獲得率」「## #6 常連維持率」「## #7 チップ速度の時間カーブ」「## #8 ticketshow突入タイミング」
   「## viewer_stats時系列」「## ticketshow前後」
+  「## #9 自社ファンの他社出現」「## #10 他社のゴール設定パターン」
 - [判定根拠] タグは判定ロジックの説明。
 - [注意] タグはデータ欠損や制限事項。
 - 上記以外の推測・分析を行う場合は必ず「推測:」「分析:」と明示すること。
@@ -384,6 +387,9 @@ ${fiveAxis?.broadcastQuality || 'データなし'}
 ### 軸9: リアルタイム推移
 ${fiveAxis?.realtimeMetrics || 'データなし'}
 
+### 軸10: 他社突合（グループC）
+${fiveAxis?.crossCompetitor || 'データなし'}
+
 ## 分析指示
 - 事実データに基づく分析と、推測に基づく提案を明確に分けること
 - 「新規」の定義: このキャストへの初チップが今回セッション内の人。paid_usersテーブルの値ではない
@@ -396,7 +402,13 @@ ${fiveAxis?.realtimeMetrics || 'データなし'}
 - リテンション率と来訪頻度パターンから、配信スケジュールや集客施策の提案も含めること
 - チップ速度カーブから序盤・中盤・終盤の盛り上がり分析を行い、配信構成の改善提案をすること
 - ticketshowのCVRとタイミングから最適な突入タイミングを具体的に提案すること（「配信開始XX分後にYY人のコイン持ちが集まってから」等）
-- viewer_statsデータがない場合は「データ不足」と明示し、推測しないこと`;
+- viewer_statsデータがない場合は「データ不足」と明示し、推測しないこと
+- 🚩離脱警告ユーザーは「## ⚠️ 離脱予兆アラート」セクションで赤旗付きで目立たせること。累計高額なのに今回急落=離脱の兆候
+- DM優先度（🔴A→🟡B→🟢C）の順でDM施策を提案すること。優先度Aは即DM推奨
+- 復帰フック分析（💡マーク）がある場合、ticketshow告知をDM文面に含める提案をすること
+- #9自社ファンの他社出現データがある場合、ファンの流出先と時間帯から配信スケジュール改善を提案すること
+- #10他社ゴール設定パターンがある場合、自社のゴール金額設定の参考として具体的な提案をすること
+- 他社データはSPYログベースの参考値。「推測:」プレフィックスを付けて事実と分離すること`;
     }
 
     default:
@@ -510,6 +522,13 @@ Markdownで出力してください。以下の構造を守ること:
   - 「## #7 チップ速度の時間カーブ」— 10分区間別tk推移
   - 「## #8 ticketshow突入タイミング」— CVR・タイミング分析
   - 「## viewer_stats時系列」「## ticketshow前後の視聴者変化」— データがある場合のみ
+  - 「## #9 自社ファンの他社出現」— 他社に出現した自社ファン全員
+  - 「## #10 他社のゴール設定パターン」— キャスト別ゴール設定
+  - 「🔴 優先度A」「🟡 優先度B」「🟢 優先度C」— DM優先度リスト
+  - 「🚩 離脱警告」— 累計高額→今回少額ユーザー
+- 🚩離脱警告ユーザーは「## ⚠️ 離脱予兆アラート」セクションで赤旗🚩付きで最も目立つ形で表示すること
+- DM施策は優先度A→B→C→離脱警告の順で提案すること
+- 復帰フック分析（💡マーク付き）の情報は必ずレポートに含め、DM文面の提案にも反映すること
 - 推測・解釈を書く場合は必ず「推測:」「分析:」と明示すること
 - 改善提案は「次の配信で」実行可能な具体策のみ
 - 抽象的な提案禁止（×「コミュニケーションを増やす」→ ○「配信開始10分以内にチャットで名前を3人呼ぶ」）
@@ -540,6 +559,7 @@ async function collect5AxisData(
     userBehavior: 'データなし',
     broadcastQuality: 'データなし',
     realtimeMetrics: 'データなし',
+    crossCompetitor: 'データなし',
   };
 
   try {
@@ -733,6 +753,36 @@ async function collect5AxisData(
       })
       .sort((a, b) => b.daysSince - a.daysSince);
 
+    // ── DM優先度分類 ──
+    // 優先度A: 複数回チップの新規（本気度高い）
+    const priorityA = newTippersSorted.filter(t => t.count >= 2);
+    // 優先度B: 150tk固定の様子見新規（ticketshow参加=様子見）
+    const priorityB = newTippersSorted.filter(t => t.count === 1 && t.total === 150);
+    // 優先度C: 少額の新規（上記以外）
+    const priorityC = newTippersSorted.filter(t => !priorityA.includes(t) && !priorityB.includes(t));
+
+    // ── 離脱警告: 累計高額なのに今回少額の常連 ──
+    // NOTE: sessionTipperMapsはGroup Dで構築されるため、ここではhistoryTxCountベースで推定
+    const churnWarningUsers: Array<{ username: string; cumulativeTk: number; sessionTk: number; dropPct: string }> = [];
+    for (const rt of returningTippersSorted) {
+      const hist = returningMap.get(rt.username);
+      if (!hist) continue;
+      // 累計1000tk以上の常連で、今回のtkが累計平均の30%以下
+      // 来訪回数の推定: historyTxCountは取引回数なので、セッション数を推定（取引10回=約1セッションと仮定）
+      const estimatedVisits = Math.max(Math.ceil(hist.historyTxCount / 10), 1);
+      const avgPerVisit = hist.historyTokens / estimatedVisits;
+      if (hist.historyTokens >= 1000 && avgPerVisit > 0 && rt.total < avgPerVisit * 0.3) {
+        const dropPct = ((1 - rt.total / avgPerVisit) * 100).toFixed(0);
+        churnWarningUsers.push({
+          username: rt.username,
+          cumulativeTk: hist.historyTokens,
+          sessionTk: rt.total,
+          dropPct,
+        });
+      }
+    }
+    churnWarningUsers.sort((a, b) => b.cumulativeTk - a.cumulativeTk);
+
     // ── DM用コピペセクション（ユーザー名のみ改行区切り） ──
     const dmCopyNew = newTippersSorted.map(t => t.username).join('\n');
     const dmCopyHighNew = highValueNewTippers.map(t => t.username).join('\n');
@@ -756,16 +806,31 @@ ${returningLines.length > 0 ? returningLines.join('\n') : '(なし)'}
 ## 復帰ユーザー（30日以上ぶり: ${comebackUsers.length}人）
 ${comebackUsers.length > 0 ? comebackUsers.map(u => `- ${u.username}: ${u.daysSince}日ぶり（最終${u.lastTipDate}）→ 今回${u.sessionTk}tk`).join('\n') : '(なし)'}
 
-## DM用ユーザー名リスト（コピペ用）
+## DM用ユーザー名リスト（優先度付き・コピペ用）
 
-### 新規チッパー（${trueNewTippers.length}人）
+### 🔴 優先度A: 複数回チップ新規（${priorityA.length}人）— 本気度高い、即DM
+${priorityA.length > 0 ? priorityA.map(t => `- ${t.username}: ${t.total}tk (${t.count}回)`).join('\n') : '(なし)'}
 \`\`\`
-${dmCopyNew || '(なし)'}
+${priorityA.map(t => t.username).join('\n') || '(なし)'}
 \`\`\`
 
-### 高額新規 150tk+（${highValueNewTippers.length}人）
+### 🟡 優先度B: 150tk様子見新規（${priorityB.length}人）— ticketshow参加=興味あり
+${priorityB.length > 0 ? priorityB.map(t => `- ${t.username}: ${t.total}tk (${t.count}回)`).join('\n') : '(なし)'}
 \`\`\`
-${dmCopyHighNew || '(なし)'}
+${priorityB.map(t => t.username).join('\n') || '(なし)'}
+\`\`\`
+
+### 🟢 優先度C: 少額新規（${priorityC.length}人）
+${priorityC.length > 0 ? priorityC.map(t => `- ${t.username}: ${t.total}tk (${t.count}回)`).join('\n') : '(なし)'}
+\`\`\`
+${priorityC.map(t => t.username).join('\n') || '(なし)'}
+\`\`\`
+
+### 🚩 離脱警告: 累計高額→今回少額（${churnWarningUsers.length}人）— 最優先フォロー
+[判定根拠] 累計1000tk以上の常連で、今回セッションのtkが来訪平均の30%以下に急落した人
+${churnWarningUsers.length > 0 ? churnWarningUsers.map(u => `- 🚩 ${u.username}: 累計${u.cumulativeTk}tk → 今回${u.sessionTk}tk (${u.dropPct}%減)`).join('\n') : '(該当なし)'}
+\`\`\`
+${churnWarningUsers.map(u => u.username).join('\n') || '(なし)'}
 \`\`\`
 
 ### 復帰ユーザー（${comebackUsers.length}人）
@@ -1193,12 +1258,19 @@ ${nonReturnerDmCopy || '(なし)'}
           return `- ${d.username}: ${d.daysSince}日ぶり → ${typeStr}`;
         });
 
+        // ticketshow復帰インサイト
+        const tsCount = triggerSummary.get('ticketshow') || 0;
+        const tsRatio = comebackUsers.length > 0 ? ((tsCount / comebackUsers.length) * 100).toFixed(0) : '0';
+        const ticketshowInsight = tsCount > 0
+          ? `\n\n💡 **復帰フック分析:** 復帰${comebackUsers.length}人中${tsCount}人(${tsRatio}%)がticketshowで復帰。ticketshowは復帰フックとして有効。ticketshow告知をDMに含めることで休眠ユーザーの復帰を促進できる可能性が高い。`
+          : '';
+
         dmParts.push(`## #13 復帰ユーザーの復帰きっかけ（30日以上ぶり: ${comebackUsers.length}人）
 [事実] 復帰きっかけ取引タイプ: ${triggerLines.join(', ')}
 
 ${comebackDetailLines.join('\n')}
 
-[判定根拠] 最も金額が大きい取引タイプを「きっかけ」として判定（tip=投げ銭、ticketshow=チケット購入、photo=写真購入）`);
+[判定根拠] 最も金額が大きい取引タイプを「きっかけ」として判定（tip=投げ銭、ticketshow=チケット購入、photo=写真購入）${ticketshowInsight}`);
       }
 
       if (dmParts.length > 0) {
@@ -1827,6 +1899,215 @@ ${preWarmedUsers.join('\n') || '(なし)'}
     } catch (groupEErr) {
       console.error('[5-Axis GroupE] Error:', groupEErr);
       result.realtimeMetrics = '[注意] グループEデータ収集でエラー発生';
+    }
+
+    // ================================================================
+    // グループC: 他社突合
+    // #9 自社ファンの他社出現（chat_logsで自社usernameが他社cast_nameに出現）
+    // #10 他社のゴール設定パターン（spy_messages WHERE msg_type='goal'をキャスト別に集計）
+    // ================================================================
+    try {
+      const crossParts: string[] = [];
+
+      // ── #9 自社ファンの他社出現 ──
+      // 自社のチッパー（今回+リピーター）が他社キャストのchat_logsに出現しているか
+      if (allTipperNames.length > 0) {
+        // 自社ファン名リスト（全チッパー + 過去のリピーター）
+        const fanNames = Array.from(new Set([...allTipperNames, ...returningTippers.map(r => r.username)]));
+
+        // chat_logsで自社以外のcast_nameに出現するファンを検索
+        // バッチで50人ずつ処理（IN句のサイズ制限回避）
+        const crossAppearances: Array<{
+          username: string; otherCast: string; lastSeen: string; msgCount: number;
+        }> = [];
+
+        const BATCH_SIZE = 50;
+        for (let bi = 0; bi < fanNames.length; bi += BATCH_SIZE) {
+          const batch = fanNames.slice(bi, bi + BATCH_SIZE);
+          const { data: crossRows } = await sb
+            .from('chat_logs')
+            .select('username, cast_name, timestamp')
+            .in('username', batch)
+            .neq('cast_name', castName)
+            .order('timestamp', { ascending: false })
+            .limit(500);
+
+          if (crossRows && crossRows.length > 0) {
+            // ユーザー×キャスト別に集計
+            const crossMap = new Map<string, { otherCast: string; lastSeen: string; count: number }>();
+            for (const row of crossRows) {
+              const key = `${row.username}__${row.cast_name}`;
+              const existing = crossMap.get(key);
+              if (existing) {
+                existing.count++;
+              } else {
+                crossMap.set(key, {
+                  otherCast: row.cast_name,
+                  lastSeen: (row.timestamp as string).slice(0, 16),
+                  count: 1,
+                });
+              }
+            }
+            for (const [key, data] of Array.from(crossMap.entries())) {
+              const username = key.split('__')[0];
+              crossAppearances.push({
+                username,
+                otherCast: data.otherCast,
+                lastSeen: data.lastSeen,
+                msgCount: data.count,
+              });
+            }
+          }
+        }
+
+        // spy_messagesでもフォールバック検索（chat_logsにデータがない場合）
+        if (crossAppearances.length === 0) {
+          for (let bi = 0; bi < fanNames.length; bi += BATCH_SIZE) {
+            const batch = fanNames.slice(bi, bi + BATCH_SIZE);
+            const { data: spyCrossRows } = await sb
+              .from('spy_messages')
+              .select('user_name, cast_name, message_time')
+              .in('user_name', batch)
+              .neq('cast_name', castName)
+              .eq('msg_type', 'chat')
+              .order('message_time', { ascending: false })
+              .limit(500);
+
+            if (spyCrossRows && spyCrossRows.length > 0) {
+              const crossMap = new Map<string, { otherCast: string; lastSeen: string; count: number }>();
+              for (const row of spyCrossRows) {
+                const key = `${row.user_name}__${row.cast_name}`;
+                const existing = crossMap.get(key);
+                if (existing) {
+                  existing.count++;
+                } else {
+                  crossMap.set(key, {
+                    otherCast: row.cast_name,
+                    lastSeen: (row.message_time as string).slice(0, 16),
+                    count: 1,
+                  });
+                }
+              }
+              for (const [key, data] of Array.from(crossMap.entries())) {
+                const username = key.split('__')[0];
+                crossAppearances.push({
+                  username,
+                  otherCast: data.otherCast,
+                  lastSeen: data.lastSeen,
+                  msgCount: data.count,
+                });
+              }
+            }
+          }
+        }
+
+        if (crossAppearances.length > 0) {
+          // ユーザー別にまとめて表示
+          const byUser = new Map<string, Array<{ otherCast: string; lastSeen: string; msgCount: number }>>();
+          for (const ca of crossAppearances) {
+            const arr = byUser.get(ca.username) || [];
+            arr.push({ otherCast: ca.otherCast, lastSeen: ca.lastSeen, msgCount: ca.msgCount });
+            byUser.set(ca.username, arr);
+          }
+
+          const crossLines = Array.from(byUser.entries())
+            .sort((a, b) => b[1].reduce((s, c) => s + c.msgCount, 0) - a[1].reduce((s, c) => s + c.msgCount, 0))
+            .slice(0, 20) // 上位20人に限定
+            .map(([username, casts]) => {
+              const castStr = casts
+                .sort((a, b) => b.msgCount - a.msgCount)
+                .map(c => `${c.otherCast}(${c.msgCount}msg, 最終${c.lastSeen})`)
+                .join(', ');
+              return `- ${username}: ${castStr}`;
+            });
+
+          // 他社キャスト別の自社ファン出現数
+          const byCast = new Map<string, number>();
+          for (const ca of crossAppearances) {
+            byCast.set(ca.otherCast, (byCast.get(ca.otherCast) || 0) + 1);
+          }
+          const castRankLines = Array.from(byCast.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([cast, count]) => `- ${cast}: 自社ファン${count}人が出現`);
+
+          crossParts.push(`## #9 自社ファンの他社出現（${byUser.size}人が他社で確認）
+[事実] 自社チッパー${fanNames.length}人中${byUser.size}人が他社キャストの配信に出現
+[判定根拠] chat_logs/spy_messagesで自社usernameが他社cast_nameに出現した記録を検索
+
+### 他社に出現した自社ファン（上位20人）
+${crossLines.join('\n')}
+
+### 自社ファンが多く出現している他社キャスト
+${castRankLines.join('\n')}
+
+[分析ヒント] 自社ファンが他社に出現する時間帯=自社が配信していない時間帯の可能性。配信スケジュール調整の参考に`);
+        } else {
+          crossParts.push(`## #9 自社ファンの他社出現
+[注意] chat_logs/spy_messagesに他社配信での自社ファン出現データなし（spy collector停止 or データ不足の可能性）`);
+        }
+      }
+
+      // ── #10 他社のゴール設定パターン ──
+      // spy_messages WHERE msg_type='goal' をキャスト別に集計
+      {
+        const { data: goalRows } = await sb
+          .from('spy_messages')
+          .select('cast_name, message, tokens, message_time')
+          .eq('msg_type', 'goal')
+          .neq('cast_name', castName)
+          .order('message_time', { ascending: false })
+          .limit(1000);
+
+        if (goalRows && goalRows.length > 0) {
+          // キャスト別に集計
+          const goalByCast = new Map<string, Array<{ message: string; tokens: number; time: string }>>();
+          for (const row of goalRows) {
+            const cast = row.cast_name;
+            const arr = goalByCast.get(cast) || [];
+            arr.push({
+              message: row.message || '',
+              tokens: row.tokens || 0,
+              time: (row.message_time as string).slice(0, 16),
+            });
+            goalByCast.set(cast, arr);
+          }
+
+          const goalSummaryLines = Array.from(goalByCast.entries())
+            .sort((a, b) => b[1].length - a[1].length)
+            .slice(0, 10) // 上位10キャスト
+            .map(([cast, goals]) => {
+              const avgTokens = goals.reduce((s, g) => s + g.tokens, 0) / Math.max(goals.length, 1);
+              // 最頻出のゴール金額帯
+              const tokenBuckets = new Map<string, number>();
+              for (const g of goals) {
+                const bucket = g.tokens <= 100 ? '~100' : g.tokens <= 300 ? '101-300' : g.tokens <= 500 ? '301-500' : '500+';
+                tokenBuckets.set(bucket, (tokenBuckets.get(bucket) || 0) + 1);
+              }
+              const topBucket = Array.from(tokenBuckets.entries()).sort((a, b) => b[1] - a[1])[0];
+              return `- ${cast}: ${goals.length}回のゴール設定, 平均${Math.round(avgTokens)}tk, 最頻価格帯: ${topBucket?.[0] || 'N/A'}(${topBucket?.[1] || 0}回)`;
+            });
+
+          crossParts.push(`## #10 他社のゴール設定パターン（${goalByCast.size}キャスト, ${goalRows.length}件）
+[事実] spy_messagesのgoalイベントから他社キャストのゴール設定を集計
+[判定根拠] msg_type='goal'のレコードをキャスト別に集計し、ゴール金額帯・回数を分析
+
+### キャスト別ゴール設定（上位10）
+${goalSummaryLines.join('\n')}
+
+[分析ヒント] 他社の成功パターン（ゴール金額×達成頻度）を参考に自社のゴール設定を最適化`);
+        } else {
+          crossParts.push(`## #10 他社のゴール設定パターン
+[注意] spy_messagesにgoalイベントデータなし（spy collector停止 or ゴール設定データ未収集）`);
+        }
+      }
+
+      if (crossParts.length > 0) {
+        result.crossCompetitor = crossParts.join('\n\n');
+      }
+    } catch (groupCErr) {
+      console.error('[5-Axis GroupC] Error:', groupCErr);
+      result.crossCompetitor = '[注意] グループCデータ収集でエラー発生';
     }
 
     return result;
