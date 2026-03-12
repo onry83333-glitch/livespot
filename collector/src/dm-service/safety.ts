@@ -172,20 +172,19 @@ export function isMissingCampaign(campaign: string | null | undefined): boolean 
 
 /**
  * paid_usersキャッシュ → Stripchat API フォールバック でuserId解決
+ * cast_nameフィルタなし: 同一ユーザーが複数キャストに課金している場合でもヒットさせる
  */
 export async function resolveUserIdCached(
   sb: SupabaseClient,
   userName: string,
   accountId: string,
-  castName: string,
 ): Promise<string | null> {
-  // 1. paid_users キャッシュ
+  // 1. paid_users キャッシュ（account_id + user_name のみ）
   const { data: cached } = await sb
     .from('paid_users')
     .select('user_id_stripchat')
     .eq('user_name', userName)
     .eq('account_id', accountId)
-    .eq('cast_name', castName)
     .not('user_id_stripchat', 'is', null)
     .limit(1)
     .maybeSingle();

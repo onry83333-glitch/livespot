@@ -178,9 +178,10 @@ async function processBatch(accountId: string): Promise<{ sent: number; errors: 
     let targetUserId = task.target_user_id ? String(task.target_user_id) : null;
 
     if (!targetUserId) {
-      targetUserId = await resolveUserIdCached(sb, task.user_name, accountId, task.cast_name);
+      targetUserId = await resolveUserIdCached(sb, task.user_name, accountId);
     }
     if (!targetUserId) {
+      log('warn', `paid_usersでヒットせず、APIフォールバック: user=${task.user_name}`, { taskId: task.id });
       const resolved = await api.resolveUserId(task.user_name);
       targetUserId = resolved.userId;
       if (!targetUserId) {
