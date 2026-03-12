@@ -1520,6 +1520,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       console.log('[LS-BG] AUTH_UPDATED → バッファflush試行:', messageBuffer.length, '件');
       flushMessageBuffer();
     }
+    // トークン更新後にセッション同期 + CSRF再保存を実行
+    if (accessToken && accountId) {
+      exportSessionCookie().catch(e => console.warn('[LS-BG] AUTH_UPDATED → SessionSync失敗:', e.message));
+      if (cachedCsrfToken) {
+        _saveCsrfToDb(cachedCsrfToken, cachedCsrfTimestamp, false)
+          .catch(e => console.warn('[LS-BG] AUTH_UPDATED → CSRF再保存失敗:', e.message));
+      }
+    }
     sendResponse({ ok: true, authenticated: !!accessToken });
     return false;
   }
@@ -3076,7 +3084,11 @@ async function handleCsrfCaptured(message) {
     return;
   }
 
-  // 即時DB保存
+  // 即時DB保存（401時はトークンリフレッシュしてリトライ）
+  await _saveCsrfToDb(csrfToken, csrfTimestamp, false);
+}
+
+async function _saveCsrfToDb(csrfToken, csrfTimestamp, isRetry) {
   try {
     const body = {
       csrf_token: csrfToken,
@@ -3100,6 +3112,14 @@ async function handleCsrfCaptured(message) {
 
     if (res.ok) {
       console.log('[LS-BG] CSRF saved to stripchat_sessions');
+    } else if (res.status === 401 && !isRetry) {
+      console.warn('[LS-BG] CSRF save 401 → トークンリフレッシュ試行');
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        await _saveCsrfToDb(csrfToken, csrfTimestamp, true);
+      } else {
+        console.error('[LS-BG] CSRF save: トークンリフレッシュ失敗。ポップアップで再ログインしてください。');
+      }
     } else {
       console.warn('[LS-BG] CSRF save failed:', res.status);
     }
