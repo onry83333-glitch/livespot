@@ -1,10 +1,11 @@
 /**
  * POST /api/analysis/run-fb-report
  * 配信FBレポート生成エンドポイント
- * エンジンAPIにfb_reportタスクを投げ、結果をcast_knowledgeに保存
+ * engine/route.tsのPOSTを直接関数呼び出し（self-fetch廃止）
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { POST as enginePOST } from '@/app/api/persona/engine/route';
 
 export const maxDuration = 60;
 
@@ -23,34 +24,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Authorization ヘッダーをそのまま転送
     const authHeader = request.headers.get('authorization') || '';
 
-    // エンジンAPI呼び出し
-    const origin = request.nextUrl.origin;
-    const engineRes = await fetch(`${origin}/api/persona/engine`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': authHeader,
+    // engine/route.tsのPOSTを直接関数呼び出し（HTTPラウンドトリップなし）
+    const engineReq = new NextRequest(
+      new URL('/api/persona/engine', request.nextUrl.origin),
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader,
+        },
+        body: JSON.stringify({
+          task_type: 'fb_report',
+          cast_name,
+          account_id,
+          context: {},
+        }),
       },
-      body: JSON.stringify({
-        task_type: 'fb_report',
-        cast_name,
-        account_id,
-        context: {},
-      }),
-    });
+    );
 
+    const engineRes = await enginePOST(engineReq);
     const engineData = await engineRes.json();
-    if (!engineRes.ok) {
+
+    if (engineRes.status !== 200) {
       return NextResponse.json(engineData, { status: engineRes.status });
     }
 
     // cast_knowledgeに保存
     const sb = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
-    // cast_id を取得
     const { data: castRow } = await sb
       .from('registered_casts')
       .select('id')
@@ -84,16 +87,18 @@ export async function POST(request: NextRequest) {
       cost_usd: engineData.cost_usd,
       confidence: engineData.confidence,
     });
-  } catch {
+  } catch (e: unknown) {
+    const err = e as { message?: string };
+    console.error('[run-fb-report] Error:', err.message || e);
     return NextResponse.json(
-      { error: 'サーバーエラー' },
+      { error: err.message || 'サーバーエラー' },
       { status: 500 },
     );
   }
 }
 
 /**
- * POST /api/analysis/run-fb-report?action=feedback
+ * PUT /api/analysis/run-fb-report
  * フィードバック保存
  */
 export async function PUT(request: NextRequest) {
