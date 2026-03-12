@@ -3504,6 +3504,34 @@ async function exportSessionCookie() {
     if (upsertRes.ok) {
       console.log('[LS-BG] SessionExport: セッション同期完了',
         `cast=${sessionCastName}, userId=${stripchatUserId}, csrf=${!!cachedCsrfToken}, expires=${expiresAt || 'unknown'}`);
+    } else if (upsertRes.status === 401) {
+      console.warn('[LS-BG] SessionExport: upsert 401 → トークンリフレッシュ試行');
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        // リトライ（1回のみ）
+        const retryRes = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?on_conflict=account_id,cast_name`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=merge-duplicates,return=minimal',
+            },
+            body: JSON.stringify(body),
+          }
+        );
+        if (retryRes.ok) {
+          console.log('[LS-BG] SessionExport: リトライ成功',
+            `cast=${sessionCastName}, userId=${stripchatUserId}, csrf=${!!cachedCsrfToken}`);
+        } else {
+          const retryErr = await retryRes.text().catch(() => '');
+          console.error('[LS-BG] SessionExport: リトライも失敗:', retryRes.status, retryErr);
+        }
+      } else {
+        console.error('[LS-BG] SessionExport: トークンリフレッシュ失敗。ポップアップで再ログインしてください。');
+      }
     } else {
       const errText = await upsertRes.text().catch(() => '');
       console.warn('[LS-BG] SessionExport: upsert失敗:', upsertRes.status, errText);
