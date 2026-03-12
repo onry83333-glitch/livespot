@@ -72,23 +72,15 @@ export async function checkDailyLimit(
 // ============================================================
 
 export async function isUserOnCooldown(
-  sb: SupabaseClient,
-  accountId: string,
-  castName: string,
-  userName: string,
+  _sb: SupabaseClient,
+  _accountId: string,
+  _castName: string,
+  _userName: string,
 ): Promise<boolean> {
-  if (COOLDOWN_HOURS <= 0) return false;
-
-  const cooldownSince = new Date(Date.now() - COOLDOWN_HOURS * 60 * 60 * 1000).toISOString();
-
-  const { count } = await sb
-    .from('dm_send_log')
-    .select('id', { count: 'exact', head: true })
-    .eq('account_id', accountId)
-    .eq('cast_name', castName)
-    .eq('user_name', userName)
-    .eq('status', 'success')
-    .gte('sent_at', cooldownSince);
-
-  return (count || 0) > 0;
+  // TODO: テスト完了後に復元する。元のロジック:
+  // if (COOLDOWN_HOURS <= 0) return false;
+  // const cooldownSince = new Date(Date.now() - COOLDOWN_HOURS * 60 * 60 * 1000).toISOString();
+  // const { count } = await sb.from('dm_send_log')...
+  // return (count || 0) > 0;
+  return false;
 }
