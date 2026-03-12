@@ -6,6 +6,8 @@ import { LAYER_A_ANDO_FOUNDATION } from '@/lib/prompts/layer-a-ando';
 import { LAYER_A_PRINCESS_MARKETING } from '@/lib/prompts/layer-a-princess';
 import { buildCastRAGContext } from '@/lib/rag-context';
 
+export const maxDuration = 60;
+
 // ============================================================
 // 統一クリエイティブエンジン /api/persona/engine
 // task_type: dm / x_post / recruitment / content
