@@ -199,16 +199,24 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         }),
       });
 
-      const data = await res.json();
       if (!res.ok) {
-        setAiError(data.error || 'レポート生成に失敗しました');
+        const errText = await res.text();
+        console.error('[fb-report] HTTP', res.status, errText);
+        try {
+          const errJson = JSON.parse(errText);
+          setAiError(errJson.error || `HTTP ${res.status}`);
+        } catch {
+          setAiError(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+        }
         return;
       }
 
+      const data = await res.json();
       setFbReportMarkdown(data.report_markdown);
       fetchRecords();
-    } catch {
-      setAiError('通信エラーが発生しました');
+    } catch (e) {
+      console.error('[fb-report] catch:', e);
+      setAiError(`通信エラー: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setAiGenerating(false);
     }
