@@ -55,7 +55,7 @@ module.exports = {
     cwd: "C:\\dev\\livespot\\collector",
     env: {
       NODE_ENV: "production",
-      DM_TEST_MODE: "true"
+      DM_TEST_MODE: "false"
     },
     autorestart: true,
     watch: false,

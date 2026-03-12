@@ -43,7 +43,7 @@ export async function fetchQueuedTasks(
     .from('dm_send_log')
     .select('id, account_id, user_name, profile_url, message, cast_name, campaign, target_user_id, image_url, send_order')
     .eq('account_id', accountId)
-    .eq('status', 'queued')
+    .in('status', ['queued', 'pending'])
     .lt('created_at', graceThreshold)
     .order('created_at', { ascending: true })
     .limit(limit);
@@ -143,6 +143,20 @@ export async function markBlockedIdentityMismatch(sb: SupabaseClient, taskId: nu
 }
 
 /**
+ * クールダウン中のタスクを一時退避（キューをブロックしないようにする）
+ * NOTE: 'cancelled' + 特定errorプレフィックスで識別（status CHECK制約の制限のため）
+ */
+export async function markCooldownWait(sb: SupabaseClient, taskId: number, username: string): Promise<void> {
+  await sb
+    .from('dm_send_log')
+    .update({
+      status: 'cancelled',
+      error: `[COOLDOWN_WAIT] 24hクールダウン中: ${username} — 期限後に自動リキュー`,
+    })
+    .eq('id', taskId);
+}
+
+/**
  * タスクをキューに戻す（セッション切れ時）
  */
 export async function requeue(sb: SupabaseClient, taskId: number): Promise<void> {
@@ -163,7 +177,7 @@ export async function getQueueCount(
     .from('dm_send_log')
     .select('id', { count: 'exact', head: true })
     .eq('account_id', accountId)
-    .eq('status', 'queued');
+    .in('status', ['queued', 'pending']);
 
   return count || 0;
 }

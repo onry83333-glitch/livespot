@@ -20,8 +20,8 @@
 import 'dotenv/config';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { StripchatDMApi, type SessionData } from './stripchat-api.js';
-import { fetchQueuedTasks, markSending, markSuccess, markError, markBlockedTestMode, markBlockedNoCampaign, markBlockedIdentityMismatch, requeue, getQueueCount } from './queue.js';
-import { waitForSlot, checkDailyLimit, isUserOnCooldown, SEND_INTERVAL_MS, DAILY_LIMIT } from './rate-limiter.js';
+import { fetchQueuedTasks, markSending, markSuccess, markError, markBlockedTestMode, markBlockedNoCampaign, markBlockedIdentityMismatch, markCooldownWait, requeue, getQueueCount } from './queue.js';
+import { waitForSlot, checkDailyLimit, isUserOnCooldown, SEND_INTERVAL_MS, DAILY_LIMIT, COOLDOWN_HOURS } from './rate-limiter.js';
 import {
   getActiveSession, invalidateSession,
   buildCastIdentityMap, verifyCastIdentity, isValidCampaign, isMissingCampaign,
@@ -60,6 +60,10 @@ let totalSent = 0;
 let totalErrors = 0;
 let lastPipelineUpdate = 0;
 
+// セッション無効化リトライ: 連続sessionExpired回数を追跡
+const SESSION_EXPIRE_THRESHOLD = 3;
+let consecutiveSessionExpired = 0;
+
 // ============================================================
 // Logging
 // ============================================================
@@ -85,7 +89,7 @@ async function getTargetAccounts(): Promise<string[]> {
   const { data } = await sb
     .from('dm_send_log')
     .select('account_id')
-    .eq('status', 'queued')
+    .in('status', ['queued', 'pending'])
     .limit(100);
 
   if (!data) return [];
@@ -166,7 +170,8 @@ async function processBatch(accountId: string): Promise<{ sent: number; errors: 
 
     // 6c. ユーザークールダウンチェック
     if (await isUserOnCooldown(sb, accountId, task.cast_name, task.user_name)) {
-      log('info', `クールダウン中: ${task.user_name} — スキップ`, { taskId: task.id });
+      log('info', `クールダウン中: ${task.user_name} — cooldown_waitに退避`, { taskId: task.id });
+      await markCooldownWait(sb, task.id, task.user_name);
       skipped++;
       continue;
     }
@@ -246,20 +251,30 @@ async function processBatch(accountId: string): Promise<{ sent: number; errors: 
       if (result.success) {
         await markSuccess(sb, task.id);
         sent++;
+        consecutiveSessionExpired = 0; // 成功でリセット
         log('info', `送信成功: ${task.user_name}`, { taskId: task.id, messageId: result.messageId });
       } else {
         await markError(sb, task.id, result.error || 'Unknown error');
         errors++;
         log('warn', `送信失敗: ${task.user_name}: ${result.error}`, { taskId: task.id });
 
-        // セッション切れ → 残りをrequeue して中断
+        // セッション切れ判定（3回連続でのみ無効化）
         if (result.sessionExpired) {
-          log('error', 'セッション期限切れ — 残りをrequueして中断', { sessionId: session.id });
-          await invalidateSession(sb, session.id);
-          for (const remaining of tasks.slice(tasks.indexOf(task) + 1)) {
-            await requeue(sb, remaining.id);
+          consecutiveSessionExpired++;
+          log('warn', `セッション期限切れ応答 (${consecutiveSessionExpired}/${SESSION_EXPIRE_THRESHOLD})`, { sessionId: session.id, taskId: task.id });
+
+          if (consecutiveSessionExpired >= SESSION_EXPIRE_THRESHOLD) {
+            log('error', `セッション期限切れ ${SESSION_EXPIRE_THRESHOLD}回連続 — 無効化して中断`, { sessionId: session.id });
+            await invalidateSession(sb, session.id);
+            consecutiveSessionExpired = 0;
+            for (const remaining of tasks.slice(tasks.indexOf(task) + 1)) {
+              await requeue(sb, remaining.id);
+            }
+            return { sent, errors, skipped };
           }
-          return { sent, errors, skipped };
+          // 閾値未満: requeueして次のタスクへ
+          await requeue(sb, task.id);
+          continue;
         }
       }
     } catch (err) {
@@ -287,6 +302,49 @@ async function fetchImage(url: string): Promise<Buffer | null> {
 }
 
 // ============================================================
+// Cooldown requeue
+// ============================================================
+
+let lastCooldownRequeue = 0;
+const COOLDOWN_REQUEUE_INTERVAL_MS = 5 * 60 * 1000; // 5分ごと
+
+/**
+ * cooldown_wait 状態のタスクを確認し、クールダウン期限が切れたものを queued に戻す
+ */
+async function requeueExpiredCooldowns(): Promise<void> {
+  const now = Date.now();
+  if (now - lastCooldownRequeue < COOLDOWN_REQUEUE_INTERVAL_MS) return;
+  lastCooldownRequeue = now;
+
+  try {
+    // cooldown_wait (cancelled + [COOLDOWN_WAIT]エラー) のタスクを取得
+    const { data: waitTasks } = await sb
+      .from('dm_send_log')
+      .select('id, account_id, cast_name, user_name')
+      .eq('status', 'cancelled')
+      .like('error', '[COOLDOWN_WAIT]%')
+      .limit(100);
+
+    if (!waitTasks || waitTasks.length === 0) return;
+
+    let requeued = 0;
+    for (const t of waitTasks) {
+      const stillOnCooldown = await isUserOnCooldown(sb, t.account_id, t.cast_name, t.user_name);
+      if (!stillOnCooldown) {
+        await sb.from('dm_send_log').update({ status: 'queued', error: null }).eq('id', t.id);
+        requeued++;
+      }
+    }
+
+    if (requeued > 0) {
+      log('info', `cooldown_wait → queued リキュー: ${requeued}件`, { total: waitTasks.length });
+    }
+  } catch (err) {
+    log('warn', `cooldown requeue エラー: ${err}`);
+  }
+}
+
+// ============================================================
 // Polling loop
 // ============================================================
 
@@ -309,6 +367,9 @@ async function pollLoop(): Promise<void> {
 
   while (running) {
     cycleCount++;
+
+    // cooldown_wait タスクのリキューチェック（5分ごと）
+    await requeueExpiredCooldowns();
 
     try {
       const accounts = await getTargetAccounts();
