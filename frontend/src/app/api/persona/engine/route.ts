@@ -630,82 +630,71 @@ async function collect5AxisData(
     const concentration = totalTokens > 0 ? ((top3Tokens / totalTokens) * 100).toFixed(1) : '0';
     const allTipperNames = allTippers.map(t => t.username);
 
-    // ── 新規判定: coin_transactions全履歴ベース（paid_usersは使わない） ──
-    // このキャストのcoin_transactionsにセッション開始前のレコードが1件もない = 新規
-    //
-    // 重要: 全履歴クエリは数千行超になりSupabaseの1000行制限で切り捨てられる。
-    // → ユーザー単位で並列クエリ（各ユーザー: 存在チェック + 初回日 + 最終日 + 件数）
+    // ── 新規判定: coin_transactions全履歴ベース（1クエリでバッチ集計） ──
     interface TipperHistory {
       username: string;
       historyTxCount: number;
       historyTokens: number;
       firstTipDate: string;
-      lastTipDate: string;   // 復帰ユーザー判定用
+      lastTipDate: string;
     }
 
     let trueNewTippers: string[] = [];
     let returningTippers: TipperHistory[] = [];
 
     if (allTipperNames.length > 0) {
-      // 全チッパーの履歴を並列取得（各ユーザー3クエリ: 最古日/最新日/件数+累計tk）
       const historyMap = new Map<string, TipperHistory>();
 
-      const historyChecks = allTipperNames.map(async (name) => {
-        // 存在チェック兼最古のチップ日（セッション開始前のみ）
-        const { data: oldest } = await sb
+      // 全チッパーのセッション前履歴を1クエリで取得（user_name, date, tokens）
+      // Supabase 1000行制限→バッチで取得
+      const HISTORY_BATCH = 50;
+      for (let bi = 0; bi < allTipperNames.length; bi += HISTORY_BATCH) {
+        const batch = allTipperNames.slice(bi, bi + HISTORY_BATCH);
+        const { data: histRows } = await sb
           .from('coin_transactions')
-          .select('date')
+          .select('user_name, date, tokens')
           .eq('account_id', accountId)
           .eq('cast_name', castName)
-          .eq('user_name', name)
-          .lt('date', sessionStartISO)
+          .in('user_name', batch)
           .gt('tokens', 0)
           .order('date', { ascending: true })
-          .limit(1);
+          .limit(5000);
 
-        if (!oldest || oldest.length === 0) return; // 新規
+        // JS側でGROUP BY: user_name別にmin(date), max(date), count, sum(tokens)
+        const batchMap = new Map<string, { oldest: string; newest: string; count: number; totalTk: number }>();
+        for (const row of histRows || []) {
+          const name = row.user_name as string;
+          const dateStr = row.date as string;
+          const tk = (row.tokens as number) || 0;
+          const existing = batchMap.get(name);
+          if (existing) {
+            if (dateStr < existing.oldest) existing.oldest = dateStr;
+            if (dateStr > existing.newest) existing.newest = dateStr;
+            existing.count++;
+            existing.totalTk += tk;
+          } else {
+            batchMap.set(name, { oldest: dateStr, newest: dateStr, count: 1, totalTk: tk });
+          }
+        }
 
-        // 最新のチップ日（セッション開始前で最も新しい）
-        const { data: newest } = await sb
-          .from('coin_transactions')
-          .select('date')
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .eq('user_name', name)
-          .lt('date', sessionStartISO)
-          .gt('tokens', 0)
-          .order('date', { ascending: false })
-          .limit(1);
-
-        // 件数
-        const { count } = await sb
-          .from('coin_transactions')
-          .select('id', { count: 'exact', head: true })
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .eq('user_name', name)
-          .gt('tokens', 0);
-
-        // 累計tk（limit明示で1000行制限回避）
-        const { data: tkRows } = await sb
-          .from('coin_transactions')
-          .select('tokens')
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .eq('user_name', name)
-          .gt('tokens', 0)
-          .limit(10000);
-        const totalTk = (tkRows || []).reduce((s, r) => s + (r.tokens || 0), 0);
-
-        historyMap.set(name, {
-          username: name,
-          historyTxCount: count || 0,
-          historyTokens: totalTk,
-          firstTipDate: oldest[0].date as string,
-          lastTipDate: (newest?.[0]?.date as string) || oldest[0].date as string,
-        });
-      });
-      await Promise.all(historyChecks);
+        // セッション開始前にレコードがある人のみhistoryMapに追加
+        for (const [name, data] of Array.from(batchMap.entries())) {
+          // セッション開始前の最古・最新を再計算
+          const preSessionRows = (histRows || []).filter(
+            r => r.user_name === name && (r.date as string) < sessionStartISO
+          );
+          if (preSessionRows.length > 0) {
+            const preDates = preSessionRows.map(r => r.date as string).sort();
+            historyMap.set(name, {
+              username: name,
+              historyTxCount: data.count,
+              historyTokens: data.totalTk,
+              firstTipDate: preDates[0],
+              lastTipDate: preDates[preDates.length - 1],
+            });
+          }
+        }
+      }
 
       trueNewTippers = allTipperNames.filter(n => !historyMap.has(n));
       returningTippers = allTipperNames
@@ -1912,95 +1901,46 @@ ${preWarmedUsers.join('\n') || '(なし)'}
       const crossParts: string[] = [];
 
       // ── #9 自社ファンの他社出現 ──
-      // 自社のチッパー（今回+リピーター）が他社キャストのchat_logsに出現しているか
       if (allTipperNames.length > 0) {
-        // 自社ファン名リスト（全チッパー + 過去のリピーター）
         const fanNames = Array.from(new Set([...allTipperNames, ...returningTippers.map(r => r.username)]));
 
-        // chat_logsで自社以外のcast_nameに出現するファンを検索
-        // バッチで50人ずつ処理（IN句のサイズ制限回避）
         const crossAppearances: Array<{
           username: string; otherCast: string; lastSeen: string; msgCount: number;
         }> = [];
 
-        const BATCH_SIZE = 50;
-        for (let bi = 0; bi < fanNames.length; bi += BATCH_SIZE) {
-          const batch = fanNames.slice(bi, bi + BATCH_SIZE);
-          const { data: crossRows } = await sb
-            .from('chat_logs')
+        // chat_logs + spy_messages を並列で1クエリずつ（フォールバック不要、両方取得）
+        const [chatCrossResult, spyCrossResult] = await Promise.all([
+          sb.from('chat_logs')
             .select('username, cast_name, timestamp')
-            .in('username', batch)
+            .in('username', fanNames.slice(0, 200))
             .neq('cast_name', castName)
             .order('timestamp', { ascending: false })
-            .limit(500);
+            .limit(500),
+          sb.from('spy_messages')
+            .select('user_name, cast_name, message_time')
+            .in('user_name', fanNames.slice(0, 200))
+            .neq('cast_name', castName)
+            .eq('msg_type', 'chat')
+            .order('message_time', { ascending: false })
+            .limit(500),
+        ]);
 
-          if (crossRows && crossRows.length > 0) {
-            // ユーザー×キャスト別に集計
-            const crossMap = new Map<string, { otherCast: string; lastSeen: string; count: number }>();
-            for (const row of crossRows) {
-              const key = `${row.username}__${row.cast_name}`;
-              const existing = crossMap.get(key);
-              if (existing) {
-                existing.count++;
-              } else {
-                crossMap.set(key, {
-                  otherCast: row.cast_name,
-                  lastSeen: (row.timestamp as string).slice(0, 16),
-                  count: 1,
-                });
-              }
-            }
-            for (const [key, data] of Array.from(crossMap.entries())) {
-              const username = key.split('__')[0];
-              crossAppearances.push({
-                username,
-                otherCast: data.otherCast,
-                lastSeen: data.lastSeen,
-                msgCount: data.count,
-              });
-            }
-          }
+        // 両ソースを統合集計
+        const crossMap = new Map<string, { otherCast: string; lastSeen: string; count: number }>();
+        for (const row of chatCrossResult.data || []) {
+          const key = `${row.username}__${row.cast_name}`;
+          const existing = crossMap.get(key);
+          if (existing) { existing.count++; }
+          else { crossMap.set(key, { otherCast: row.cast_name, lastSeen: (row.timestamp as string).slice(0, 16), count: 1 }); }
         }
-
-        // spy_messagesでもフォールバック検索（chat_logsにデータがない場合）
-        if (crossAppearances.length === 0) {
-          for (let bi = 0; bi < fanNames.length; bi += BATCH_SIZE) {
-            const batch = fanNames.slice(bi, bi + BATCH_SIZE);
-            const { data: spyCrossRows } = await sb
-              .from('spy_messages')
-              .select('user_name, cast_name, message_time')
-              .in('user_name', batch)
-              .neq('cast_name', castName)
-              .eq('msg_type', 'chat')
-              .order('message_time', { ascending: false })
-              .limit(500);
-
-            if (spyCrossRows && spyCrossRows.length > 0) {
-              const crossMap = new Map<string, { otherCast: string; lastSeen: string; count: number }>();
-              for (const row of spyCrossRows) {
-                const key = `${row.user_name}__${row.cast_name}`;
-                const existing = crossMap.get(key);
-                if (existing) {
-                  existing.count++;
-                } else {
-                  crossMap.set(key, {
-                    otherCast: row.cast_name,
-                    lastSeen: (row.message_time as string).slice(0, 16),
-                    count: 1,
-                  });
-                }
-              }
-              for (const [key, data] of Array.from(crossMap.entries())) {
-                const username = key.split('__')[0];
-                crossAppearances.push({
-                  username,
-                  otherCast: data.otherCast,
-                  lastSeen: data.lastSeen,
-                  msgCount: data.count,
-                });
-              }
-            }
-          }
+        for (const row of spyCrossResult.data || []) {
+          const key = `${row.user_name}__${row.cast_name}`;
+          const existing = crossMap.get(key);
+          if (existing) { existing.count++; }
+          else { crossMap.set(key, { otherCast: row.cast_name, lastSeen: (row.message_time as string).slice(0, 16), count: 1 }); }
+        }
+        for (const [key, data] of Array.from(crossMap.entries())) {
+          crossAppearances.push({ username: key.split('__')[0], otherCast: data.otherCast, lastSeen: data.lastSeen, msgCount: data.count });
         }
 
         if (crossAppearances.length > 0) {
@@ -2232,7 +2172,7 @@ export async function POST(req: NextRequest) {
     const userPrompt = buildUserPrompt(task_type, effectiveContext);
 
     // ── API 呼び出し（fb_report は長い出力が必要） ──
-    const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 8000 : 1000;
+    const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 4000 : 1000;
     const result = await callClaude(systemPrompt, userPrompt, maxTokens);
 
     // ── レスポンス処理（fb_report はMarkdown、それ以外はJSON） ──
