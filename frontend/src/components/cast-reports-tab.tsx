@@ -82,6 +82,7 @@ interface DailyBriefingMetrics {
 interface CastKnowledgeRecord {
   id: string;
   report_type: 'post_session' | 'daily_briefing' | 'weekly_review' | 'session_report';
+  knowledge_type?: string | null;
   period_start: string;
   period_end: string | null;
   metrics_json: PostSessionMetrics | DailyBriefingMetrics;
@@ -382,7 +383,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
   , [records]);
 
   const sessionReports = useMemo(() =>
-    records.filter(r => r.report_type === 'post_session')
+    records.filter(r => r.report_type === 'post_session' && !r.knowledge_type)
   , [records]);
 
   const aiAnalysisReports = useMemo(() =>
