@@ -218,15 +218,15 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       const step1Data = await step1Res.json();
       console.log(`[fb-report][Step1] データ収集完了: ${step1Data.collect_time_ms}ms`);
 
-      // ── Step 2a + 2b: 分析エンジン + ユーザー分類エンジン（並列実行） ──
-      setAiLoadingMessage('AIが分析中...（1/2）');
+      // ── Step 2a + 2b + 2c + 2d: 4エンジン並列実行 ──
+      setAiLoadingMessage('AIが分析中...（3エンジン並列）');
 
-      // Step 2c: DM施策エンジン（LLM不要、即時生成）
+      // Step 2d: DM施策エンジン（LLM不要、即時生成）
       const { generateDMReport } = await import('@/lib/dm-report-generator');
       const dmReport = generateDMReport(step1Data.dm_data);
 
-      // Step 2a + 2b を並列実行
-      const [step2aRes, step2bRes] = await Promise.all([
+      // Step 2a + 2b + 2c を並列実行
+      const [step2aRes, step2bRes, step2cRes] = await Promise.all([
         fetch('/api/persona/engine', {
           method: 'POST',
           headers,
@@ -242,25 +242,36 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
           method: 'POST',
           headers,
           body: JSON.stringify({
-            task_type: 'fb_report_users',
+            task_type: 'fb_report_new_users',
             cast_name: castName,
             account_id: accountId,
             context: {},
-            user_prompt: step1Data.users_prompt,
+            user_prompt: step1Data.new_users_prompt,
+          }),
+        }),
+        fetch('/api/persona/engine', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            task_type: 'fb_report_repeaters',
+            cast_name: castName,
+            account_id: accountId,
+            context: {},
+            user_prompt: step1Data.repeaters_prompt,
           }),
         }),
       ]);
 
       // エラーチェック
-      for (const [label, res] of [['Step2a', step2aRes], ['Step2b', step2bRes]] as const) {
+      for (const [label, res] of [['分析', step2aRes], ['新規', step2bRes], ['リピーター', step2cRes]] as const) {
         if (!res.ok) {
           const errText = await res.text();
           console.error(`[fb-report][${label}] HTTP`, res.status, errText);
           try {
             const errJson = JSON.parse(errText);
-            setAiError(errJson.error || `HTTP ${res.status}`);
+            setAiError(`${label}エンジンエラー: ${errJson.error || `HTTP ${res.status}`}`);
           } catch {
-            setAiError(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+            setAiError(`${label}エンジンエラー: HTTP ${res.status}`);
           }
           return;
         }
@@ -270,12 +281,15 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
 
       const step2aData = await step2aRes.json();
       const step2bData = await step2bRes.json();
+      const step2cData = await step2cRes.json();
 
-      // ── Step 3: 3つのレポートを結合 ──
+      // ── Step 3: 4つのレポートを結合 ──
       const fullReport = [
         step2aData.output,
         '\n\n---\n\n',
         step2bData.output,
+        '\n\n---\n\n',
+        step2cData.output,
         '\n\n---\n\n',
         dmReport,
       ].join('');
@@ -283,8 +297,8 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       setFbReportMarkdown(fullReport);
 
       // コスト合算
-      const totalTokens = (step2aData.cost_tokens || 0) + (step2bData.cost_tokens || 0);
-      const totalUsd = (step2aData.cost_usd || 0) + (step2bData.cost_usd || 0);
+      const totalTokens = (step2aData.cost_tokens || 0) + (step2bData.cost_tokens || 0) + (step2cData.cost_tokens || 0);
+      const totalUsd = (step2aData.cost_usd || 0) + (step2bData.cost_usd || 0) + (step2cData.cost_usd || 0);
 
       // ── Step 4: cast_knowledge に保存（バックグラウンド） ──
       fetch('/api/analysis/run-fb-report', {

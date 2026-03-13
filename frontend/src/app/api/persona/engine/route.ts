@@ -19,7 +19,7 @@ const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || '').replace(/[\s\r\n
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-type EngineTaskType = 'dm' | 'x_post' | 'recruitment' | 'content' | 'fb_report' | 'fb_report_analysis' | 'fb_report_users';
+type EngineTaskType = 'dm' | 'x_post' | 'recruitment' | 'content' | 'fb_report' | 'fb_report_analysis' | 'fb_report_new_users' | 'fb_report_repeaters';
 
 interface EngineRequest {
   task_type: EngineTaskType;
@@ -445,10 +445,10 @@ ${summaryJson}
 - 改善提案は「次の配信で」実行可能な具体策のみ`;
     }
 
-    case 'fb_report_users': {
-      const userDataJson = context.user_classification as string || '{}';
+    case 'fb_report_new_users': {
+      const newUserData = context.new_users_data as string || '';
       const castDisplayName = context.cast_display_name as string || context.cast_name as string || '';
-      return `# 配信FBレポート — ユーザー分類エンジン
+      return `# 配信FBレポート — 新規チッパー分析エンジン
 
 キャスト名: ${castDisplayName}
 
@@ -457,21 +457,51 @@ ${summaryJson}
 - ユーザーリストは全員そのまま転記すること。1人も省略するな。
 - [事実] タグ付きの数値は検証済み。
 
-## ユーザー分類データ
-${userDataJson}
+## 新規チッパーデータ
+${newUserData}
 
 ## 分析指示
 以下のセクションをMarkdownで出力してください:
-1. 🆕 新規チッパー分析 — 心理傾向（なぜ初めてチップしたのか）、高額新規は特に注目
-2. 🔄 リピーター分析 — 課金エスカレーションの心理変化、サンクコスト効果の活用提案
-3. 🔙 復帰ユーザー分析 — 復帰心理、きっかけ分析、復帰を促すDM文面提案
-4. ⚠️ 離脱リスク評価 — 課金減少ユーザーの心理分析、フォロー施策
-5. 全ユーザーリスト転記 — 新規/リピーター/復帰の全ユーザー名・tk・回数をそのまま転記
+1. 🆕 新規チッパー全体分析 — 人数・合計tk・平均tk・初回課金傾向
+2. 💎 高額新規ユーザー分析 — 150tk以上の新規は何がきっかけで高額課金したか推測
+3. 初回課金心理 — なぜ初めてチップしたのか（社会的証明、衝動、ticketshow参加）
+4. 定着課題 — 新規→リピーターへの転換率改善提案
+5. 初回フォロー提案 — 新規ユーザーへのDM文面案（感謝+次回来訪誘導）
+6. 全新規チッパーリスト転記 — 全員のユーザー名・tk・回数をそのまま転記
 
-- 心理分析にはサンクコスト効果、社会的証明、コミットメント一貫性の視点を含めること
+- 心理分析には社会的証明、コミットメント一貫性の視点を含めること
+- 高額新規（150tk以上）はVIP候補として特別DM提案すること
+- 抽象的な提案禁止。具体的なDM文面例を含めること`;
+    }
+
+    case 'fb_report_repeaters': {
+      const repeaterData = context.repeater_data as string || '';
+      const castDisplayName = context.cast_display_name as string || context.cast_name as string || '';
+      return `# 配信FBレポート — リピーター・復帰ユーザー分析エンジン
+
+キャスト名: ${castDisplayName}
+
+## データソースについて（絶対遵守）
+以下のデータはSQL + ルールベースで収集した構造化データです。
+- ユーザーリストは全員そのまま転記すること。1人も省略するな。
+- [事実] タグ付きの数値は検証済み。
+
+## リピーター・復帰ユーザーデータ
+${repeaterData}
+
+## 分析指示
+以下のセクションをMarkdownで出力してください:
+1. 🔄 リピーター分析 — 課金エスカレーションの心理変化、継続理由
+2. 📈 課金増加ユーザー — サンクコスト効果の活用、感謝DM文面案
+3. 📉 課金減少ユーザー — 離脱リスク評価、フォローDM文面案
+4. 🔙 復帰ユーザー分析 — 復帰心理、きっかけ分析、復帰を促すDM文面提案
+5. ⚠️ 離脱リスク評価 — 🚩離脱警告ユーザーを赤旗付きで最も目立つ形で表示
+6. 全リピーター・復帰ユーザーリスト転記 — 全員のユーザー名・tk・回数・履歴をそのまま転記
+
+- 心理分析にはサンクコスト効果、コミットメント一貫性、返報性の視点を含めること
 - 🚩離脱警告ユーザーは赤旗付きで最も目立つ形で表示すること
 - 課金減少ユーザーにはフォローDM、課金増加ユーザーには感謝DMの文面案を提案すること
-- 高額新規（150tk以上）はVIP候補として特別DM提案すること`;
+- 抽象的な提案禁止。具体的なDM文面例を含めること`;
     }
 
     default:
@@ -2179,10 +2209,10 @@ export async function POST(req: NextRequest) {
   if (!task_type || !cast_name) {
     return NextResponse.json({ error: 'task_type と cast_name は必須です' }, { status: 400 });
   }
-  const FB_REPORT_TYPES = ['fb_report', 'fb_report_analysis', 'fb_report_users'] as const;
+  const FB_REPORT_TYPES = ['fb_report', 'fb_report_analysis', 'fb_report_new_users', 'fb_report_repeaters'] as const;
   if (!ENGINE_LAYER_C[task_type] && !FB_REPORT_TYPES.includes(task_type as typeof FB_REPORT_TYPES[number])) {
     return NextResponse.json(
-      { error: `未対応のtask_type: ${task_type}。対応: dm, x_post, recruitment, content, fb_report, fb_report_analysis, fb_report_users` },
+      { error: `未対応のtask_type: ${task_type}。対応: dm, x_post, recruitment, content, fb_report, fb_report_analysis, fb_report_new_users, fb_report_repeaters` },
       { status: 400 },
     );
   }
@@ -2250,22 +2280,38 @@ export async function POST(req: NextRequest) {
         dynamicLayerC = agents.length > 0
           ? buildFbReportLayerC(agents) + '\n\n## 注意: このエンジンはデータ分析専用です。ユーザーリストの全件転記は不要です。集計数字に基づく分析・提案のみ出力してください。'
           : '配信データの分析レポートを生成してください。Markdown形式で出力。';
-      } else if (task_type === 'fb_report_users') {
-        // ユーザー分類エンジン用: ファン心理分析専用
-        dynamicLayerC = `=== ユーザー分類・心理分析エンジン ===
+      } else if (task_type === 'fb_report_new_users') {
+        // 新規チッパー分析エンジン用
+        dynamicLayerC = `=== 新規チッパー心理分析エンジン ===
 
-あなたはライブ配信のファン心理分析専門家です。
-以下の心理学的フレームワークを使って分析してください:
+あなたはライブ配信の新規ユーザー獲得・定着の専門家です。
+以下の心理学的フレームワークで新規チッパーを分析してください:
+
+1. 社会的証明 — 他のファンの行動が新規ファンの初回課金を後押しする
+2. コミットメント一貫性 — 初回課金が2回目以降の課金を促す。最初の一歩が重要
+3. 返報性 — キャストからの個別対応（DM等）が初回課金者の定着を促進する
+4. 希少性 — ticketshow等の限定体験が初回課金のきっかけになる
+
+## 出力ルール
+- ユーザーリストは全員のユーザー名・数値をそのまま転記すること。1人も省略するな
+- 心理分析は具体的に（×「初回課金が多い」→ ○「67人中15人がticketshow経由で初課金、社会的証明効果が強い」）
+- Markdown形式で出力`;
+      } else if (task_type === 'fb_report_repeaters') {
+        // リピーター・復帰ユーザー分析エンジン用
+        dynamicLayerC = `=== リピーター・復帰ユーザー心理分析エンジン ===
+
+あなたはライブ配信の継続ファン・離脱防止の専門家です。
+以下の心理学的フレームワークでリピーター・復帰ユーザーを分析してください:
 
 1. サンクコスト効果 — 累計課金額が大きいほど離脱しにくい。この効果が薄れるサインを見つけること
-2. 社会的証明 — 他のファンの行動が新規ファンの行動を促進する。高額チッパーの存在が持つ影響
-3. コミットメント一貫性 — 一度課金したユーザーは継続する傾向がある。2回目課金への導線が重要
-4. 返報性 — キャストからの個別対応（DM等）が課金を促進する
-5. 希少性 — ticketshow等の限定体験が課金を加速する
+2. コミットメント一貫性 — 継続課金のパターンが崩れる時が離脱の兆候
+3. 返報性 — キャストからの個別対応（DM等）が継続を強化する
+4. 希少性 — ticketshow告知が復帰きっかけになりうる
 
 ## 出力ルール
 - ユーザーリストは全員のユーザー名・数値をそのまま転記すること。1人も省略するな
 - 心理分析は具体的に（×「関係性が深い」→ ○「累計3159tk・11回参加でサンクコスト効果が強く働いている」）
+- 🚩離脱警告は最も目立つ形で表示すること
 - Markdown形式で出力`;
       } else {
         dynamicLayerC = agents.length > 0
@@ -2282,8 +2328,10 @@ export async function POST(req: NextRequest) {
       ? `=== あなたの役割 ===\nライブ配信エージェンシーの採用マーケター。\n温かく、共感的で、押しつけがましくない。\n「この人なら相談できそう」と思わせるトーン。`
       : task_type === 'fb_report' || task_type === 'fb_report_analysis'
       ? `=== あなたの役割 ===\nライブ配信の配信FBレポートを生成する4人のエージェントチーム。\nキャスト「${activePersona.display_name || cast_name}」の配信データを分析し、具体的な改善策を提案する。`
-      : task_type === 'fb_report_users'
-      ? `=== あなたの役割 ===\nライブ配信のファン心理分析専門家。\nキャスト「${activePersona.display_name || cast_name}」のファン一人一人の行動パターンを分析し、最適なDM施策を提案する。`
+      : task_type === 'fb_report_new_users'
+      ? `=== あなたの役割 ===\nライブ配信の新規ユーザー獲得・定着の専門家。\nキャスト「${activePersona.display_name || cast_name}」の新規チッパーの行動パターンを分析し、定着施策を提案する。`
+      : task_type === 'fb_report_repeaters'
+      ? `=== あなたの役割 ===\nライブ配信の継続ファン・離脱防止の専門家。\nキャスト「${activePersona.display_name || cast_name}」のリピーター・復帰ユーザーの心理変化を分析し、離脱防止施策を提案する。`
       : buildLayerB(activePersona, detail);
 
     // ── System Prompt 組み立て: Layer A + B + RAG + Feedback + Context + C ──
@@ -2307,8 +2355,8 @@ export async function POST(req: NextRequest) {
     if (task_type === 'fb_report' && prebuiltUserPrompt) {
       // 2リクエスト分離: Step2 — フロントから渡されたプロンプトをそのまま使用
       userPrompt = prebuiltUserPrompt;
-    } else if (task_type === 'fb_report_analysis' || task_type === 'fb_report_users') {
-      // 3エンジン分離: フロントから渡されたuser_promptをそのまま使用
+    } else if (task_type === 'fb_report_analysis' || task_type === 'fb_report_new_users' || task_type === 'fb_report_repeaters') {
+      // 4エンジン分離: フロントから渡されたuser_promptをそのまま使用
       userPrompt = prebuiltUserPrompt || buildUserPrompt(task_type, context || {});
     } else {
       const effectiveContext = task_type === 'fb_report'

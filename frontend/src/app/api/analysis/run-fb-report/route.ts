@@ -1,10 +1,11 @@
 /**
  * POST /api/analysis/run-fb-report
- * 配信FBレポート — 3エンジン分割アーキテクチャ
+ * 配信FBレポート — 4エンジン分割アーキテクチャ
  *
- * Step 1 (デフォルト): collect5AxisData でデータ収集 → 3ブロック分割で返却
+ * Step 1 (デフォルト): collect5AxisData でデータ収集 → 4ブロック分割で返却
  *   - analysis_prompt: 分析エンジン用（集計数字のみ、軽量）
- *   - users_prompt: ユーザー分類エンジン用（ユーザー別取引情報）
+ *   - new_users_prompt: 新規チッパー分析エンジン用
+ *   - repeaters_prompt: リピーター・復帰ユーザー分析エンジン用
  *   - dm_data: DM施策エンジン用（LLM不要、JSテンプレート用の構造化データ）
  * Step 'save': レポート結果を cast_knowledge に保存
  */
@@ -20,9 +21,10 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 /**
- * FiveAxisDataを3エンジン用に分割する
+ * FiveAxisDataを4エンジン用に分割する
  * - analysis: 集計数字のみ（軸2-5, 8-10の数値サマリ）
- * - users: ユーザー別取引情報（軸1のリスト, 軸7のユーザー行動）
+ * - newUsers: 新規チッパー関連データ（軸1の新規セクション）
+ * - repeaters: リピーター+復帰ユーザー関連データ（軸1のリピーター+軸7のエスカレーション）
  * - dm: DM施策用構造化データ（軸1のリスト, 軸6全体）
  */
 function splitFiveAxisData(fiveAxis: FiveAxisData, castName: string) {
@@ -51,24 +53,61 @@ ${fiveAxis.realtimeMetrics || 'データなし'}
 ${fiveAxis.crossCompetitor || 'データなし'}`,
   });
 
-  // --- Step 2b: ユーザー分類エンジン用（ユーザー別詳細） ---
-  const usersPrompt = buildUserPrompt('fb_report_users', {
-    cast_name: castName,
-    user_classification: `### チッパー構造（ユーザー別）
-${fiveAxis.tipperStructure || 'データなし'}
+  // --- tipperStructure を新規 / リピーター+復帰 に分割 ---
+  const ts = fiveAxis.tipperStructure || '';
+  const ub = fiveAxis.userBehavior || '';
 
-### ユーザー行動パターン
-${fiveAxis.userBehavior || 'データなし'}`,
+  // 新規チッパーセクション抽出
+  const newTipperSection = ts.match(/## 新規チッパー[\s\S]*?(?=## リピーター|## 復帰|## 🚩|## DM|$)/)?.[0] || '';
+  const highValueSection = ts.match(/## 高額新規[\s\S]*?(?=## リピーター|## 復帰|## 🚩|## DM|$)/)?.[0] || '';
+  // セッション概要（冒頭の集計情報）は両方に渡す
+  const summarySection = ts.match(/^[\s\S]*?(?=## 新規|## リピーター)/)?.[0] || '';
+
+  // リピーター・復帰・離脱警告セクション抽出
+  const repeaterSection = ts.match(/## リピーター[\s\S]*?(?=## 復帰|## 🚩|## DM|## 高額新規|$)/)?.[0] || '';
+  const returnSection = ts.match(/## 復帰ユーザー[\s\S]*?(?=## 🚩|## DM|$)/)?.[0] || '';
+  const churnSection = ts.match(/🚩 離脱警告[\s\S]*?(?=## DM|$)/)?.[0] || '';
+  const prioritySection = ts.match(/🔴 優先度[\s\S]*$/)?.[0] || '';
+
+  // ユーザー行動パターンから課金エスカレーション・リテンション抽出
+  const escSection = ub.match(/## #3 課金エスカレーション[\s\S]*?(?=## #4|$)/)?.[0] || '';
+  const retentionSection = ub.match(/## #1 セッション間リテンション[\s\S]*?(?=## #2|$)/)?.[0] || '';
+  const intervalSection = ub.match(/## #2 来訪間隔パターン[\s\S]*?(?=## #3|$)/)?.[0] || '';
+  const typeSection = ub.match(/## #4 課金タイプ変遷[\s\S]*$/)?.[0] || '';
+  // #5新規獲得率は新規エンジンに渡す
+  const newAcqSection = ub.match(/## #5 セッション別新規獲得率[\s\S]*?(?=## #6|$)/)?.[0] || '';
+
+  // --- Step 2b: 新規チッパー分析エンジン用 ---
+  const newUsersPrompt = buildUserPrompt('fb_report_new_users', {
+    cast_name: castName,
+    new_users_data: `${summarySection}
+${newTipperSection}
+${highValueSection}
+${newAcqSection}`.trim(),
   });
 
-  // --- Step 2c: DM施策エンジン用（構造化データ） ---
+  // --- Step 2c: リピーター・復帰ユーザー分析エンジン用 ---
+  const repeatersPrompt = buildUserPrompt('fb_report_repeaters', {
+    cast_name: castName,
+    repeater_data: `${summarySection}
+${repeaterSection}
+${returnSection}
+${churnSection}
+${prioritySection}
+${escSection}
+${retentionSection}
+${intervalSection}
+${typeSection}`.trim(),
+  });
+
+  // --- Step 2d: DM施策エンジン用（構造化データ） ---
   const dmData = extractDMData({
     tipperStructure: fiveAxis.tipperStructure || '',
     dmActionLists: fiveAxis.dmActionLists || '',
     userBehavior: fiveAxis.userBehavior || '',
   });
 
-  return { analysisPrompt, usersPrompt, dmData };
+  return { analysisPrompt, newUsersPrompt, repeatersPrompt, dmData };
 }
 
 export async function POST(request: NextRequest) {
@@ -132,14 +171,15 @@ export async function POST(request: NextRequest) {
     const t1 = Date.now();
     console.log(`[run-fb-report][Step1] collect5AxisData: ${t1 - t0}ms`);
 
-    // 3エンジン用にデータ分割
-    const { analysisPrompt, usersPrompt, dmData } = splitFiveAxisData(fiveAxisData, cast_name);
-    console.log(`[run-fb-report][Step1] analysis_prompt: ${analysisPrompt.length} chars, users_prompt: ${usersPrompt.length} chars`);
+    // 4エンジン用にデータ分割
+    const { analysisPrompt, newUsersPrompt, repeatersPrompt, dmData } = splitFiveAxisData(fiveAxisData, cast_name);
+    console.log(`[run-fb-report][Step1] analysis: ${analysisPrompt.length} chars, new_users: ${newUsersPrompt.length} chars, repeaters: ${repeatersPrompt.length} chars`);
 
     return NextResponse.json({
       status: 'data_ready',
       analysis_prompt: analysisPrompt,
-      users_prompt: usersPrompt,
+      new_users_prompt: newUsersPrompt,
+      repeaters_prompt: repeatersPrompt,
       dm_data: dmData,
       cast_name,
       account_id,
