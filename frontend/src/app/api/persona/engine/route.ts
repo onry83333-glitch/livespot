@@ -2250,8 +2250,90 @@ ${goalSummaryLines.join('\n')}
 // ============================================================
 // Layer A 選択
 // ============================================================
+
+/** cast_knowledge から marketer_persona_source テキストを取得 */
+async function fetchMarketerPersonaSources(token: string): Promise<string | null> {
+  try {
+    const sb = getAuthClient(token);
+    // monthly (最新3件) + method (2件) + experience/ふみ (1件) = 最大6件
+    const [monthlyRes, methodRes, fumiRes] = await Promise.all([
+      sb.from('cast_knowledge')
+        .select('insights_json, metrics_json')
+        .eq('knowledge_type', 'marketer_persona_source')
+        .eq('report_type', 'post_session')
+        .filter('metrics_json->>category', 'eq', 'monthly')
+        .filter('metrics_json->>author', 'eq', '安藤')
+        .order('period_start', { ascending: false })
+        .limit(3),
+      sb.from('cast_knowledge')
+        .select('insights_json, metrics_json')
+        .eq('knowledge_type', 'marketer_persona_source')
+        .eq('report_type', 'post_session')
+        .filter('metrics_json->>category', 'eq', 'method')
+        .filter('metrics_json->>author', 'eq', '安藤')
+        .order('period_start', { ascending: false })
+        .limit(2),
+      sb.from('cast_knowledge')
+        .select('insights_json, metrics_json')
+        .eq('knowledge_type', 'marketer_persona_source')
+        .eq('report_type', 'post_session')
+        .filter('metrics_json->>author', 'eq', 'ふみ')
+        .order('period_start', { ascending: false })
+        .limit(1),
+    ]);
+
+    const allRows = [
+      ...(monthlyRes.data || []),
+      ...(methodRes.data || []),
+      ...(fumiRes.data || []),
+    ];
+    if (allRows.length === 0) return null;
+
+    const sections: string[] = [];
+    for (const row of allRows) {
+      const meta = row.metrics_json as { author?: string; category?: string; source_file?: string };
+      const content = (row.insights_json as { content?: string })?.content;
+      if (!content) continue;
+      const label = meta.author === 'ふみ'
+        ? `【ふみの体験記】${meta.source_file || ''}`
+        : `【安藤/${meta.category || ''}】${meta.source_file || ''}`;
+      // 1件あたり最大8000文字に制限（6件×8000=48000文字以内）
+      sections.push(`--- ${label} ---\n${content.slice(0, 8000)}`);
+    }
+    return sections.join('\n\n');
+  } catch (e) {
+    console.error('[fetchMarketerPersonaSources] error:', e);
+    return null;
+  }
+}
+
+/** 安藤人格シミュレーション型 Layer A を構築 */
+function buildMarketerPersonaLayerA(sourceTexts: string): string {
+  return `あなたのチームには「安藤」というマーケターがいます。
+
+安藤は、ファンクラブ運営・ファンマーケティングの実践者です。
+以下は安藤が実際に書いた文章です。この文章に表れている考え方、価値観、物事の見方で意見を述べてください。
+
+重要なルール:
+- 「7原則」「BYAF法」「社会的証明」「サンクコスト効果」などのフレームワーク名や心理学用語を使うな
+- 安藤自身の言葉で、安藤の考え方で語れ
+- 教科書的な提案ではなく、安藤だったらどうするかを考えろ
+
+安藤の弟子に「ふみ」がいます。ふみの体験記も参照し、実践者の視点を加えてください。
+
+=== 安藤・ふみ 参照テキスト ===
+${sourceTexts}`;
+}
+
 function selectLayerA(taskType: EngineTaskType, personaBase: string | null): string {
   if (taskType === 'recruitment') return LAYER_A_PRINCESS_MARKETING;
+  return personaBase || LAYER_A_ANDO_FOUNDATION;
+}
+
+/** fb_report系用: 人格シミュレーション版 Layer A（ソース取得済みならそれを使う） */
+function selectLayerAForFbReport(marketerSources: string | null, personaBase: string | null): string {
+  if (marketerSources) return buildMarketerPersonaLayerA(marketerSources);
+  // フォールバック: 従来の安藤フレームワーク版
   return personaBase || LAYER_A_ANDO_FOUNDATION;
 }
 
@@ -2378,7 +2460,13 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Layer A 選択 ──
-    const layerA = selectLayerA(task_type, activePersona.system_prompt_base);
+    let layerA: string;
+    if (isFbReport) {
+      const marketerSources = await fetchMarketerPersonaSources(auth.token);
+      layerA = selectLayerAForFbReport(marketerSources, activePersona.system_prompt_base);
+    } else {
+      layerA = selectLayerA(task_type, activePersona.system_prompt_base);
+    }
 
     // ── Layer B: タスク別分岐 ──
     const layerB = task_type === 'recruitment'
