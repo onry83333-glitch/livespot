@@ -25,24 +25,44 @@ const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
  * Top10(今回tk上位) + エスカレーション変動率Top5 + 復帰・離脱は別途渡すので除外
  * 全員リストはStep 2d（DM施策JS）が出力する
  */
-function compressRepeatersForLLM(repeaterSection: string, escSection: string): string {
+/**
+ * セクション文字列から "## DM用" サブセクションを除去する
+ */
+function stripDMSubsections(text: string): string {
+  return text.replace(/## DM用[\s\S]*?(?=## [^D]|$)/g, '').trim();
+}
+
+/**
+ * リピーターセクションからLLM分析に必要なデータだけ抽出する
+ * - Top15（今回tk上位10 + エスカレーション変動率Top5）
+ * - リピーター全体のサマリ1行
+ * 全員リストはStep 2d（DM施策JS）が出力する
+ */
+function buildRepeaterSummaryForLLM(repeaterSection: string, escSection: string): string {
   // リピーターセクションから個別行を抽出 (numbered: "1. username: 100tk (3回) [...]")
   const lineRegex = /^\d+\.\s+(\S+):\s+(\d+)tk\s+\((\d+)回\)\s*(.*)/gm;
-  const allRepeaters: Array<{ line: string; username: string; tk: number; count: number }> = [];
+  const allRepeaters: Array<{ line: string; username: string; tk: number; count: number; meta: string }> = [];
   let m: RegExpExecArray | null;
   while ((m = lineRegex.exec(repeaterSection)) !== null) {
-    allRepeaters.push({ line: m[0], username: m[1], tk: parseInt(m[2]), count: parseInt(m[3]) });
+    allRepeaters.push({ line: m[0], username: m[1], tk: parseInt(m[2]), count: parseInt(m[3]), meta: m[4] || '' });
   }
 
   if (allRepeaters.length <= 15) {
-    // 15人以下ならそのまま返す
-    return repeaterSection + '\n\n' + escSection;
+    // 15人以下なら全員渡す + エスカレーションサマリ
+    return repeaterSection + '\n\n' + stripDMSubsections(escSection);
   }
 
-  // Top10: 今回tk上位
-  const top10 = allRepeaters.slice(0, 10); // already sorted by tk desc in original
+  // サマリ集計
+  const totalTk = allRepeaters.reduce((s, r) => s + r.tk, 0);
+  const avgTk = Math.round(totalTk / allRepeaters.length);
+  const heavy = allRepeaters.filter(r => r.tk >= 300).length;
+  const mid = allRepeaters.filter(r => r.tk >= 150 && r.tk < 300).length;
+  const light = allRepeaters.length - heavy - mid;
 
-  // エスカレーション変動率Top5: escSectionから抽出
+  // Top10: 今回tk上位
+  const top10 = allRepeaters.slice(0, 10); // already sorted by tk desc
+
+  // エスカレーション変動率Top5: escSectionから増加/減少ユーザー名を抽出
   const escNames = new Set<string>();
   const escLineRegex = /- (\S+)[\s:]+\d+\s*→\s*\d+/g;
   while ((m = escLineRegex.exec(escSection)) !== null) {
@@ -53,25 +73,62 @@ function compressRepeatersForLLM(repeaterSection: string, escSection: string): s
     .filter(r => escNames.has(r.username) && !top10Names.has(r.username))
     .slice(0, 5);
 
-  // 結合（重複排除済み）
-  const selectedNames = new Set([...top10.map(r => r.username), ...escTop5.map(r => r.username)]);
-  const selectedLines = allRepeaters
-    .filter(r => selectedNames.has(r.username))
-    .map((r, i) => `${i + 1}. ${r.username}: ${r.tk}tk (${r.count}回) ${r.line.match(/\[.*\]/)?.[0] || ''}`);
+  // エスカレーションのサマリ行だけ抽出（DM用リスト除外）
+  const escSummary = stripDMSubsections(escSection);
 
-  // ヘッダー抽出（## リピーター（123人）の行）
-  const header = repeaterSection.match(/## リピーター（\d+人）/)?.[0] || '## リピーター';
+  const formatLine = (r: typeof allRepeaters[0], i: number) => {
+    const hist = r.meta.match(/\[.*\]/)?.[0] || '';
+    return `${i + 1}. ${r.username}: ${r.tk}tk (${r.count}回) ${hist}`;
+  };
 
-  return `${header}
-[注意] LLM分析用に注目${selectedLines.length}人に圧縮。全${allRepeaters.length}人のリストはDM施策セクションに掲載。
+  return `## リピーター全体サマリ
+[事実] リピーター合計: ${allRepeaters.length}人 / ${totalTk}tk / 平均${avgTk}tk
+[事実] 重課金(300tk+): ${heavy}人 / 中課金(150-299tk): ${mid}人 / 少額(<150tk): ${light}人
+[注意] 以下は注目${top10.length + escTop5.length}人のみ。全${allRepeaters.length}人のリストはDM施策セクションに掲載。
 
-### 今回tk上位10人
-${top10.map((r, i) => `${i + 1}. ${r.username}: ${r.tk}tk (${r.count}回) ${r.line.match(/\[.*\]/)?.[0] || ''}`).join('\n')}
+### 今回tk上位${top10.length}人
+${top10.map((r, i) => formatLine(r, i)).join('\n')}
 
-### 課金変動注目5人（エスカレーション変動率Top）
-${escTop5.length > 0 ? escTop5.map((r, i) => `${i + 1}. ${r.username}: ${r.tk}tk (${r.count}回) ${r.line.match(/\[.*\]/)?.[0] || ''}`).join('\n') : '(該当なし)'}
+### 課金変動注目${escTop5.length}人
+${escTop5.length > 0 ? escTop5.map((r, i) => formatLine(r, i)).join('\n') : '(該当なし)'}
 
-${escSection}`;
+${escSummary}`;
+}
+
+/**
+ * 復帰ユーザーセクションからDM用サブセクションを除去する
+ */
+function cleanReturnSection(returnSection: string): string {
+  return stripDMSubsections(returnSection);
+}
+
+/**
+ * 離脱警告セクションをサマリ+Top5に圧縮する
+ */
+function compressChurnSection(churnSection: string): string {
+  if (!churnSection) return '';
+  // 個別行を抽出
+  const lines: Array<{ username: string; line: string }> = [];
+  const regex = /🚩\s+(\S+)[\s\S]*?(?=🚩|\n\n|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(churnSection)) !== null) {
+    lines.push({ username: m[1], line: m[0].trim() });
+  }
+  if (lines.length <= 5) return churnSection;
+  return `### 🚩 離脱警告サマリ
+[事実] 離脱警告: ${lines.length}人（累計高額→今回少額）
+[注意] 以下はTop5のみ。全${lines.length}人のリストはDM施策セクションに掲載。
+
+${lines.slice(0, 5).map(l => l.line).join('\n')}`;
+}
+
+/**
+ * 来訪間隔セクションからDM用リストを除去し、集計サマリだけ残す
+ */
+function cleanIntervalSection(intervalSection: string): string {
+  if (!intervalSection) return '';
+  // "## DM用" 以降を除去 + "毎回来る" "たまに" 等のDMリストを除去
+  return stripDMSubsections(intervalSection);
 }
 
 /**
@@ -141,19 +198,25 @@ ${newAcqSection}`.trim(),
   });
 
   // --- Step 2c: リピーター・復帰ユーザー分析エンジン用（注目ユーザーのみ） ---
-  // LLMにはTop15 + 復帰全員 + 離脱予兆全員だけ渡す（全員リストはStep 2dが出力）
-  const compressedRepeaterSection = compressRepeatersForLLM(repeaterSection, escSection);
+  // LLMにはサマリ + Top15 + 復帰(DM除外) + 離脱Top5 のみ
+  // 全員リスト・DMリストはStep 2d（JS）が出力する
+  const compressedRepeaterSection = buildRepeaterSummaryForLLM(repeaterSection, escSection);
+  const cleanedReturn = cleanReturnSection(returnSection);
+  const compressedChurn = compressChurnSection(churnSection);
+  // prioritySection は新規ユーザー用データなので除外
+  const cleanedRetention = stripDMSubsections(retentionSection);
+  const cleanedInterval = cleanIntervalSection(intervalSection);
+  const cleanedType = stripDMSubsections(typeSection);
 
   const repeatersPrompt = buildUserPrompt('fb_report_repeaters', {
     cast_name: castName,
     repeater_data: `${summarySection}
 ${compressedRepeaterSection}
-${returnSection}
-${churnSection}
-${prioritySection}
-${retentionSection}
-${intervalSection}
-${typeSection}`.trim(),
+${cleanedReturn}
+${compressedChurn}
+${cleanedRetention}
+${cleanedInterval}
+${cleanedType}`.trim(),
   });
 
   // --- Step 2d: DM施策エンジン用（構造化データ） ---
