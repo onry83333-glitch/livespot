@@ -126,11 +126,25 @@ const MAX_SPY_ROTATION_TABS = 40;       // 同時オープンタブ上限
 let screenshotIntervalCache = {};
 let screenshotLastCapture = {};         // { castName: timestamp(ms) } — 前回撮影時刻
 
+// DM API送信: 状態管理 + 安全機構
+let dmProcessing = false;
+let dmPollingTimer = null;
+let dmApiConsecutiveErrors = 0;
+let dmApiCooldownUntil = 0;
+const DM_API_MAX_CONSECUTIVE_ERRORS = 5;
+const DM_API_COOLDOWN_403 = 5 * 60 * 1000;   // 403時: 5分クールダウン
+const DM_API_COOLDOWN_429 = 10 * 60 * 1000;  // 429時: 10分クールダウン
+const DM_TEST_MODE = false;                    // true時はホワイトリスト以外をブロック
+const DM_WHITELIST = ['pojipojipoji', 'kantou1234', 'Nekomeem34'];
+
 
 
 // ============================================================
 // A.1: Service Worker Keepalive via chrome.alarms
 // ============================================================
+// ユーティリティ: Promise-based sleep
+function sleep_bg(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
 chrome.alarms.create('sessionCookieExport', { periodInMinutes: 30 }); // 30分ごと（認証cookie鮮度維持）
 chrome.alarms.create('spyAutoPatrol', { periodInMinutes: 3 });      // 3分ごとに配信開始検出
@@ -3097,7 +3111,7 @@ async function _saveCsrfToDb(csrfToken, csrfTimestamp, isRetry) {
     if (csrfTimestamp) body.csrf_timestamp = csrfTimestamp;
 
     const res = await fetch(
-      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}`,
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}&cast_name=not.is.null`,
       {
         method: 'PATCH',
         headers: {
@@ -3432,6 +3446,13 @@ async function exportSessionCookie() {
     }
     console.log('[LS-BG] SessionExport: cast_name=', sessionCastName || '(unknown)');
 
+    // cast_name未解決の場合はupsertをスキップ（cast_name=nullレコードがis_valid=trueで
+    // 書き込まれると、dm-serviceのmaybeSingle()が複数ヒットでエラーになるため）
+    if (!sessionCastName) {
+      console.warn('[LS-BG] SessionExport: cast_name未解決 — upsertスキップ（userId=' + stripchatUserId + ', username=' + stripchatUsername + '）');
+      return;
+    }
+
     // 3.6. Stripchatタブの content script 経由でuserIdを取得（最終フォールバック）
     if (!stripchatUserId) {
       try {
@@ -3591,7 +3612,8 @@ restoreBuffers().then(() => {
       // セッション同期 + Cookie書き出し: 30分ごと + 即時1回
       chrome.alarms.create('sessionSync', { periodInMinutes: 30 });
       exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync初回:', e.message));
-      console.log('[LS-BG] 初期化完了 SPY/Auth機能起動');
+      startDMPolling(); // DM送信ポーリング開始
+      console.log('[LS-BG] 初期化完了 SPY/Auth/DM機能起動');
       // SW再起動時: currentSessionIdが復元されていたらsessionsレコード存在チェック
       if (currentSessionId) {
         try {
@@ -3659,7 +3681,8 @@ restoreBuffers().then(() => {
           initSpyRotation();
           chrome.alarms.create('sessionSync', { periodInMinutes: 30 });
           exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync初回:', e.message));
-          console.log('[LS-BG] Cookie復元成功 → 全機能起動');
+          startDMPolling();
+          console.log('[LS-BG] Cookie復元成功 → 全機能起動(DM含む)');
         }
       }
     }
@@ -3704,4 +3727,657 @@ chrome.storage.onChanged.addListener((changes) => {
     console.log('[LS-BG] spy_rotation_enabled変更:', spyRotationEnabled);
   }
 });
+
+// ============================================================
+// DM API送信 — Chrome拡張から直接Stripchat APIを叩く
+// ============================================================
+
+/**
+ * DMキューからタスクを1件取得（30秒グレースピリオド付き）
+ */
+async function fetchNextDMTask() {
+  await loadAuth();
+  if (!accountId || !accessToken) return null;
+
+  const graceThreshold = new Date(Date.now() - 30 * 1000).toISOString();
+  const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+    + `?account_id=eq.${accountId}&status=eq.queued`
+    + `&created_at=lt.${encodeURIComponent(graceThreshold)}`
+    + `&order=created_at.asc&limit=1`
+    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order,cast_name`;
+
+  const res = await fetch(url, {
+    headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` },
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) return null;
+      return fetchNextDMTask();
+    }
+    return null;
+  }
+
+  const data = await res.json();
+  return (Array.isArray(data) && data.length > 0) ? data[0] : null;
+}
+
+/**
+ * DMキューからバッチ取得
+ */
+async function fetchDMBatch(limit = 50) {
+  await loadAuth();
+  if (!accountId || !accessToken) return [];
+
+  const graceThreshold = new Date(Date.now() - 30 * 1000).toISOString();
+  const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+    + `?account_id=eq.${accountId}&status=eq.queued`
+    + `&created_at=lt.${encodeURIComponent(graceThreshold)}`
+    + `&order=created_at.asc&limit=${limit}`
+    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order,cast_name`;
+
+  const res = await fetch(url, {
+    headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` },
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) return [];
+      return fetchDMBatch(limit);
+    }
+    return [];
+  }
+
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * dm_send_logのステータス更新
+ */
+async function updateDMTaskStatus(taskId, status, error, sentVia) {
+  await loadAuth();
+  if (!accessToken) return;
+
+  const body = { status };
+  if (error) body.error = typeof error === 'string' ? error.slice(0, 1000) : String(error).slice(0, 1000);
+  if (status === 'success') body.sent_at = new Date().toISOString();
+  if (sentVia) body.sent_via = sentVia;
+
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?id=eq.${taskId}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok && res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?id=eq.${taskId}`, {
+          method: 'PATCH',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify(body),
+        });
+      }
+    }
+  } catch (e) {
+    console.error('[LS-DM] ステータス更新例外:', e.message, 'taskId=', taskId);
+  }
+}
+
+/**
+ * DM送信間隔（4秒 ± 1.5秒ランダム）
+ */
+function getDMInterval() {
+  const base = 4000;
+  const jitter = (Math.random() - 0.5) * 3000;
+  return Math.max(2000, base + jitter);
+}
+
+/**
+ * タブ読み込み完了待ち
+ */
+function waitForTabComplete(tabId, timeout = 15000) {
+  return new Promise((resolve) => {
+    function onUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(true);
+      }
+    }
+    chrome.tabs.onUpdated.addListener(onUpdated);
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(false);
+    }, timeout);
+    chrome.tabs.get(tabId).then(tab => {
+      if (tab.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(true);
+      }
+    }).catch(() => resolve(false));
+  });
+}
+
+/**
+ * __logger CSRF初期化待ち
+ */
+async function waitForPageLoad(tabId, maxWait = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: () => !!window.__logger?.kibanaLogger?.api?.csrfParams?.csrfToken,
+      });
+      if (results?.[0]?.result) {
+        console.log('[LS-DM] __logger CSRF初期化完了', (Date.now() - start) + 'ms');
+        return true;
+      }
+    } catch (e) { /* skip */ }
+    await sleep_bg(500);
+  }
+  console.warn('[LS-DM] __logger CSRF初期化タイムアウト', maxWait + 'ms');
+  return false;
+}
+
+// ============================================================
+// DM安全ゲート（6層防御）
+// ============================================================
+
+/**
+ * DM送信前の安全チェック。ブロック理由を返す。nullなら安全。
+ */
+function dmSafetyCheck(task) {
+  // Gate 1: campaign必須
+  const c = task.campaign || '';
+  if (!c) return 'campaign未設定';
+
+  // Gate 2: cast_name必須
+  if (!task.cast_name) return 'cast_name未設定';
+
+  // Gate 3: テストモード + ホワイトリスト
+  if (DM_TEST_MODE && !DM_WHITELIST.includes(task.user_name)) {
+    return `TEST MODE: ${task.user_name} はホワイトリスト外`;
+  }
+
+  // Gate 4: campaign形式チェック（正規UIフロー経由か）
+  if (c !== 'TEST' && !(c.startsWith('pipe') || c.startsWith('seq') || c.startsWith('bulk') || c.includes('_sched_') || c.includes('_bulk_'))) {
+    return `不正campaign形式: ${c}`;
+  }
+
+  return null; // 安全
+}
+
+/**
+ * AMP cookieから複数ユーザーID検出ブロック
+ * 複数アカウントが同じブラウザにログイン → 誤送信リスク
+ */
+async function checkAMPMultipleUsers() {
+  try {
+    const allCookies = await chrome.cookies.getAll({ domain: 'stripchat.com' });
+    const userIds = new Set();
+    for (const c of allCookies) {
+      if (c.name.startsWith('AMP_') || c.name === 'baseAmpl') {
+        try {
+          let decoded = decodeURIComponent(atob(c.value));
+          const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
+          if (match) userIds.add(match[1]);
+        } catch { /* skip */ }
+      }
+    }
+    if (userIds.size > 1) {
+      console.error('[LS-DM] AMP cookie複数ユーザー検出:', [...userIds], '→ DM送信ブロック');
+      return true; // blocked
+    }
+  } catch { /* skip */ }
+  return false;
+}
+
+// ============================================================
+// tryDMviaAPI — ブラウザ内からStripchat APIを直接叩く
+// ============================================================
+
+async function tryDMviaAPI(task, tabId) {
+  // クールダウン中
+  if (Date.now() < dmApiCooldownUntil) {
+    const remainSec = Math.ceil((dmApiCooldownUntil - Date.now()) / 1000);
+    console.log('[LS-DM] クールダウン中 (残り', remainSec, '秒)');
+    return null;
+  }
+
+  // 連続エラー上限
+  if (dmApiConsecutiveErrors >= DM_API_MAX_CONSECUTIVE_ERRORS) {
+    console.log('[LS-DM] 連続エラー', dmApiConsecutiveErrors, '回 → 停止');
+    return null;
+  }
+
+  try {
+    // ---- 1. myUserId (AMP cookie) ----
+    let myUserId = null;
+    const allCookies = await chrome.cookies.getAll({ domain: 'stripchat.com' });
+    for (const c of allCookies) {
+      if (c.name.startsWith('AMP_')) {
+        try {
+          const decoded = decodeURIComponent(atob(c.value));
+          const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
+          if (match) { myUserId = match[1]; break; }
+        } catch { /* skip */ }
+      }
+    }
+    if (!myUserId) {
+      for (const c of allCookies) {
+        if (c.name === 'baseAmpl') {
+          try {
+            const decoded = decodeURIComponent(c.value);
+            const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
+            if (match) { myUserId = match[1]; break; }
+          } catch { /* skip */ }
+        }
+      }
+    }
+    if (!myUserId) {
+      console.warn('[LS-DM] myUserId取得失敗');
+      return null;
+    }
+
+    // ---- 1.5 キャスト身元照合 ----
+    // registered_castsのstripchat_user_idとmyUserIdが一致するか確認
+    if (task.cast_name && accountId && accessToken) {
+      try {
+        const rcRes = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(task.cast_name)}&is_active=eq.true&select=stripchat_user_id,stripchat_model_id`,
+          { headers: { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` } }
+        );
+        if (rcRes.ok) {
+          const rcRows = await rcRes.json();
+          if (rcRows.length > 0) {
+            const rc = rcRows[0];
+            const expectedId = rc.stripchat_user_id || rc.stripchat_model_id;
+            if (expectedId && String(expectedId) !== String(myUserId)) {
+              console.error('[LS-DM] CAST_IDENTITY_MISMATCH: task.cast_name=', task.cast_name, 'expected=', expectedId, 'actual=', myUserId);
+              return { success: false, error: `CAST_IDENTITY_MISMATCH: ログイン中=${myUserId}, 期待=${expectedId}` };
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[LS-DM] キャスト身元照合失敗:', e.message);
+      }
+    }
+
+    // ---- 2. targetUserId (DB解決) ----
+    let targetUserId = task.target_user_id ? String(task.target_user_id) : null;
+
+    if (!targetUserId && accountId && accessToken) {
+      const headers = { 'apikey': CONFIG.SUPABASE_ANON_KEY, 'Authorization': `Bearer ${accessToken}` };
+      const enc = encodeURIComponent(task.user_name);
+
+      // spy_viewers
+      try {
+        const r1 = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers?account_id=eq.${accountId}&user_name=eq.${enc}&user_id_stripchat=not.is.null&select=user_id_stripchat&order=last_seen_at.desc&limit=1`,
+          { headers }
+        );
+        if (r1.ok) {
+          const rows = await r1.json();
+          if (rows?.[0]?.user_id_stripchat) targetUserId = rows[0].user_id_stripchat;
+        }
+      } catch { /* fallthrough */ }
+
+      // paid_users
+      if (!targetUserId) {
+        try {
+          const r2 = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/paid_users?account_id=eq.${accountId}&user_name=eq.${enc}&user_id_stripchat=not.is.null&select=user_id_stripchat&limit=1`,
+            { headers }
+          );
+          if (r2.ok) {
+            const rows = await r2.json();
+            if (rows?.[0]?.user_id_stripchat) targetUserId = rows[0].user_id_stripchat;
+          }
+        } catch { /* fallthrough */ }
+      }
+
+      // coin_transactions
+      if (!targetUserId) {
+        try {
+          const r3 = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions?account_id=eq.${accountId}&user_name=eq.${enc}&user_id=not.is.null&select=user_id&limit=1`,
+            { headers }
+          );
+          if (r3.ok) {
+            const rows = await r3.json();
+            if (rows?.[0]?.user_id) targetUserId = String(rows[0].user_id);
+          }
+        } catch { /* fallthrough */ }
+      }
+    }
+
+    if (!targetUserId) {
+      console.warn('[LS-DM] targetUserId解決失敗:', task.user_name);
+      return { success: false, error: `targetUserId解決失敗: ${task.user_name}` };
+    }
+
+    // ---- 3. 画像取得（必要な場合） ----
+    const messageBody = (task.message || '').replace(/\{username\}/g, task.user_name || '');
+    const imageUrl = task.image_url || null;
+    const sendOrder = task.send_order || 'text_only';
+
+    let imageBase64 = null;
+    if (imageUrl && sendOrder !== 'text_only') {
+      try {
+        const imgRes = await fetch(imageUrl);
+        if (!imgRes.ok) throw new Error('HTTP ' + imgRes.status);
+        const imgBlob = await imgRes.blob();
+        const arrayBuf = await imgBlob.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuf);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        imageBase64 = btoa(binary);
+        console.log('[LS-DM] 画像取得成功:', (imageBase64.length / 1024).toFixed(1), 'KB');
+      } catch (e) {
+        console.error('[LS-DM] 画像取得失敗:', e.message, '→ text_onlyにフォールバック');
+        imageBase64 = null;
+      }
+    }
+    const effectiveSendOrder = (sendOrder !== 'text_only' && !imageBase64) ? 'text_only' : sendOrder;
+
+    // ---- 4. executeScript (MAIN world) でCSRF取得 + 送信 ----
+    const execDmSend = async () => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: (myUid, targetUid, msgBody, imgB64, sendOrd) => {
+          var csrf = window.__logger && window.__logger.kibanaLogger
+            && window.__logger.kibanaLogger.api && window.__logger.kibanaLogger.api.csrfParams;
+          if (!csrf || !csrf.csrfToken) {
+            return {
+              success: false, error: 'CSRF未初期化',
+              hasLogger: !!window.__logger,
+              hasKibana: !!(window.__logger && window.__logger.kibanaLogger),
+              hasApi: !!(window.__logger && window.__logger.kibanaLogger && window.__logger.kibanaLogger.api),
+            };
+          }
+
+          function parseResponse(r) {
+            return r.text().then(function (text) {
+              var data = null;
+              try { data = JSON.parse(text); } catch (e) { /* skip */ }
+              return { status: r.status, data: data, text: text.substring(0, 300) };
+            });
+          }
+          function handleMessageResponse(resp) {
+            if (resp.status >= 200 && resp.status < 300 && resp.data && resp.data.message) {
+              return { success: true, messageId: resp.data.message.id, httpStatus: resp.status };
+            }
+            return { success: false, error: 'HTTP ' + resp.status + ': ' + resp.text, httpStatus: resp.status };
+          }
+          function sendTextMessage(uniqId) {
+            return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+              credentials: 'include',
+              body: JSON.stringify({
+                body: msgBody,
+                csrfToken: csrf.csrfToken, csrfTimestamp: csrf.csrfTimestamp, csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
+                uniq: uniqId,
+              }),
+            }).then(parseResponse).then(handleMessageResponse);
+          }
+          function uploadPhoto() {
+            var binaryStr = atob(imgB64);
+            var bytes = new Uint8Array(binaryStr.length);
+            for (var i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+            var blob = new Blob([bytes], { type: 'image/jpeg' });
+            var fd = new FormData();
+            fd.append('photo', blob, 'image.jpg');
+            fd.append('source', 'upload');
+            fd.append('messenger', '1');
+            fd.append('csrfToken', csrf.csrfToken);
+            fd.append('csrfTimestamp', csrf.csrfTimestamp);
+            fd.append('csrfNotifyTimestamp', csrf.csrfNotifyTimestamp);
+            return fetch('/api/front/users/' + myUid + '/albums/0/photos', {
+              method: 'POST',
+              headers: { 'X-Requested-With': 'XMLHttpRequest' },
+              credentials: 'include',
+              body: fd,
+            }).then(function (r) { return r.json(); }).then(function (photoData) {
+              if (!photoData.photo || !photoData.photo.id) throw new Error('写真アップロード失敗: ' + JSON.stringify(photoData).substring(0, 200));
+              return photoData.photo.id;
+            });
+          }
+          function sendMessageWithMedia(mediaId, body, uniqId) {
+            return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+              credentials: 'include',
+              body: JSON.stringify({
+                body: body || '', mediaId: mediaId, mediaSource: 'upload', platform: 'Web',
+                csrfToken: csrf.csrfToken, csrfTimestamp: csrf.csrfTimestamp, csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
+                uniq: uniqId,
+              }),
+            }).then(parseResponse).then(handleMessageResponse);
+          }
+
+          try {
+            var uniq1 = Math.random().toString(36).substring(2, 18);
+            var uniq2 = Math.random().toString(36).substring(2, 18);
+
+            if (sendOrd === 'image_only') {
+              return uploadPhoto().then(function (mediaId) {
+                return sendMessageWithMedia(mediaId, '', uniq1);
+              }).catch(function (e) { return { success: false, error: '画像DM: ' + e.message }; });
+            }
+            if (sendOrd === 'text_then_image') {
+              return sendTextMessage(uniq1).then(function (textResult) {
+                if (!textResult.success) return textResult;
+                return uploadPhoto().then(function (mediaId) {
+                  return sendMessageWithMedia(mediaId, '', uniq2);
+                }).then(function (imgResult) {
+                  return { success: imgResult.success, messageId: imgResult.messageId, httpStatus: imgResult.httpStatus, sentMessages: 2, textMessageId: textResult.messageId };
+                });
+              }).catch(function (e) { return { success: false, error: 'text_then_image: ' + e.message }; });
+            }
+            if (sendOrd === 'image_then_text') {
+              return uploadPhoto().then(function (mediaId) {
+                return sendMessageWithMedia(mediaId, '', uniq1);
+              }).then(function (imgResult) {
+                if (!imgResult.success) return imgResult;
+                return sendTextMessage(uniq2).then(function (textResult) {
+                  return { success: textResult.success, messageId: textResult.messageId, httpStatus: textResult.httpStatus, sentMessages: 2, imageMessageId: imgResult.messageId };
+                });
+              }).catch(function (e) { return { success: false, error: 'image_then_text: ' + e.message }; });
+            }
+            // text_only (default)
+            return sendTextMessage(uniq1).catch(function (e) { return { success: false, error: e.message }; });
+          } catch (e) {
+            return Promise.resolve({ success: false, error: 'send_order処理エラー: ' + e.message });
+          }
+        },
+        args: [myUserId, targetUserId, messageBody, imageBase64, effectiveSendOrder],
+      });
+      return results?.[0]?.result || null;
+    };
+
+    let result = await execDmSend();
+
+    // CSRF未初期化 → 3秒待ってリトライ（最大2回）
+    if (result && !result.success && result.error === 'CSRF未初期化') {
+      console.log('[LS-DM] CSRF未初期化 → 3秒待機リトライ...');
+      await sleep_bg(3000);
+      result = await execDmSend();
+      if (result && !result.success && result.error === 'CSRF未初期化') {
+        await sleep_bg(3000);
+        result = await execDmSend();
+      }
+    }
+
+    if (!result) {
+      dmApiConsecutiveErrors++;
+      return null;
+    }
+
+    if (result.success) {
+      dmApiConsecutiveErrors = 0;
+      console.log('[LS-DM] 送信成功!', task.user_name, 'messageId:', result.messageId);
+      return { success: true, error: null, via: 'chrome_ext' };
+    }
+
+    // 失敗
+    dmApiConsecutiveErrors++;
+    if (result.httpStatus === 403) {
+      console.warn('[LS-DM] 403 → 5分クールダウン');
+      dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_403;
+    } else if (result.httpStatus === 429) {
+      console.warn('[LS-DM] 429 → 10分クールダウン');
+      dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_429;
+    }
+    return { success: false, error: result.error || 'unknown error' };
+
+  } catch (err) {
+    dmApiConsecutiveErrors++;
+    console.error('[LS-DM] tryDMviaAPI例外:', err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// ============================================================
+// DM直列送信パイプライン
+// ============================================================
+
+async function processDMQueueSerial(tasks) {
+  console.log('[LS-DM] ========== DM直列送信開始 (' + tasks.length + '件) ==========');
+
+  // Stripchatタブを1つ作成
+  let tabId;
+  try {
+    const tab = await chrome.tabs.create({ url: 'https://ja.stripchat.com/', active: false });
+    tabId = tab.id;
+  } catch (e) {
+    console.error('[LS-DM] タブ作成失敗:', e.message);
+    return;
+  }
+
+  // ページ読み込み + __logger初期化待ち
+  const loaded = await waitForTabComplete(tabId, 12000);
+  if (loaded) {
+    await waitForPageLoad(tabId, 8000);
+  } else {
+    console.warn('[LS-DM] タブ読み込みタイムアウト → それでも送信試行');
+  }
+
+  let sent = 0, errors = 0, skipped = 0;
+
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+
+    // 安全チェック
+    const blockReason = dmSafetyCheck(task);
+    if (blockReason) {
+      console.warn('[LS-DM] 安全ブロック:', blockReason, 'taskId=', task.id);
+      await updateDMTaskStatus(task.id, 'error', `DM安全ブロック: ${blockReason}`, 'chrome_ext');
+      skipped++;
+      continue;
+    }
+
+    console.log(`[LS-DM] ${i + 1}/${tasks.length}: ${task.user_name} (${task.cast_name})`);
+    await updateDMTaskStatus(task.id, 'sending', null);
+
+    const result = await tryDMviaAPI(task, tabId);
+
+    if (result && result.success) {
+      await updateDMTaskStatus(task.id, 'success', null, 'chrome_ext');
+      sent++;
+    } else if (result && !result.success) {
+      await updateDMTaskStatus(task.id, 'error', result.error, 'chrome_ext');
+      errors++;
+      // IDENTITY_MISMATCH → 残り全部スキップ
+      if (result.error && result.error.includes('CAST_IDENTITY_MISMATCH')) {
+        console.error('[LS-DM] IDENTITY_MISMATCH → 残りタスク中断');
+        for (let j = i + 1; j < tasks.length; j++) {
+          await updateDMTaskStatus(tasks[j].id, 'queued', null);
+        }
+        break;
+      }
+    } else {
+      // null（クールダウン/連続エラー上限）→ requeueして中断
+      await updateDMTaskStatus(task.id, 'queued', null);
+      console.warn('[LS-DM] API不可 → 残りタスク中断');
+      break;
+    }
+
+    // 次のタスクがあれば間隔を空ける
+    if (i < tasks.length - 1) {
+      const interval = getDMInterval();
+      await sleep_bg(interval);
+    }
+  }
+
+  // タブを閉じる
+  try { await chrome.tabs.remove(tabId); } catch { /* already closed */ }
+
+  console.log(`[LS-DM] ========== DM直列送信完了 (成功:${sent} エラー:${errors} スキップ:${skipped}) ==========`);
+}
+
+// ============================================================
+// DMキュー処理メインループ
+// ============================================================
+
+async function processDMQueue() {
+  if (dmProcessing) return;
+  dmProcessing = true;
+
+  try {
+    // AMP cookie複数ユーザー検出
+    if (await checkAMPMultipleUsers()) {
+      console.error('[LS-DM] 複数ユーザー検出 → DM送信停止');
+      return;
+    }
+
+    // バッチ取得
+    const tasks = await fetchDMBatch(20);
+    if (!tasks || tasks.length === 0) return;
+
+    console.log('[LS-DM] キューから', tasks.length, '件取得');
+
+    // 直列送信
+    await processDMQueueSerial(tasks);
+  } catch (e) {
+    console.error('[LS-DM] DMキュー処理エラー:', e.message);
+  } finally {
+    dmProcessing = false;
+  }
+}
+
+// ============================================================
+// DMポーリング（10秒間隔）
+// ============================================================
+
+function startDMPolling() {
+  if (dmPollingTimer) return;
+  console.log('[LS-DM] DMポーリング開始 (10秒間隔)');
+  processDMQueue();
+  dmPollingTimer = setInterval(() => { processDMQueue(); }, 10000);
+}
+
+function stopDMPolling() {
+  if (dmPollingTimer) {
+    clearInterval(dmPollingTimer);
+    dmPollingTimer = null;
+    console.log('[LS-DM] DMポーリング停止');
+  }
+}
 
