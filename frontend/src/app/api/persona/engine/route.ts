@@ -109,6 +109,117 @@ export interface StructuredTipperData {
   };
 }
 
+/** classifyTippers の戻り値 */
+export interface ClassifiedTippers {
+  newTippers: Array<{ username: string; tk: number; count: number }>;
+  repeaters: Array<{
+    username: string; tk: number;
+    firstTipDate: string; lastTipDate: string;
+    totalTk: number; daysSince: number;
+  }>;
+  comebackUsers: Array<{
+    username: string; tk: number;
+    firstTipDate: string; lastTipDate: string;
+    daysSince: number;
+  }>;
+}
+
+/**
+ * チッパーリストを新規/リピーター/復帰に分類する
+ * collect5AxisData内のロジック(729-832相当)を切り出したもの
+ */
+export async function classifyTippers(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  accountId: string,
+  castName: string,
+  sessionStartISO: string,
+  tippers: Array<{ username: string; total: number; count: number }>,
+): Promise<ClassifiedTippers> {
+  const BATCH_SIZE = 50;
+  const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+  const sessionStartMs = new Date(sessionStartISO).getTime();
+
+  interface TipperHistory {
+    username: string;
+    historyTxCount: number;
+    historyTokens: number;
+    firstTipDate: string;
+    lastTipDate: string;
+  }
+
+  const tipperNames = tippers.map(t => t.username);
+  const historyMap = new Map<string, TipperHistory>();
+
+  if (tipperNames.length > 0) {
+    for (let bi = 0; bi < tipperNames.length; bi += BATCH_SIZE) {
+      const batch = tipperNames.slice(bi, bi + BATCH_SIZE);
+      const { data: histRows } = await supabase
+        .from('coin_transactions')
+        .select('user_name, date, tokens')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .in('user_name', batch)
+        .lt('date', sessionStartISO)
+        .gt('tokens', 0)
+        .order('date', { ascending: true })
+        .limit(5000);
+
+      for (const row of histRows || []) {
+        const uname = row.user_name as string;
+        const dateStr = row.date as string;
+        const tk = (row.tokens as number) || 0;
+        const existing = historyMap.get(uname);
+        if (existing) {
+          if (dateStr < existing.firstTipDate) existing.firstTipDate = dateStr;
+          if (dateStr > existing.lastTipDate) existing.lastTipDate = dateStr;
+          existing.historyTxCount++;
+          existing.historyTokens += tk;
+        } else {
+          historyMap.set(uname, {
+            username: uname, historyTxCount: 1, historyTokens: tk,
+            firstTipDate: dateStr, lastTipDate: dateStr,
+          });
+        }
+      }
+    }
+  }
+
+  const newTipperSet = new Set(tipperNames.filter(n => !historyMap.has(n)));
+
+  const newTippers = tippers
+    .filter(t => newTipperSet.has(t.username))
+    .sort((a, b) => b.total - a.total)
+    .map(t => ({ username: t.username, tk: t.total, count: t.count }));
+
+  const returningTippersSorted = tippers
+    .filter(t => !newTipperSet.has(t.username))
+    .sort((a, b) => b.total - a.total);
+
+  const repeaters = returningTippersSorted.map(t => {
+    const hist = historyMap.get(t.username);
+    const daysSince = hist
+      ? Math.floor((sessionStartMs - new Date(hist.lastTipDate).getTime()) / (24 * 60 * 60 * 1000))
+      : 0;
+    return {
+      username: t.username, tk: t.total,
+      firstTipDate: hist?.firstTipDate?.slice(0, 10) || '',
+      lastTipDate: hist?.lastTipDate?.slice(0, 10) || '',
+      totalTk: hist?.historyTokens || 0,
+      daysSince,
+    };
+  });
+
+  const comebackUsers = repeaters
+    .filter(r => {
+      const lastMs = new Date(r.lastTipDate).getTime();
+      return (sessionStartMs - lastMs) >= THIRTY_DAYS_MS;
+    })
+    .sort((a, b) => b.daysSince - a.daysSince);
+
+  return { newTippers, repeaters, comebackUsers };
+}
+
 export interface FiveAxisData {
   tipperStructure: string;
   tipTriggers: string;
@@ -760,112 +871,32 @@ export async function collect5AxisData(
     const allTipperNames = allTippers.map(t => t.username);
 
     _mark('session+tipper queries');
-    // ── 新規判定: coin_transactions全履歴ベース（paid_usersは使わない） ──
-    // このキャストのcoin_transactionsにセッション開始前のレコードが1件もない = 新規
-    //
-    // 重要: 全履歴クエリは数千行超になりSupabaseの1000行制限で切り捨てられる。
-    // → ユーザー単位で並列クエリ（各ユーザー: 存在チェック + 初回日 + 最終日 + 件数）
-    interface TipperHistory {
-      username: string;
-      historyTxCount: number;
-      historyTokens: number;
-      firstTipDate: string;
-      lastTipDate: string;   // 復帰ユーザー判定用
-    }
+    // ── 新規/リピーター/復帰 分類（classifyTippers に委譲） ──
+    const classified = await classifyTippers(sb, accountId, castName, sessionStartISO, allTippers);
+    _mark('tipper history (classifyTippers)');
 
-    let trueNewTippers: string[] = [];
-    let returningTippers: TipperHistory[] = [];
-
-    if (allTipperNames.length > 0) {
-      // バッチIN句で全チッパーの履歴を取得し、JS側でGROUP BY集計
-      const historyMap = new Map<string, TipperHistory>();
-      const BATCH_SIZE = 50;
-
-      for (let bi = 0; bi < allTipperNames.length; bi += BATCH_SIZE) {
-        const batch = allTipperNames.slice(bi, bi + BATCH_SIZE);
-        const { data: histRows } = await sb
-          .from('coin_transactions')
-          .select('user_name, date, tokens')
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .in('user_name', batch)
-          .lt('date', sessionStartISO)
-          .gt('tokens', 0)
-          .order('date', { ascending: true })
-          .limit(5000);
-
-        // JS側でGROUP BY: user_name別にmin(date), max(date), count, sum(tokens)
-        for (const row of histRows || []) {
-          const uname = row.user_name as string;
-          const dateStr = row.date as string;
-          const tk = (row.tokens as number) || 0;
-          const existing = historyMap.get(uname);
-          if (existing) {
-            if (dateStr < existing.firstTipDate) existing.firstTipDate = dateStr;
-            if (dateStr > existing.lastTipDate) existing.lastTipDate = dateStr;
-            existing.historyTxCount++;
-            existing.historyTokens += tk;
-          } else {
-            historyMap.set(uname, {
-              username: uname,
-              historyTxCount: 1,
-              historyTokens: tk,
-              firstTipDate: dateStr,
-              lastTipDate: dateStr,
-            });
-          }
-        }
-      }
-
-      trueNewTippers = allTipperNames.filter(n => !historyMap.has(n));
-      returningTippers = allTipperNames
-        .filter(n => historyMap.has(n))
-        .map(n => historyMap.get(n)!);
-    }
-
-    // ── ユーザー分類リスト構築 ──
-    const newTipperSet = new Set(trueNewTippers);
-    const sessionStartMs = new Date(sessionStartISO).getTime();
-    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-
-    // a. 新規チッパー全員リスト（tk降順）
-    const newTippersSorted = allTippers
-      .filter(t => newTipperSet.has(t.username))
-      .sort((a, b) => b.total - a.total);
-    const newTipperTotalTk = newTippersSorted.reduce((s, t) => s + t.total, 0);
-    const newTipperLines = newTippersSorted
-      .map(t => `- ${t.username}: ${t.total}tk (${t.count}回) ← 初チップ`);
-
-    // b. 高額新規（150tk以上の初チッパー）
+    // classifyTippersの戻り値からテキスト生成用の変数を構築
+    const newTipperSet = new Set(classified.newTippers.map(t => t.username));
+    const newTippersSorted = classified.newTippers.map(t => ({ username: t.username, total: t.tk, count: t.count }));
+    const newTipperTotalTk = classified.newTippers.reduce((s, t) => s + t.tk, 0);
+    const newTipperLines = classified.newTippers.map(t => `- ${t.username}: ${t.tk}tk (${t.count}回) ← 初チップ`);
     const highValueNewTippers = newTippersSorted.filter(t => t.total >= 150);
+    const trueNewTippers = classified.newTippers.map(t => t.username);
 
-    // c. リピーター全員リスト（tk降順、履歴情報付き）
-    const returningMap = new Map(returningTippers.map(r => [r.username, r]));
-    const returningTippersSorted = allTippers
-      .filter(t => !newTipperSet.has(t.username))
-      .sort((a, b) => b.total - a.total);
-    const returningLines = returningTippersSorted.map((u, i) => {
-      const hist = returningMap.get(u.username);
-      const tag = hist?.firstTipDate
-        ? `[初回${hist.firstTipDate.slice(0, 10)}, 累計${hist.historyTokens}tk/${hist.historyTxCount}回]`
-        : '';
-      return `${i + 1}. ${u.username}: ${u.total}tk (${u.count}回) ${tag}`;
-    });
+    // 下流コード互換用のエイリアス
+    const returningTippers = classified.repeaters.map(r => ({
+      username: r.username, historyTokens: r.totalTk, historyTxCount: 0,
+      firstTipDate: r.firstTipDate, lastTipDate: r.lastTipDate,
+    }));
+    const returningTippersSorted = classified.repeaters.map(r => ({ username: r.username, total: r.tk, count: 0 }));
+    const returningLines = classified.repeaters.map((r, i) =>
+      `${i + 1}. ${r.username}: ${r.tk}tk [初回${r.firstTipDate}, 累計${r.totalTk}tk, 前回${r.lastTipDate}, ${r.daysSince}日ぶり]`
+    );
 
-    // d. 復帰ユーザー（前回チップから30日以上空いて戻ってきた人）
-    const comebackUsers = returningTippers
-      .filter(r => {
-        const lastTipMs = new Date(r.lastTipDate).getTime();
-        return (sessionStartMs - lastTipMs) >= THIRTY_DAYS_MS;
-      })
-      .map(r => {
-        const sessionTk = tipperMap.get(r.username)?.total || 0;
-        const daysSince = Math.floor((sessionStartMs - new Date(r.lastTipDate).getTime()) / (24 * 60 * 60 * 1000));
-        return { username: r.username, lastTipDate: r.lastTipDate.slice(0, 10), daysSince, sessionTk };
-      })
-      .sort((a, b) => b.daysSince - a.daysSince);
-
-    _mark('tipper history (N*4 queries)');
+    const comebackUsers = classified.comebackUsers.map(u => ({
+      username: u.username, lastTipDate: u.lastTipDate, daysSince: u.daysSince,
+      sessionTk: u.tk,
+    }));
 
     // ── 構造化データ（JSレポート生成用） ──
     result.structured = {
@@ -877,35 +908,13 @@ export async function collect5AxisData(
         anonymousCount,
         anonymousTokens,
       },
-      newTippers: newTippersSorted.map(t => ({ username: t.username, tk: t.total, count: t.count })),
-      repeaters: returningTippersSorted.map(t => {
-        const hist = returningMap.get(t.username);
-        const daysSince = hist
-          ? Math.floor((sessionStartMs - new Date(hist.lastTipDate).getTime()) / (24 * 60 * 60 * 1000))
-          : 0;
-        return {
-          username: t.username,
-          tk: t.total,
-          firstTipDate: hist?.firstTipDate?.slice(0, 10) || '',
-          lastTipDate: hist?.lastTipDate?.slice(0, 10) || '',
-          totalTk: hist?.historyTokens || 0,
-          daysSince,
-        };
-      }),
-      returnUsers: comebackUsers.map(u => {
-        const hist = returningMap.get(u.username);
-        return {
-          username: u.username,
-          tk: u.sessionTk,
-          firstTipDate: hist?.firstTipDate?.slice(0, 10) || '',
-          lastTipDate: u.lastTipDate,
-          daysSince: u.daysSince,
-        };
-      }),
+      newTippers: classified.newTippers,
+      repeaters: classified.repeaters,
+      returnUsers: classified.comebackUsers,
       dmCopyNames: {
-        newTippers: newTippersSorted.map(t => t.username),
-        repeaters: returningTippersSorted.map(t => t.username),
-        returnUsers: comebackUsers.map(u => u.username),
+        newTippers: classified.newTippers.map(t => t.username),
+        repeaters: classified.repeaters.map(r => r.username),
+        returnUsers: classified.comebackUsers.map(u => u.username),
       },
     };
 
@@ -916,28 +925,6 @@ export async function collect5AxisData(
     const priorityB = newTippersSorted.filter(t => t.count === 1 && t.total === 150);
     // 優先度C: 少額の新規（上記以外）
     const priorityC = newTippersSorted.filter(t => !priorityA.includes(t) && !priorityB.includes(t));
-
-    // ── 離脱警告: 累計高額なのに今回少額の常連 ──
-    // NOTE: sessionTipperMapsはGroup Dで構築されるため、ここではhistoryTxCountベースで推定
-    const churnWarningUsers: Array<{ username: string; cumulativeTk: number; sessionTk: number; dropPct: string }> = [];
-    for (const rt of returningTippersSorted) {
-      const hist = returningMap.get(rt.username);
-      if (!hist) continue;
-      // 累計1000tk以上の常連で、今回のtkが累計平均の30%以下
-      // 来訪回数の推定: historyTxCountは取引回数なので、セッション数を推定（取引10回=約1セッションと仮定）
-      const estimatedVisits = Math.max(Math.ceil(hist.historyTxCount / 10), 1);
-      const avgPerVisit = hist.historyTokens / estimatedVisits;
-      if (hist.historyTokens >= 1000 && avgPerVisit > 0 && rt.total < avgPerVisit * 0.3) {
-        const dropPct = ((1 - rt.total / avgPerVisit) * 100).toFixed(0);
-        churnWarningUsers.push({
-          username: rt.username,
-          cumulativeTk: hist.historyTokens,
-          sessionTk: rt.total,
-          dropPct,
-        });
-      }
-    }
-    churnWarningUsers.sort((a, b) => b.cumulativeTk - a.cumulativeTk);
 
     // ── DM用コピペセクション（ユーザー名のみ改行区切り） ──
     const dmCopyNew = newTippersSorted.map(t => t.username).join('\n');
@@ -956,7 +943,7 @@ ${newTipperLines.length > 0 ? newTipperLines.join('\n') : '(なし)'}
 ## 高額新規（150tk以上: ${highValueNewTippers.length}人）
 ${highValueNewTippers.length > 0 ? highValueNewTippers.map(t => `- ${t.username}: ${t.total}tk (${t.count}回)`).join('\n') : '(なし)'}
 
-## リピーター（${returningTippers.length}人）
+## リピーター（${classified.repeaters.length}人）
 ${returningLines.length > 0 ? returningLines.join('\n') : '(なし)'}
 
 ## 復帰ユーザー（30日以上ぶり: ${comebackUsers.length}人）
@@ -982,19 +969,12 @@ ${priorityC.length > 0 ? priorityC.map(t => `- ${t.username}: ${t.total}tk (${t.
 ${priorityC.map(t => t.username).join('\n') || '(なし)'}
 \`\`\`
 
-### 🚩 離脱警告: 累計高額→今回少額（${churnWarningUsers.length}人）— 最優先フォロー
-[判定根拠] 累計1000tk以上の常連で、今回セッションのtkが来訪平均の30%以下に急落した人
-${churnWarningUsers.length > 0 ? churnWarningUsers.map(u => `- 🚩 ${u.username}: 累計${u.cumulativeTk}tk → 今回${u.sessionTk}tk (${u.dropPct}%減)`).join('\n') : '(該当なし)'}
-\`\`\`
-${churnWarningUsers.map(u => u.username).join('\n') || '(なし)'}
-\`\`\`
-
 ### 復帰ユーザー（${comebackUsers.length}人）
 \`\`\`
 ${dmCopyComeback || '(なし)'}
 \`\`\`
 
-### リピーター（${returningTippers.length}人）
+### リピーター（${classified.repeaters.length}人）
 \`\`\`
 ${dmCopyReturning || '(なし)'}
 \`\`\``;
