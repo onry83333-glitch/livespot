@@ -266,7 +266,7 @@ export default function MarketAnalysisTab() {
                       <td className="px-2 py-1.5 text-right" style={{ color: r.group_count > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>
                         {r.group_count} <span className="text-[8px]">({groupPct}%)</span>
                       </td>
-                      <td className="px-2 py-1.5 text-right font-bold" style={{ color: 'var(--accent-primary)' }}>{r.total_tokens.toLocaleString()}</td>
+                      <td className="px-2 py-1.5 text-right font-bold" style={{ color: 'var(--accent-primary)' }}>{(r.total_tokens ?? 0).toLocaleString()}</td>
                       <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{r.broadcast_days}日</td>
                     </tr>
                   );

@@ -526,7 +526,7 @@ export default function DmSegmentSender({ supabase, accountId, castName, onSendC
                       {u.tx_count > 0 && `${u.tx_count}回`}
                     </span>
                     <span style={{ color: 'var(--accent-primary)' }}>
-                      {u.total_coins.toLocaleString()} tk
+                      {(u.total_coins ?? 0).toLocaleString()} tk
                     </span>
                     <button
                       onClick={(e) => { e.stopPropagation(); addToBlacklist(u.user_name); }}

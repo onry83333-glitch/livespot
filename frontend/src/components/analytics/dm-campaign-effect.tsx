@@ -99,13 +99,13 @@ export default function DmCampaignEffect({
                                 <div className="grid grid-cols-12 gap-2 items-center text-[11px]">
                                   <div className="col-span-3 truncate font-medium">{row.campaign}</div>
                                   <div className="col-span-1 text-right tabular-nums" style={{ color: 'var(--text-secondary)' }}>
-                                    {row.dm_sent.toLocaleString()}
+                                    {(row.dm_sent ?? 0).toLocaleString()}
                                   </div>
                                   <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: visitCvrColor }}>
                                     {(row.visited_after || 0).toLocaleString()}
                                   </div>
                                   <div className="col-span-1 text-right tabular-nums font-bold" style={{ color: payCvrColor }}>
-                                    {row.paid_after.toLocaleString()}
+                                    {(row.paid_after ?? 0).toLocaleString()}
                                   </div>
                                   <div className="col-span-2 text-right tabular-nums font-bold" style={{ color: visitCvrColor }}>
                                     {Number(row.visit_cvr_pct || 0).toFixed(1)}%
@@ -114,7 +114,7 @@ export default function DmCampaignEffect({
                                     {Number(row.cvr_pct).toFixed(1)}%
                                   </div>
                                   <div className="col-span-2 text-right tabular-nums" style={{ color: 'var(--accent-amber)' }}>
-                                    {row.total_tokens.toLocaleString()}
+                                    {(row.total_tokens ?? 0).toLocaleString()}
                                   </div>
                                 </div>
                                 {/* Dual CVR Bars: 来場(上) + 応援(下) */}
@@ -138,11 +138,11 @@ export default function DmCampaignEffect({
                                 <div className="mt-1 px-3 py-2 rounded-lg text-[10px] space-y-1" style={{ background: 'rgba(15,23,42,0.4)' }}>
                                   <div className="flex justify-between">
                                     <span style={{ color: 'var(--text-muted)' }}>来場率（チャット出現）</span>
-                                    <span style={{ color: visitCvrColor }}>{(row.visited_after || 0).toLocaleString()}/{row.dm_sent.toLocaleString()} = {Number(row.visit_cvr_pct || 0).toFixed(1)}%</span>
+                                    <span style={{ color: visitCvrColor }}>{(row.visited_after || 0).toLocaleString()}/{(row.dm_sent ?? 0).toLocaleString()} = {Number(row.visit_cvr_pct || 0).toFixed(1)}%</span>
                                   </div>
                                   <div className="flex justify-between">
                                     <span style={{ color: 'var(--text-muted)' }}>応援率（課金）</span>
-                                    <span style={{ color: payCvrColor }}>{row.paid_after.toLocaleString()}/{row.dm_sent.toLocaleString()} = {Number(row.cvr_pct).toFixed(1)}%</span>
+                                    <span style={{ color: payCvrColor }}>{(row.paid_after ?? 0).toLocaleString()}/{(row.dm_sent ?? 0).toLocaleString()} = {Number(row.cvr_pct).toFixed(1)}%</span>
                                   </div>
                                   <div className="flex justify-between">
                                     <span style={{ color: 'var(--text-muted)' }}>初回送信</span>

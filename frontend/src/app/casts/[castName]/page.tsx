@@ -2005,7 +2005,7 @@ function CastDetailInner() {
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-bold">📨 DM送信状況</h3>
                   <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    全{dmQueueCounts.total.toLocaleString()}件
+                    全{(dmQueueCounts.total ?? 0).toLocaleString()}件
                   </span>
                 </div>
                 {(dmQueueCounts.queued > 0 || dmQueueCounts.sending > 0) && (

@@ -295,7 +295,7 @@ export default function DataQualityPage() {
       for (const cn of Array.from(allCastNames).sort()) {
         const info = castMap.get(cn);
         if (info) {
-          details.push(`${cn}: ${info.msgs}msg / ${info.tips}tip / ${info.tokens.toLocaleString()}tk`);
+          details.push(`${cn}: ${info.msgs}msg / ${info.tips}tip / ${(info.tokens ?? 0).toLocaleString()}tk`);
         } else {
           details.push(`${cn}: データなし`);
         }

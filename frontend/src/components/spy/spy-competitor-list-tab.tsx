@@ -343,7 +343,7 @@ export default function SpyCompetitorListTab() {
                           <CastTagBadges genre={cast.genre} benchmark={cast.benchmark} category={cast.category} />
                         )}
                       </td>
-                      <td className="py-2.5 px-2 text-right tabular-nums">{s ? s.total_messages.toLocaleString() : '-'}</td>
+                      <td className="py-2.5 px-2 text-right tabular-nums">{s ? (s.total_messages ?? 0).toLocaleString() : '-'}</td>
                       <td className="py-2.5 px-2 text-right tabular-nums font-semibold" style={{ color: 'var(--accent-amber)' }}>
                         {s ? formatTokens(s.total_coins) : '-'}
                       </td>

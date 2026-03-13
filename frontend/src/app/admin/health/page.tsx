@@ -114,7 +114,7 @@ export default function HealthPage() {
         const isStale = maxDate < oneDayAgo;
         if (isStale) hasStale = true;
         details.push(
-          `${cn}: ${info.count.toLocaleString()}件 (${new Date(info.minDate).toLocaleDateString('ja-JP')} 〜 ${maxDate.toLocaleDateString('ja-JP')})${isStale ? ' ⚠️24h超' : ''}`
+          `${cn}: ${(info.count ?? 0).toLocaleString()}件 (${new Date(info.minDate).toLocaleDateString('ja-JP')} 〜 ${maxDate.toLocaleDateString('ja-JP')})${isStale ? ' ⚠️24h超' : ''}`
         );
       }
 

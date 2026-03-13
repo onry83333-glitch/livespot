@@ -633,7 +633,7 @@ function SessionsTab({ castName, accountId }: { castName: string; accountId: str
                             <td className="py-1.5 px-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>
                               {child.session_id.slice(0, 8)}
                             </td>
-                            <td className="py-1.5 px-2 text-right tabular-nums text-[10px]" style={{ color: 'var(--text-muted)' }}>{child.msg_count.toLocaleString()}</td>
+                            <td className="py-1.5 px-2 text-right tabular-nums text-[10px]" style={{ color: 'var(--text-muted)' }}>{(child.msg_count ?? 0).toLocaleString()}</td>
                             <td className="py-1.5 px-2 text-right tabular-nums text-[10px]" style={{ color: 'rgba(56,189,248,0.6)' }}>{child.tip_count}</td>
                             <td className="py-1.5 px-2 text-right tabular-nums text-[10px]" style={{ color: 'rgba(251,191,36,0.7)' }}>
                               {formatTokens(child.chat_tokens)}

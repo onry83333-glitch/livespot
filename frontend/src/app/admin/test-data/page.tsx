@@ -211,7 +211,7 @@ export default function TestDataPage() {
                         <span className="text-2xl font-bold" style={{
                           color: count.total_count > 0 ? 'var(--accent-amber)' : 'var(--accent-green)',
                         }}>
-                          {count.total_count.toLocaleString()}
+                          {(count.total_count ?? 0).toLocaleString()}
                         </span>
                         <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                           件のテストデータ
@@ -225,7 +225,7 @@ export default function TestDataPage() {
                                 {b.prefix}
                               </span>
                               <span className="font-bold" style={{ color: 'var(--text-primary)' }}>
-                                {b.count.toLocaleString()}
+                                {(b.count ?? 0).toLocaleString()}
                               </span>
                             </div>
                           ))}
@@ -238,7 +238,7 @@ export default function TestDataPage() {
                   {deleteResult && (
                     <div className="glass-panel p-3 mt-2 border-l-2" style={{ borderLeftColor: 'var(--accent-green)' }}>
                       <p className="text-sm" style={{ color: 'var(--accent-green)' }}>
-                        {deleteResult.deleted_count.toLocaleString()} 件を削除しました
+                        {(deleteResult.deleted_count ?? 0).toLocaleString()} 件を削除しました
                       </p>
                     </div>
                   )}
@@ -257,7 +257,7 @@ export default function TestDataPage() {
                   {isConfirming ? (
                     <div className="glass-panel p-3 space-y-2 min-w-[160px]">
                       <p className="text-xs font-bold" style={{ color: 'var(--accent-pink)' }}>
-                        {count?.total_count.toLocaleString()} 件を削除しますか？
+                        {(count?.total_count ?? 0).toLocaleString()} 件を削除しますか？
                       </p>
                       <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
                         この操作は元に戻せません

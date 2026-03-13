@@ -135,7 +135,7 @@ export default function UserActivityPage() {
                           <Link href={`/spy/${encodeURIComponent(a.cast_name)}`} className="font-semibold hover:text-sky-400 transition-colors">{a.cast_name}</Link>
                         </td>
                         <td className="py-2.5 px-2 text-right tabular-nums font-semibold" style={{ color: 'var(--accent-amber)' }}>{formatTokens(a.total_coins)}</td>
-                        <td className="py-2.5 px-2 text-right tabular-nums">{a.message_count.toLocaleString()}</td>
+                        <td className="py-2.5 px-2 text-right tabular-nums">{(a.message_count ?? 0).toLocaleString()}</td>
                         <td className="py-2.5 px-2 text-right tabular-nums">{a.visit_count}</td>
                         <td className="py-2.5 px-2 text-[10px]" style={{ color: 'var(--text-muted)' }}>{a.last_visit ? timeAgo(a.last_visit) : '-'}</td>
                       </tr>

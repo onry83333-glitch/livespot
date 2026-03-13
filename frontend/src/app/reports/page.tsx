@@ -181,10 +181,10 @@ export default function ReportsPage() {
                   <>
                     <span>配信: {fmtDateShort(sess.started_at)}</span>
                     <span>{sess.unique_users}人</span>
-                    <span className="text-amber-400">{sess.total_coins.toLocaleString()} tk</span>
+                    <span className="text-amber-400">{(sess.total_coins ?? 0).toLocaleString()} tk</span>
                   </>
                 )}
-                <span>Tokens: {report.tokens_used.toLocaleString()}</span>
+                <span>Tokens: {(report.tokens_used ?? 0).toLocaleString()}</span>
                 <span>Cost: ${report.cost_usd.toFixed(4)}</span>
               </div>
 

@@ -388,7 +388,7 @@ export default function SegmentAnalysis({
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-4 text-[11px]">
-                                    <span className="tabular-nums">{seg.user_count.toLocaleString()}名</span>
+                                    <span className="tabular-nums">{(seg.user_count ?? 0).toLocaleString()}名</span>
                                     <span className="tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
                                       {formatTokens(seg.total_coins)}
                                     </span>
@@ -643,7 +643,7 @@ export default function SegmentAnalysis({
                                       -{Math.round(m.total_cast_cost_jpy).toLocaleString()}
                                     </td>
                                     <td className="py-1.5 px-1.5 text-right tabular-nums" style={{ color: 'var(--accent-pink)' }}>
-                                      {m.monthly_fixed_cost_jpy > 0 ? `-${m.monthly_fixed_cost_jpy.toLocaleString()}` : '—'}
+                                      {(m.monthly_fixed_cost_jpy ?? 0) > 0 ? `-${(m.monthly_fixed_cost_jpy ?? 0).toLocaleString()}` : '—'}
                                     </td>
                                     <td className="py-1.5 px-1.5 text-right tabular-nums font-bold"
                                       style={{ color: isProfit ? 'var(--accent-green)' : 'var(--accent-pink)' }}>
@@ -746,7 +746,7 @@ export default function SegmentAnalysis({
                                 {revenueShare.map(r => (
                                   <tr key={r.week_start} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
                                     <td className="py-1.5 font-mono">{r.week_label}</td>
-                                    <td className="py-1.5 text-right tabular-nums">{r.total_tokens.toLocaleString()}</td>
+                                    <td className="py-1.5 text-right tabular-nums">{(r.total_tokens ?? 0).toLocaleString()}</td>
                                     <td className="py-1.5 text-right tabular-nums font-mono">{fmtUsd(r.gross_usd)}</td>
                                     <td className="py-1.5 text-right tabular-nums font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(r.platform_fee_usd)}</td>
                                     <td className="py-1.5 text-right tabular-nums font-mono">{fmtUsd(r.net_usd)}</td>
@@ -785,7 +785,7 @@ export default function SegmentAnalysis({
                               <tfoot>
                                 <tr className="font-bold" style={{ borderTop: '2px solid rgba(56,189,248,0.15)' }}>
                                   <td className="py-2">合計 ({revenueShare.length}週)</td>
-                                  <td className="py-2 text-right tabular-nums">{rsTotals.tokens.toLocaleString()}</td>
+                                  <td className="py-2 text-right tabular-nums">{(rsTotals.tokens ?? 0).toLocaleString()}</td>
                                   <td className="py-2 text-right tabular-nums font-mono">{fmtUsd(rsTotals.gross)}</td>
                                   <td className="py-2 text-right tabular-nums font-mono" style={{ color: 'var(--accent-pink)' }}>-{fmtUsd(rsTotals.fee)}</td>
                                   <td className="py-2 text-right tabular-nums font-mono">{fmtUsd(rsTotals.net)}</td>

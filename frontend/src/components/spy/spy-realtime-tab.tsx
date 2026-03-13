@@ -362,7 +362,7 @@ export default function SpyRealtimeTab({ castFilter }: { castFilter: 'own' | 'co
           <div className="h-4 w-px bg-slate-700" />
           <div className="flex items-center gap-4 text-[11px]">
             <span style={{ color: 'var(--text-muted)' }}>
-              MSG <span className="font-semibold text-slate-300">{todayStats.totalMessages.toLocaleString()}</span>
+              MSG <span className="font-semibold text-slate-300">{(todayStats.totalMessages ?? 0).toLocaleString()}</span>
             </span>
             <span style={{ color: 'var(--accent-amber)' }}>
               TIP <span className="font-semibold">{formatTokens(todayStats.totalTips)}</span>

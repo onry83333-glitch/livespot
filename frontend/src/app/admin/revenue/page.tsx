@@ -271,7 +271,7 @@ export default function RevenueSharePage() {
                       {r.week_label}
                     </td>
                     <td className="p-3 text-right text-[var(--text-secondary)]">
-                      {r.transaction_count.toLocaleString()}
+                      {(r.transaction_count ?? 0).toLocaleString()}
                     </td>
                     <td className="p-3 text-right text-[var(--text-primary)] font-mono">
                       {formatTokens(r.total_tokens)}
@@ -340,7 +340,7 @@ export default function RevenueSharePage() {
               <tr className="border-t-2 border-sky-500/20 bg-white/[0.03] font-bold">
                 <td className="p-3 text-[var(--text-primary)]">合計</td>
                 <td className="p-3 text-right text-[var(--text-secondary)]">
-                  {totals.txCount.toLocaleString()}
+                  {(totals.txCount ?? 0).toLocaleString()}
                 </td>
                 <td className="p-3 text-right text-[var(--text-primary)] font-mono">
                   {formatTokens(totals.tokens)}
@@ -376,7 +376,7 @@ export default function RevenueSharePage() {
             <div className="glass-panel p-3">
               <div className="text-xs text-[var(--text-muted)] mb-1">1. グロス売上</div>
               <div className="text-[var(--text-primary)]">
-                {totals.tokens.toLocaleString()} tk x ${rows[0]?.setting_token_to_usd ?? 0.05}
+                {(totals.tokens ?? 0).toLocaleString()} tk x ${rows[0]?.setting_token_to_usd ?? 0.05}
               </div>
               <div className="text-lg font-bold text-[var(--text-primary)]">
                 = {formatUsd(totals.gross)}

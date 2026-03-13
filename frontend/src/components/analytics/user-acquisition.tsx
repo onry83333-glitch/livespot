@@ -450,9 +450,9 @@ export default function UserAcquisition({
                                       </span>
                                     </td>
                                     <td className="text-right px-3 py-2 tabular-nums font-bold" style={{ color: 'var(--accent-amber)' }}>
-                                      {u.total_coins.toLocaleString()}
+                                      {(u.total_coins ?? 0).toLocaleString()}
                                     </td>
-                                    <td className="text-right px-3 py-2 tabular-nums">{u.tx_count.toLocaleString()}回</td>
+                                    <td className="text-right px-3 py-2 tabular-nums">{(u.tx_count ?? 0).toLocaleString()}回</td>
                                     <td className="text-right px-3 py-2" style={{ color: 'var(--text-secondary)' }}>
                                       {u.last_payment_date ? new Date(u.last_payment_date).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '--'}
                                     </td>
@@ -568,10 +568,10 @@ export default function UserAcquisition({
                         return (
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                             {[
-                              { label: '他社ユーザー数', value: totalSpyUsers.toLocaleString(), icon: '👥' },
+                              { label: '他社ユーザー数', value: (totalSpyUsers ?? 0).toLocaleString(), icon: '👥' },
                               { label: '自社との重複率', value: `${overlapRate}%`, icon: '🔗' },
                               { label: '平均他社tk', value: formatTokens(avgSpyTokens), icon: '💰' },
-                              { label: '獲得候補数', value: prospectCount.toLocaleString(), icon: '🎯' },
+                              { label: '獲得候補数', value: (prospectCount ?? 0).toLocaleString(), icon: '🎯' },
                             ].map((card, i) => (
                               <div key={i} className="glass-card p-3 text-center">
                                 <p className="text-lg mb-1">{card.icon}</p>

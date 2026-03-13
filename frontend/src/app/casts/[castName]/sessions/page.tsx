@@ -594,7 +594,7 @@ export default function SessionListPage() {
               },
               {
                 label: '総MSG数',
-                value: stats.totalMessages.toLocaleString(),
+                value: (stats.totalMessages ?? 0).toLocaleString(),
                 color: 'var(--accent-purple)',
                 prev: prevStats?.totalMessages,
               },
@@ -613,7 +613,7 @@ export default function SessionListPage() {
                 </p>
                 {prevLabel && kpi.prev !== undefined && kpi.prev > 0 && (
                   <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    前期: {kpi.label === '平均配信時間' ? formatDuration(kpi.prev) : kpi.label.includes('売上') ? formatTokens(kpi.prev) : kpi.prev.toLocaleString()}
+                    前期: {kpi.label === '平均配信時間' ? formatDuration(kpi.prev) : kpi.label.includes('売上') ? formatTokens(kpi.prev) : (kpi.prev ?? 0).toLocaleString()}
                   </p>
                 )}
               </div>

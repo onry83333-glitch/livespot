@@ -1637,7 +1637,7 @@ export default function SessionDetailPage() {
                                   <td className="px-2 py-1.5 text-right" style={{ color: r.tip_count > 0 ? 'var(--accent-amber)' : 'var(--text-muted)' }}>{r.tip_count}</td>
                                   <td className="px-2 py-1.5 text-right" style={{ color: r.ticket_count > 0 ? 'var(--accent-purple)' : 'var(--text-muted)' }}>{r.ticket_count}</td>
                                   <td className="px-2 py-1.5 text-right" style={{ color: r.group_count > 0 ? 'var(--accent-green)' : 'var(--text-muted)' }}>{r.group_count}</td>
-                                  <td className="px-2 py-1.5 text-right font-bold" style={{ color: 'var(--accent-primary)' }}>{r.total_tokens.toLocaleString()}</td>
+                                  <td className="px-2 py-1.5 text-right font-bold" style={{ color: 'var(--accent-primary)' }}>{(r.total_tokens ?? 0).toLocaleString()}</td>
                                   <td className="px-2 py-1.5 text-right" style={{ color: 'var(--text-muted)' }}>{r.broadcast_days}日</td>
                                 </tr>
                               ))}
@@ -2161,7 +2161,7 @@ export default function SessionDetailPage() {
                     </div>
                     {/* Breakdown details */}
                     <div className="grid grid-cols-3 gap-3 mt-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                      <span>時給: {'\u00A5'}{sessionPL.hourly_rate.toLocaleString()}</span>
+                      <span>時給: {'\u00A5'}{(sessionPL.hourly_rate ?? 0).toLocaleString()}</span>
                       <span>1tk = {'\u00A5'}{sessionPL.token_to_jpy}</span>
                       <span>{sessionPL.duration_minutes}分 / {formatTokens(sessionPL.total_tokens)}</span>
                     </div>
@@ -3087,7 +3087,7 @@ export default function SessionDetailPage() {
                             <p className="text-[10px] font-semibold mb-2" style={{ color: 'var(--text-muted)' }}>{'📊 サマリー'}</p>
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                               {[
-                                { label: 'イベント数', value: analysisResult.summary.total_events.toLocaleString() },
+                                { label: 'イベント数', value: (analysisResult.summary.total_events ?? 0).toLocaleString() },
                                 { label: '文字起こし', value: `${analysisResult.summary.transcript_segments}セグメント` },
                                 { label: 'チップ', value: `${analysisResult.summary.total_tips}回 / ${formatTokens(analysisResult.summary.tip_tokens)}` },
                                 { label: 'チケット', value: `${analysisResult.summary.total_tickets}回 / ${formatTokens(analysisResult.summary.ticket_tokens)}` },

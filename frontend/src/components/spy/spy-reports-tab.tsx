@@ -79,7 +79,7 @@ export default function SpyReportsTab() {
                 </div>
                 <div className="flex items-center gap-4 text-[10px] mb-2" style={{ color: 'var(--text-muted)' }}>
                   <span>生成: {fmtDate(report.created_at)}</span>
-                  <span>Tokens: {report.tokens_used.toLocaleString()}</span>
+                  <span>Tokens: {(report.tokens_used ?? 0).toLocaleString()}</span>
                   <span>Cost: ${report.cost_usd.toFixed(4)}</span>
                 </div>
                 {!isExpanded && (
