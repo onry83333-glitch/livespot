@@ -54,6 +54,7 @@ export async function POST(request: NextRequest) {
     // cast_knowledgeに保存
     const sb = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
+    // cast_id を取得
     const { data: castRow } = await sb
       .from('registered_casts')
       .select('id')
@@ -98,7 +99,7 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * PUT /api/analysis/run-fb-report
+ * POST /api/analysis/run-fb-report?action=feedback
  * フィードバック保存
  */
 export async function PUT(request: NextRequest) {
