@@ -136,31 +136,26 @@ function generateDataOnlyReport(data: StructuredTipperData): string {
 
   // 2. 新規チッパー
   const nt = data.newTippers;
-  const newLines = nt.map(u => `| ${u.username} | ${u.tk}tk | ${u.count}回 |`);
-  sections.push(`## 新規チッパー（${nt.length}人）
-| ユーザー名 | 今回tk | 回数 |
-|---|---|---|
-${newLines.length > 0 ? newLines.join('\n') : '| (なし) | - | - |'}`);
+  const ntTotalTk = nt.reduce((sum, u) => sum + u.tk, 0);
+  const newLines = nt.map(u => `- ${u.username}: ${u.tk}tk (${u.count}回) ← 初チップ`);
+  sections.push(`## 新規チッパー（${nt.length}人 / ${ntTotalTk}tk）
+${newLines.length > 0 ? newLines.join('\n') : '(なし)'}`);
 
   // 3. リピーター
   const rp = data.repeaters;
-  const repLines = rp.map(u =>
-    `| ${u.username} | ${u.firstTipDate} | ${u.totalTk}tk | ${u.lastTipDate} | ${u.daysSince}日 | ${u.tk}tk |`
+  const repLines = rp.map((u, i) =>
+    `${i + 1}. ${u.username}: ${u.tk}tk [初回${u.firstTipDate}, 累計${u.totalTk}tk, 前回${u.lastTipDate}, ${u.daysSince}日ぶり]`
   );
   sections.push(`## リピーター（${rp.length}人）
-| ユーザー名 | 初回課金日 | 累計コイン | 前回課金日 | 何日ぶり | 今回tk |
-|---|---|---|---|---|---|
-${repLines.length > 0 ? repLines.join('\n') : '| (なし) | - | - | - | - | - |'}`);
+${repLines.length > 0 ? repLines.join('\n') : '(なし)'}`);
 
   // 4. 復帰ユーザー
   const ru = data.returnUsers;
   const retLines = ru.map(u =>
-    `| ${u.username} | ${u.firstTipDate} | ${u.lastTipDate} | ${u.daysSince}日 | ${u.tk}tk |`
+    `- ${u.username}: ${u.tk}tk [初回${u.firstTipDate}, 前回${u.lastTipDate}, ${u.daysSince}日ぶり]`
   );
   sections.push(`## 復帰ユーザー（${ru.length}人、30日以上ぶり）
-| ユーザー名 | 初回課金日 | 前回課金日 | 何日ぶり | 今回tk |
-|---|---|---|---|---|
-${retLines.length > 0 ? retLines.join('\n') : '| (なし) | - | - | - | - |'}`);
+${retLines.length > 0 ? retLines.join('\n') : '(なし)'}`);
 
   // 5. DM用ユーザー名リスト
   const dm = data.dmCopyNames;
