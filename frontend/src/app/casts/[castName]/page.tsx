@@ -1554,7 +1554,7 @@ function CastDetailInner() {
           {stats && (
             <div className="flex items-center gap-5 text-[11px]">
               <span style={{ color: 'var(--text-muted)' }}>
-                MSG <span className="font-bold text-slate-300">{stats.total_messages.toLocaleString()}</span>
+                MSG <span className="font-bold text-slate-300">{(stats.total_messages ?? 0).toLocaleString()}</span>
               </span>
               <span style={{ color: 'var(--accent-amber)' }}>
                 TIP <span className="font-bold">{formatTokens(totalCoinTx ?? stats.total_coins)}</span>
@@ -1629,7 +1629,7 @@ function CastDetailInner() {
                 {/* Stats */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="glass-card p-4 text-center">
-                    <p className="text-xl font-bold">{stats?.total_messages.toLocaleString() || 0}</p>
+                    <p className="text-xl font-bold">{(stats?.total_messages ?? 0).toLocaleString()}</p>
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>総メッセージ</p>
                   </div>
                   <div className="glass-card p-4 text-center">
@@ -2667,7 +2667,7 @@ function CastDetailInner() {
                                 <td className="py-2 px-2">{new Date(sq.session_date).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' })}</td>
                                 <td className="text-right py-2 px-2">{sq.duration_minutes}分</td>
                                 <td className="text-right py-2 px-2">{sq.peak_viewers}</td>
-                                <td className="text-right py-2 px-2" style={{ color: 'var(--accent-amber)' }}>{sq.total_coins.toLocaleString()}</td>
+                                <td className="text-right py-2 px-2" style={{ color: 'var(--accent-amber)' }}>{(sq.total_coins ?? 0).toLocaleString()}</td>
                                 <td className="text-right py-2 px-2">{sq.chat_count}</td>
                                 <td className="text-right py-2 px-2">{sq.tip_per_viewer}</td>
                                 <td className="text-right py-2 px-2">{sq.chat_per_minute}</td>

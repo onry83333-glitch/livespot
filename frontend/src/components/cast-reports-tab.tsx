@@ -936,7 +936,7 @@ function SessionReportCard({ record, castName }: { record: CastKnowledgeRecord; 
                           </Link>
                         </td>
                         <td className="py-1.5 px-2 text-right font-bold" style={{ color: 'var(--accent-amber)' }}>
-                          {t.amount.toLocaleString()}
+                          {(t.amount ?? 0).toLocaleString()}
                         </td>
                         <td className="py-1.5 px-2 text-right" style={{ color: 'var(--text-secondary)' }}>
                           {t.count}回
@@ -1217,7 +1217,7 @@ function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot
                           </Link>
                         </td>
                         <td className="py-1.5 px-2 text-right font-bold" style={{ color: 'var(--accent-amber)' }}>
-                          {t.total.toLocaleString()}
+                          {(t.total ?? 0).toLocaleString()}
                         </td>
                         <td className="py-1.5 px-2 text-right" style={{ color: 'var(--text-secondary)' }}>
                           {t.count}回
