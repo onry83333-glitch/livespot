@@ -1,11 +1,10 @@
 /**
  * POST /api/analysis/run-fb-report
  * 配信FBレポート生成エンドポイント
- * engine/route.tsのPOSTを直接関数呼び出し（self-fetch廃止）
+ * エンジンAPIにfb_reportタスクを投げ、結果をcast_knowledgeに保存
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { POST as enginePOST } from '@/app/api/persona/engine/route';
 
 export const maxDuration = 60;
 
@@ -24,30 +23,27 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Authorization ヘッダーをそのまま転送
     const authHeader = request.headers.get('authorization') || '';
 
-    // engine/route.tsのPOSTを直接関数呼び出し（HTTPラウンドトリップなし）
-    const engineReq = new NextRequest(
-      new URL('/api/persona/engine', request.nextUrl.origin),
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': authHeader,
-        },
-        body: JSON.stringify({
-          task_type: 'fb_report',
-          cast_name,
-          account_id,
-          context: {},
-        }),
+    // エンジンAPI呼び出し
+    const origin = request.nextUrl.origin;
+    const engineRes = await fetch(`${origin}/api/persona/engine`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': authHeader,
       },
-    );
+      body: JSON.stringify({
+        task_type: 'fb_report',
+        cast_name,
+        account_id,
+        context: {},
+      }),
+    });
 
-    const engineRes = await enginePOST(engineReq);
     const engineData = await engineRes.json();
-
-    if (engineRes.status !== 200) {
+    if (!engineRes.ok) {
       return NextResponse.json(engineData, { status: engineRes.status });
     }
 
@@ -88,11 +84,9 @@ export async function POST(request: NextRequest) {
       cost_usd: engineData.cost_usd,
       confidence: engineData.confidence,
     });
-  } catch (e: unknown) {
-    const err = e as { message?: string };
-    console.error('[run-fb-report] Error:', err.message || e);
+  } catch {
     return NextResponse.json(
-      { error: err.message || 'サーバーエラー' },
+      { error: 'サーバーエラー' },
       { status: 500 },
     );
   }
