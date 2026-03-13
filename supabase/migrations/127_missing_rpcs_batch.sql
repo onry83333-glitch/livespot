@@ -1056,6 +1056,7 @@ CREATE OR REPLACE FUNCTION public.get_spy_cast_stats(
 RETURNS TABLE (
   cast_name TEXT,
   total_messages BIGINT,
+  total_tips BIGINT,
   total_coins BIGINT,
   unique_users BIGINT,
   last_activity TIMESTAMPTZ
@@ -1066,6 +1067,7 @@ BEGIN
   SELECT
     cn.val AS cast_name,
     COALESCE(cl.total_messages, 0)::BIGINT,
+    COALESCE(cl.total_tips, 0)::BIGINT,
     COALESCE(cl.total_coins, 0)::BIGINT,
     COALESCE(cl.unique_users, 0)::BIGINT,
     cl.last_activity
@@ -1073,6 +1075,7 @@ BEGIN
   LEFT JOIN LATERAL (
     SELECT
       COUNT(*)::BIGINT AS total_messages,
+      COUNT(*) FILTER (WHERE c.message_type IN ('tip', 'gift') AND c.tokens > 0)::BIGINT AS total_tips,
       COALESCE(SUM(c.tokens), 0)::BIGINT AS total_coins,
       COUNT(DISTINCT c.username)::BIGINT AS unique_users,
       MAX(c.timestamp) AS last_activity

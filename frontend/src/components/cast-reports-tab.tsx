@@ -174,7 +174,8 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
 
   useEffect(() => { fetchRecords(); }, [fetchRecords]);
 
-  // 配信FBレポート生成（エンジンAPI経由）
+  // 配信FBレポート生成（2リクエスト分離: Step1=データ収集, Step2=LLM）
+  const [aiLoadingMessage, setAiLoadingMessage] = useState('');
   const handleGenerateAiReport = useCallback(async () => {
     setAiGenerating(true);
     setAiError(null);
@@ -182,43 +183,94 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
     setFbReportMarkdown(null);
     setFbFeedbackSent(false);
     setCopySuccess(false);
+    setAiLoadingMessage('データ収集中...');
     try {
       const sb = createClient();
       const { data: { session } } = await sb.auth.getSession();
       const token = session?.access_token || '';
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      };
 
-      const res = await fetch('/api/analysis/run-fb-report', {
+      // ── Step 1: データ収集（run-fb-report） ──
+      const step1Res = await fetch('/api/analysis/run-fb-report', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
+        headers,
         body: JSON.stringify({
           cast_name: castName,
           account_id: accountId,
         }),
       });
 
-      if (!res.ok) {
-        const errText = await res.text();
-        console.error('[fb-report] HTTP', res.status, errText);
+      if (!step1Res.ok) {
+        const errText = await step1Res.text();
+        console.error('[fb-report][Step1] HTTP', step1Res.status, errText);
         try {
           const errJson = JSON.parse(errText);
-          setAiError(errJson.error || `HTTP ${res.status}`);
+          setAiError(errJson.error || `HTTP ${step1Res.status}`);
         } catch {
-          setAiError(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+          setAiError(`HTTP ${step1Res.status}: ${errText.slice(0, 200)}`);
         }
         return;
       }
 
-      const data = await res.json();
-      setFbReportMarkdown(data.report_markdown);
+      const step1Data = await step1Res.json();
+      console.log(`[fb-report][Step1] データ収集完了: ${step1Data.collect_time_ms}ms`);
+
+      // ── Step 2: LLM呼び出し（engine） ──
+      setAiLoadingMessage('AIがレポートを生成中...');
+      const step2Res = await fetch('/api/persona/engine', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          task_type: 'fb_report',
+          cast_name: castName,
+          account_id: accountId,
+          context: {},
+          user_prompt: step1Data.user_prompt,
+        }),
+      });
+
+      if (!step2Res.ok) {
+        const errText = await step2Res.text();
+        console.error('[fb-report][Step2] HTTP', step2Res.status, errText);
+        try {
+          const errJson = JSON.parse(errText);
+          setAiError(errJson.error || `HTTP ${step2Res.status}`);
+        } catch {
+          setAiError(`HTTP ${step2Res.status}: ${errText.slice(0, 200)}`);
+        }
+        return;
+      }
+
+      const step2Data = await step2Res.json();
+      const reportMarkdown = step2Data.output;
+      setFbReportMarkdown(reportMarkdown);
+
+      // ── Step 3: cast_knowledge に保存（バックグラウンド） ──
+      fetch('/api/analysis/run-fb-report', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          cast_name: castName,
+          account_id: accountId,
+          step: 'save',
+          report_markdown: reportMarkdown,
+          cost_tokens: step2Data.cost_tokens,
+          cost_usd: step2Data.cost_usd,
+          model: step2Data.model,
+          confidence: step2Data.confidence,
+        }),
+      }).catch(e => console.error('[fb-report][save] error:', e));
+
       fetchRecords();
     } catch (e) {
       console.error('[fb-report] catch:', e);
       setAiError(`通信エラー: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setAiGenerating(false);
+      setAiLoadingMessage('');
     }
   }, [accountId, castName, fetchRecords]);
 
@@ -309,7 +361,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
             disabled={aiGenerating}
             className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {aiGenerating ? '4エージェント分析中...' : '配信FBレポートを生成'}
+            {aiGenerating ? (aiLoadingMessage || '処理中...') : '配信FBレポートを生成'}
           </button>
           <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
             5軸データ × 4人格エージェントで配信を深層分析します
@@ -351,7 +403,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
           disabled={aiGenerating}
           className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {aiGenerating ? '4エージェント分析中...' : '配信FBレポートを生成'}
+          {aiGenerating ? (aiLoadingMessage || '処理中...') : '配信FBレポートを生成'}
         </button>
         <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
           5軸データ × 4人格エージェントで配信を深層分析します

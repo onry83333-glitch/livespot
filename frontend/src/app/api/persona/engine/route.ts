@@ -26,6 +26,7 @@ interface EngineRequest {
   cast_name: string;
   account_id?: string;
   context: Record<string, unknown>;
+  user_prompt?: string; // 2リクエスト分離: Step2でフロントから渡されたプロンプト（collect5AxisDataスキップ用）
 }
 
 interface CastPersona {
@@ -75,7 +76,7 @@ interface AgentProfile {
   output_format: string | null;
 }
 
-interface FiveAxisData {
+export interface FiveAxisData {
   tipperStructure: string;
   tipTriggers: string;
   chatTemperature: string;
@@ -281,7 +282,7 @@ const ENGINE_LAYER_C: Record<string, string> = {
 // ============================================================
 // User Prompt ビルダー
 // ============================================================
-function buildUserPrompt(
+export function buildUserPrompt(
   taskType: EngineTaskType,
   context: Record<string, unknown>,
 ): string {
@@ -544,7 +545,7 @@ Markdownで出力してください。以下の構造を守ること:
 // LLMは使わない。SQL + ルールベースで構造化された事実データを作る。
 // 「事実」と「未検証」を明確に分離して出力。
 // ============================================================
-async function collect5AxisData(
+export async function collect5AxisData(
   token: string,
   castName: string,
   accountId: string,
@@ -572,7 +573,7 @@ async function collect5AxisData(
     const { data: sessions } = await sb.rpc('get_coin_sessions', {
       p_account_id: accountId,
       p_cast_name: castName,
-      p_limit: 10,
+      p_limit: 5,
     });
     _mark('get_coin_sessions');
 
@@ -1373,25 +1374,30 @@ ${[...freqBands['たまに'], ...freqBands['まれ']].join('\n') || '(なし)'}
 \`\`\``);
       }
 
+      // ── #3/#4 共通: 前回セッションのcoin_transactionsを1回で取得 ──
+      const prevSession34 = sessions.length >= 2 ? sessions[1] : null;
+      let sharedPrevTxRows: Array<{ user_name: string; tokens: number; type: string }> = [];
+      if (prevSession34) {
+        const { data: _prevRows } = await sb
+          .from('coin_transactions')
+          .select('user_name, tokens, type')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .gte('date', prevSession34.session_start as string)
+          .lte('date', prevSession34.session_end as string)
+          .gt('tokens', 0);
+        sharedPrevTxRows = (_prevRows || []) as Array<{ user_name: string; tokens: number; type: string }>;
+      }
+
       // ── #3 課金エスカレーション ──
       // リピーターの課金額変化（増加/減少/安定）
       if (sMaps.length >= 2 && returningTippers.length > 0) {
         // 各セッションのチッパー別tk取得（最新2セッション比較）
         const latestTippers = tipperMap; // 最新セッション（既に取得済み）
 
-        // 1つ前のセッションのチッパー別tk
-        const prevSession = sessions[1];
-        const { data: prevTxRows } = await sb
-          .from('coin_transactions')
-          .select('user_name, tokens')
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .gte('date', prevSession.session_start as string)
-          .lte('date', prevSession.session_end as string)
-          .gt('tokens', 0);
-
+        // 1つ前のセッションのチッパー別tk（共通クエリ結果を使用）
         const prevTipperMap = new Map<string, number>();
-        for (const row of prevTxRows || []) {
+        for (const row of sharedPrevTxRows) {
           const name = row.user_name || '';
           if (!name || name === 'anonymous') continue;
           prevTipperMap.set(name, (prevTipperMap.get(name) || 0) + row.tokens);
@@ -1447,19 +1453,9 @@ ${increasedDmCopy || '(なし)'}
       // ── #4 課金タイプ変遷 ──
       // リピーターの取引タイプが前回から変わったか
       if (sMaps.length >= 2) {
-        const prevSession = sessions[1];
-        const { data: prevTypeTxRows } = await sb
-          .from('coin_transactions')
-          .select('user_name, type, tokens')
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .gte('date', prevSession.session_start as string)
-          .lte('date', prevSession.session_end as string)
-          .gt('tokens', 0);
-
-        // 前回のユーザー別メイン取引タイプ
+        // 前回のユーザー別メイン取引タイプ（共通クエリ結果を使用）
         const prevUserTypes = new Map<string, Map<string, number>>();
-        for (const row of prevTypeTxRows || []) {
+        for (const row of sharedPrevTxRows) {
           const name = row.user_name || '';
           if (!name || name === 'anonymous') continue;
           if (!prevUserTypes.has(name)) prevUserTypes.set(name, new Map());
@@ -1617,39 +1613,38 @@ ${retLines.join('\n')}`);
       // 各セッションを10分区間に分割し、区間別tkを算出
       {
         const curveN = Math.min(sessions.length, 5);
-        const curveLines: string[] = [];
 
-        for (let si = 0; si < curveN; si++) {
-          const sess = sessions[si];
-          const sStart = new Date(sess.session_start as string).getTime();
-          const sEnd = new Date(sess.session_end as string).getTime();
-          const durationMin = Math.max(sess.duration_minutes || 1, 1);
+        // Promise.all で並列取得（逐次ループから並列化）
+        const curveLines = await Promise.all(
+          sessions.slice(0, curveN).map(async (sess: { session_start: string; session_end: string; duration_minutes: number }) => {
+            const sStart = new Date(sess.session_start).getTime();
+            const sEnd = new Date(sess.session_end).getTime();
+            const durationMin = Math.max(sess.duration_minutes || 1, 1);
 
-          // セッション内取引を取得
-          const { data: curveTx } = await sb
-            .from('coin_transactions')
-            .select('tokens, date')
-            .eq('account_id', accountId)
-            .eq('cast_name', castName)
-            .gte('date', sess.session_start as string)
-            .lte('date', sess.session_end as string)
-            .gt('tokens', 0);
+            const { data: curveTx } = await sb
+              .from('coin_transactions')
+              .select('tokens, date')
+              .eq('account_id', accountId)
+              .eq('cast_name', castName)
+              .gte('date', sess.session_start)
+              .lte('date', sess.session_end)
+              .gt('tokens', 0);
 
-          // 10分区間に分割
-          const INTERVAL_MS = 10 * 60 * 1000;
-          const bucketCount = Math.max(Math.ceil((sEnd - sStart) / INTERVAL_MS), 1);
-          const buckets = new Array(Math.min(bucketCount, 12)).fill(0); // max 12 buckets (120min)
+            const INTERVAL_MS = 10 * 60 * 1000;
+            const bucketCount = Math.max(Math.ceil((sEnd - sStart) / INTERVAL_MS), 1);
+            const buckets = new Array(Math.min(bucketCount, 12)).fill(0);
 
-          for (const tx of curveTx || []) {
-            const txTime = new Date(tx.date as string).getTime();
-            const bucketIdx = Math.min(Math.floor((txTime - sStart) / INTERVAL_MS), buckets.length - 1);
-            if (bucketIdx >= 0) buckets[bucketIdx] += tx.tokens;
-          }
+            for (const tx of curveTx || []) {
+              const txTime = new Date(tx.date as string).getTime();
+              const bucketIdx = Math.min(Math.floor((txTime - sStart) / INTERVAL_MS), buckets.length - 1);
+              if (bucketIdx >= 0) buckets[bucketIdx] += tx.tokens;
+            }
 
-          const bucketStr = buckets.map((tk, i) => `${i * 10}-${(i + 1) * 10}分:${tk}tk`).join(' | ');
-          const sessionDate = (sess.session_start as string).slice(0, 10);
-          curveLines.push(`- ${sessionDate} (${durationMin}分): ${bucketStr}`);
-        }
+            const bucketStr = buckets.map((tk: number, i: number) => `${i * 10}-${(i + 1) * 10}分:${tk}tk`).join(' | ');
+            const sessionDate = sess.session_start.slice(0, 10);
+            return `- ${sessionDate} (${durationMin}分): ${bucketStr}`;
+          })
+        );
 
         // ピーク区間の比較
         qualityParts.push(`## #7 チップ速度の時間カーブ（10分区間, 直近${curveN}回）
@@ -1662,49 +1657,44 @@ ${curveLines.join('\n')}
       // ── #8 ticketshow突入タイミングの最適化 ──
       // セッション内のticketshowトランザクションの時間帯と参加者数
       {
-        const tsAnalysis: Array<{
-          date: string; minuteIn: number; tsTk: number; tsUsers: number;
-          totalSessionTk: number; tsRatio: string; totalTippers: number;
-        }> = [];
-
         const tsN = Math.min(sessions.length, 10);
-        for (let si = 0; si < tsN; si++) {
-          const sess = sessions[si];
-          const sStart = new Date(sess.session_start as string).getTime();
 
-          // ticketshowトランザクションのみ取得
-          const { data: tsTx } = await sb
-            .from('coin_transactions')
-            .select('user_name, tokens, date')
-            .eq('account_id', accountId)
-            .eq('cast_name', castName)
-            .eq('type', 'ticketshow')
-            .gte('date', sess.session_start as string)
-            .lte('date', sess.session_end as string)
-            .gt('tokens', 0);
+        // Promise.all で並列取得（逐次ループから並列化）
+        const tsResults = await Promise.all(
+          sessions.slice(0, tsN).map(async (sess: { session_start: string; session_end: string; total_tokens: number }, si: number) => {
+            const sStart = new Date(sess.session_start).getTime();
 
-          if (!tsTx || tsTx.length === 0) continue;
+            const { data: tsTx } = await sb
+              .from('coin_transactions')
+              .select('user_name, tokens, date')
+              .eq('account_id', accountId)
+              .eq('cast_name', castName)
+              .eq('type', 'ticketshow')
+              .gte('date', sess.session_start)
+              .lte('date', sess.session_end)
+              .gt('tokens', 0);
 
-          // ticketshow開始タイミング（最初のticketshowトランザクション）
-          const tsDates = tsTx.map(t => new Date(t.date as string).getTime()).sort((a, b) => a - b);
-          const tsStartTime = tsDates[0];
-          const minuteIn = Math.round((tsStartTime - sStart) / 60000);
-          const tsTk = tsTx.reduce((s, t) => s + (t.tokens || 0), 0);
-          const tsUserSet = new Set(tsTx.map(t => t.user_name).filter(Boolean));
+            if (!tsTx || tsTx.length === 0) return null;
 
-          // セッション全体のチッパー数
-          const totalTippers = sessionTipperMaps[si]?.tippers.size || 0;
+            const tsDates = tsTx.map(t => new Date(t.date as string).getTime()).sort((a, b) => a - b);
+            const tsStartTime = tsDates[0];
+            const minuteIn = Math.round((tsStartTime - sStart) / 60000);
+            const tsTk = tsTx.reduce((s, t) => s + (t.tokens || 0), 0);
+            const tsUserSet = new Set(tsTx.map(t => t.user_name).filter(Boolean));
+            const totalTippers = sessionTipperMaps[si]?.tippers.size || 0;
 
-          tsAnalysis.push({
-            date: (sess.session_start as string).slice(0, 10),
-            minuteIn,
-            tsTk,
-            tsUsers: tsUserSet.size,
-            totalSessionTk: sess.total_tokens || 0,
-            tsRatio: sess.total_tokens > 0 ? ((tsTk / sess.total_tokens) * 100).toFixed(0) : '0',
-            totalTippers,
-          });
-        }
+            return {
+              date: sess.session_start.slice(0, 10),
+              minuteIn,
+              tsTk,
+              tsUsers: tsUserSet.size,
+              totalSessionTk: sess.total_tokens || 0,
+              tsRatio: sess.total_tokens > 0 ? ((tsTk / sess.total_tokens) * 100).toFixed(0) : '0',
+              totalTippers,
+            };
+          })
+        );
+        const tsAnalysis = tsResults.filter((r): r is NonNullable<typeof r> => r !== null);
 
         if (tsAnalysis.length > 0) {
           const tsLines = tsAnalysis.map(t =>
@@ -2123,7 +2113,7 @@ function selectLayerA(taskType: EngineTaskType, personaBase: string | null): str
 // ============================================================
 export async function POST(req: NextRequest) {
   const body = await req.json() as EngineRequest;
-  const { task_type, cast_name, account_id: reqAccountId, context } = body;
+  const { task_type, cast_name, account_id: reqAccountId, context, user_prompt: prebuiltUserPrompt } = body;
 
   // バリデーション
   if (!task_type || !cast_name) {
@@ -2179,14 +2169,19 @@ export async function POST(req: NextRequest) {
     let fiveAxisData: FiveAxisData | undefined;
     let dynamicLayerC = '';
     if (task_type === 'fb_report') {
-      const effectiveAccountId = reqAccountId || (auth.accountIds?.[0]) || '';
-      const t0 = Date.now();
-      fiveAxisData = await collect5AxisData(auth.token, cast_name, effectiveAccountId, context);
-      const t1 = Date.now();
-      console.log(`[fb_report][PERF] collect5AxisData: ${t1 - t0}ms`);
-      // デバッグ: LLMに渡す前の5軸データを確認
-      console.log('[fb_report] 5-Axis tipperStructure:', fiveAxisData.tipperStructure?.slice(0, 500));
-      console.log('[fb_report] 5-Axis chatTemperature:', fiveAxisData.chatTemperature?.slice(0, 200));
+      if (!prebuiltUserPrompt) {
+        // 従来互換: collect5AxisData を実行（1リクエストモード）
+        const effectiveAccountId = reqAccountId || (auth.accountIds?.[0]) || '';
+        const t0 = Date.now();
+        fiveAxisData = await collect5AxisData(auth.token, cast_name, effectiveAccountId, context);
+        const t1 = Date.now();
+        console.log(`[fb_report][PERF] collect5AxisData: ${t1 - t0}ms`);
+        console.log('[fb_report] 5-Axis tipperStructure:', fiveAxisData.tipperStructure?.slice(0, 500));
+        console.log('[fb_report] 5-Axis chatTemperature:', fiveAxisData.chatTemperature?.slice(0, 200));
+      } else {
+        // 2リクエスト分離: Step2 — データ収集スキップ（フロントからuser_prompt渡し済み）
+        console.log('[fb_report] Step2: using prebuilt user_prompt, skipping collect5AxisData');
+      }
       const agents = await fetchAgentProfiles(auth.token);
       dynamicLayerC = agents.length > 0
         ? buildFbReportLayerC(agents)
@@ -2220,10 +2215,16 @@ export async function POST(req: NextRequest) {
     ].filter(Boolean).join('\n');
 
     // ── User Prompt（fb_report は5軸データをcontextに注入） ──
-    const effectiveContext = task_type === 'fb_report'
-      ? { ...context, five_axis: fiveAxisData, cast_name }
-      : context || {};
-    const userPrompt = buildUserPrompt(task_type, effectiveContext);
+    let userPrompt: string;
+    if (task_type === 'fb_report' && prebuiltUserPrompt) {
+      // 2リクエスト分離: Step2 — フロントから渡されたプロンプトをそのまま使用
+      userPrompt = prebuiltUserPrompt;
+    } else {
+      const effectiveContext = task_type === 'fb_report'
+        ? { ...context, five_axis: fiveAxisData, cast_name }
+        : context || {};
+      userPrompt = buildUserPrompt(task_type, effectiveContext);
+    }
 
     // ── API 呼び出し（fb_report は長い出力が必要） ──
     const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 4000 : 1000;
