@@ -565,12 +565,16 @@ async function collect5AxisData(
   };
 
   try {
+    const _t = { start: Date.now(), last: Date.now() };
+    const _mark = (label: string) => { const now = Date.now(); console.log(`[5axis][PERF] ${label}: ${now - _t.last}ms (total: ${now - _t.start}ms)`); _t.last = now; };
+
     // ── セッション一覧取得（基本データソース） ──
     const { data: sessions } = await sb.rpc('get_coin_sessions', {
       p_account_id: accountId,
       p_cast_name: castName,
       p_limit: 10,
     });
+    _mark('get_coin_sessions');
 
     if (!sessions || sessions.length === 0) return result;
 
@@ -630,6 +634,7 @@ async function collect5AxisData(
     const concentration = totalTokens > 0 ? ((top3Tokens / totalTokens) * 100).toFixed(1) : '0';
     const allTipperNames = allTippers.map(t => t.username);
 
+    _mark('session+tipper queries');
     // ── 新規判定: coin_transactions全履歴ベース（paid_usersは使わない） ──
     // このキャストのcoin_transactionsにセッション開始前のレコードが1件もない = 新規
     //
@@ -647,65 +652,45 @@ async function collect5AxisData(
     let returningTippers: TipperHistory[] = [];
 
     if (allTipperNames.length > 0) {
-      // 全チッパーの履歴を並列取得（各ユーザー3クエリ: 最古日/最新日/件数+累計tk）
+      // バッチIN句で全チッパーの履歴を取得し、JS側でGROUP BY集計
       const historyMap = new Map<string, TipperHistory>();
+      const BATCH_SIZE = 50;
 
-      const historyChecks = allTipperNames.map(async (name) => {
-        // 存在チェック兼最古のチップ日（セッション開始前のみ）
-        const { data: oldest } = await sb
+      for (let bi = 0; bi < allTipperNames.length; bi += BATCH_SIZE) {
+        const batch = allTipperNames.slice(bi, bi + BATCH_SIZE);
+        const { data: histRows } = await sb
           .from('coin_transactions')
-          .select('date')
+          .select('user_name, date, tokens')
           .eq('account_id', accountId)
           .eq('cast_name', castName)
-          .eq('user_name', name)
+          .in('user_name', batch)
           .lt('date', sessionStartISO)
           .gt('tokens', 0)
           .order('date', { ascending: true })
-          .limit(1);
+          .limit(5000);
 
-        if (!oldest || oldest.length === 0) return; // 新規
-
-        // 最新のチップ日（セッション開始前で最も新しい）
-        const { data: newest } = await sb
-          .from('coin_transactions')
-          .select('date')
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .eq('user_name', name)
-          .lt('date', sessionStartISO)
-          .gt('tokens', 0)
-          .order('date', { ascending: false })
-          .limit(1);
-
-        // 件数
-        const { count } = await sb
-          .from('coin_transactions')
-          .select('id', { count: 'exact', head: true })
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .eq('user_name', name)
-          .gt('tokens', 0);
-
-        // 累計tk（limit明示で1000行制限回避）
-        const { data: tkRows } = await sb
-          .from('coin_transactions')
-          .select('tokens')
-          .eq('account_id', accountId)
-          .eq('cast_name', castName)
-          .eq('user_name', name)
-          .gt('tokens', 0)
-          .limit(10000);
-        const totalTk = (tkRows || []).reduce((s, r) => s + (r.tokens || 0), 0);
-
-        historyMap.set(name, {
-          username: name,
-          historyTxCount: count || 0,
-          historyTokens: totalTk,
-          firstTipDate: oldest[0].date as string,
-          lastTipDate: (newest?.[0]?.date as string) || oldest[0].date as string,
-        });
-      });
-      await Promise.all(historyChecks);
+        // JS側でGROUP BY: user_name別にmin(date), max(date), count, sum(tokens)
+        for (const row of histRows || []) {
+          const uname = row.user_name as string;
+          const dateStr = row.date as string;
+          const tk = (row.tokens as number) || 0;
+          const existing = historyMap.get(uname);
+          if (existing) {
+            if (dateStr < existing.firstTipDate) existing.firstTipDate = dateStr;
+            if (dateStr > existing.lastTipDate) existing.lastTipDate = dateStr;
+            existing.historyTxCount++;
+            existing.historyTokens += tk;
+          } else {
+            historyMap.set(uname, {
+              username: uname,
+              historyTxCount: 1,
+              historyTokens: tk,
+              firstTipDate: dateStr,
+              lastTipDate: dateStr,
+            });
+          }
+        }
+      }
 
       trueNewTippers = allTipperNames.filter(n => !historyMap.has(n));
       returningTippers = allTipperNames
@@ -755,6 +740,7 @@ async function collect5AxisData(
       })
       .sort((a, b) => b.daysSince - a.daysSince);
 
+    _mark('tipper history (N*4 queries)');
     // ── DM優先度分類 ──
     // 優先度A: 複数回チップの新規（本気度高い）
     const priorityA = newTippersSorted.filter(t => t.count >= 2);
@@ -1096,6 +1082,7 @@ ${actionText}
       sessionTipperMaps.push(...pastMaps);
       sessionTipperMaps.sort((a, b) => a.sessionIdx - b.sessionIdx);
 
+      _mark('Group D session history queries');
       const dmParts: string[] = [];
 
       // ── #11 離脱予兆ユーザーリスト ──
@@ -1300,6 +1287,7 @@ ${comebackDetailLines.join('\n')}
         sMaps = [{ sessionIdx: 0, start: sessionStartISO, end: sessionEndISO, tippers: new Set(allTipperNames) }];
       }
 
+      _mark('Group D done');
       // ── #1 セッション間リテンション ──
       // セッションN → セッションN-1 のチッパー残存率
       if (sMaps.length >= 2) {
@@ -1560,6 +1548,7 @@ ${typeSummaryLines.join('\n')}`);
     try {
       const qualityParts: string[] = [];
 
+      _mark('Group A done');
       // ── #5 セッション別新規獲得率の推移 ──
       // 各セッションで全チッパーのうち何%が新規だったか
       if (sessionTipperMaps.length >= 2) {
@@ -1911,6 +1900,7 @@ ${preWarmedUsers.join('\n') || '(なし)'}
     try {
       const crossParts: string[] = [];
 
+      _mark('Group B+E done');
       // ── #9 自社ファンの他社出現 ──
       // 自社のチッパー（今回+リピーター）が他社キャストのchat_logsに出現しているか
       if (allTipperNames.length > 0) {
@@ -2112,6 +2102,7 @@ ${goalSummaryLines.join('\n')}
       result.crossCompetitor = '[注意] グループCデータ収集でエラー発生';
     }
 
+    _mark('ALL DONE');
     return result;
   } catch (err) {
     console.error('[5-Axis] Error collecting data:', err);
@@ -2189,7 +2180,10 @@ export async function POST(req: NextRequest) {
     let dynamicLayerC = '';
     if (task_type === 'fb_report') {
       const effectiveAccountId = reqAccountId || (auth.accountIds?.[0]) || '';
+      const t0 = Date.now();
       fiveAxisData = await collect5AxisData(auth.token, cast_name, effectiveAccountId, context);
+      const t1 = Date.now();
+      console.log(`[fb_report][PERF] collect5AxisData: ${t1 - t0}ms`);
       // デバッグ: LLMに渡す前の5軸データを確認
       console.log('[fb_report] 5-Axis tipperStructure:', fiveAxisData.tipperStructure?.slice(0, 500));
       console.log('[fb_report] 5-Axis chatTemperature:', fiveAxisData.chatTemperature?.slice(0, 200));
@@ -2232,8 +2226,11 @@ export async function POST(req: NextRequest) {
     const userPrompt = buildUserPrompt(task_type, effectiveContext);
 
     // ── API 呼び出し（fb_report は長い出力が必要） ──
-    const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 8000 : 1000;
+    const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 4000 : 1000;
+    const tLlm0 = Date.now();
     const result = await callClaude(systemPrompt, userPrompt, maxTokens);
+    const tLlm1 = Date.now();
+    console.log(`[fb_report][PERF] callClaude: ${tLlm1 - tLlm0}ms (tokens: ${result.tokensUsed})`);
 
     // ── レスポンス処理（fb_report はMarkdown、それ以外はJSON） ──
     if (task_type === 'fb_report') {
