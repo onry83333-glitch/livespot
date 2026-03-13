@@ -94,80 +94,87 @@ interface CastKnowledgeRecord {
 }
 
 /* ============================================================
-   FiveAxisData → Markdown（LLM不要・超軽量版）
+   構造化データ → Markdown（LLM不要・超軽量版）
    ============================================================ */
-interface FiveAxisRaw {
-  tipperStructure: string;
-  tipTriggers: string;
-  chatTemperature: string;
-  diffFromPrevious: string;
-  benchmark: string;
-  dmActionLists: string;
-  userBehavior: string;
-  broadcastQuality: string;
-  realtimeMetrics: string;
-  crossCompetitor: string;
+interface StructuredTipperData {
+  sessionSummary: {
+    totalTokens: number;
+    txCount: number;
+    durationMinutes: number;
+    uniqueTipperCount: number;
+    anonymousCount: number;
+    anonymousTokens: number;
+  };
+  newTippers: Array<{ username: string; tk: number; count: number }>;
+  repeaters: Array<{
+    username: string; tk: number;
+    firstTipDate: string; lastTipDate: string;
+    totalTk: number; daysSince: number;
+  }>;
+  returnUsers: Array<{
+    username: string; tk: number;
+    firstTipDate: string; lastTipDate: string;
+    daysSince: number;
+  }>;
+  dmCopyNames: {
+    newTippers: string[];
+    repeaters: string[];
+    returnUsers: string[];
+  };
 }
 
-function generateDataOnlyReport(ax: FiveAxisRaw): string {
-  const ts = ax.tipperStructure || '';
-  const ub = ax.userBehavior || '';
-  const dm = ax.dmActionLists || '';
-
-  // --- セッション概要（tipperStructure 冒頭） ---
-  const summaryMatch = ts.match(/^[\s\S]*?(?=## 新規|## リピーター)/);
-  const summary = summaryMatch?.[0]?.trim() || '';
-
-  // --- 新規チッパー ---
-  const newSection = ts.match(/## 新規チッパー[\s\S]*?(?=## リピーター|## 復帰|## 🚩|## 高額新規|## DM|$)/)?.[0]?.trim() || '';
-
-  // --- 高額新規 ---
-  const highValueSection = ts.match(/## 高額新規[\s\S]*?(?=## リピーター|## 復帰|## 🚩|## DM|$)/)?.[0]?.trim() || '';
-
-  // --- リピーター ---
-  const repeaterSection = ts.match(/## リピーター[\s\S]*?(?=## 復帰|## 🚩|## DM|## 高額新規|$)/)?.[0]?.trim() || '';
-
-  // --- 復帰ユーザー ---
-  const returnSection = ts.match(/## 復帰ユーザー[\s\S]*?(?=## 🚩|## DM|$)/)?.[0]?.trim() || '';
-
-  // --- 離脱警告 ---
-  const churnSection = ts.match(/🚩 離脱警告[\s\S]*?(?=## DM|$)/)?.[0]?.trim() || '';
-
-  // --- 課金エスカレーション ---
-  const escSection = ub.match(/## #3 課金エスカレーション[\s\S]*?(?=## #4|$)/)?.[0]?.trim() || '';
-
-  // --- 初回課金後2回目来訪率 ---
-  const newAcqSection = ub.match(/## #5 セッション別新規獲得率[\s\S]*?(?=## #6|$)/)?.[0]?.trim() || '';
-
-  // --- 離脱予兆 (dmActionLists) ---
-  const churnAlert = dm.match(/## #11 離脱予兆[\s\S]*?(?=## #12|## #13|$)/)?.[0]?.trim() || '';
-
-  // --- DM用ユーザー名リスト（各セクションの## DM用を収集） ---
-  const dmSubsections: string[] = [];
-  const dmRegex = /## DM用[\s\S]*?(?=## [^D]|$)/g;
-  let dmMatch: RegExpExecArray | null;
-  for (const source of [ts, ub, dm]) {
-    dmRegex.lastIndex = 0;
-    while ((dmMatch = dmRegex.exec(source)) !== null) {
-      const block = dmMatch[0].trim();
-      if (block) dmSubsections.push(block);
-    }
-  }
-
-  // --- マークダウン組み立て ---
+function generateDataOnlyReport(data: StructuredTipperData): string {
+  const s = data.sessionSummary;
+  const tkPerMin = s.durationMinutes > 0 ? (s.totalTokens / s.durationMinutes).toFixed(1) : '0';
   const sections: string[] = [];
 
-  if (summary) sections.push(`## セッション概要\n${summary}`);
-  if (newSection) sections.push(newSection);
-  if (highValueSection) sections.push(highValueSection);
-  if (repeaterSection) sections.push(repeaterSection);
-  if (returnSection) sections.push(returnSection);
-  if (escSection) sections.push(escSection.replace(/^## #3 /, '## '));
-  if (churnSection) sections.push(`## ${churnSection}`);
-  if (churnAlert) sections.push(churnAlert.replace(/^## #11 /, '## '));
-  if (newAcqSection) sections.push(newAcqSection.replace(/^## #5 /, '## '));
-  if (dmSubsections.length > 0) {
-    sections.push(`## DM用ユーザー名リスト\n\n${dmSubsections.join('\n\n')}`);
+  // 1. セッション概要
+  sections.push(`## セッション概要
+- 合計: **${s.totalTokens}tk** / ${s.txCount}件 / ${s.durationMinutes}分
+- チッパー数: ${s.uniqueTipperCount}人（匿名: ${s.anonymousCount}件/${s.anonymousTokens}tk）
+- tk/分: ${tkPerMin}`);
+
+  // 2. 新規チッパー
+  const nt = data.newTippers;
+  const newLines = nt.map(u => `| ${u.username} | ${u.tk}tk | ${u.count}回 |`);
+  sections.push(`## 新規チッパー（${nt.length}人）
+| ユーザー名 | 今回tk | 回数 |
+|---|---|---|
+${newLines.length > 0 ? newLines.join('\n') : '| (なし) | - | - |'}`);
+
+  // 3. リピーター
+  const rp = data.repeaters;
+  const repLines = rp.map(u =>
+    `| ${u.username} | ${u.firstTipDate} | ${u.totalTk}tk | ${u.lastTipDate} | ${u.daysSince}日 | ${u.tk}tk |`
+  );
+  sections.push(`## リピーター（${rp.length}人）
+| ユーザー名 | 初回課金日 | 累計コイン | 前回課金日 | 何日ぶり | 今回tk |
+|---|---|---|---|---|---|
+${repLines.length > 0 ? repLines.join('\n') : '| (なし) | - | - | - | - | - |'}`);
+
+  // 4. 復帰ユーザー
+  const ru = data.returnUsers;
+  const retLines = ru.map(u =>
+    `| ${u.username} | ${u.firstTipDate} | ${u.lastTipDate} | ${u.daysSince}日 | ${u.tk}tk |`
+  );
+  sections.push(`## 復帰ユーザー（${ru.length}人、30日以上ぶり）
+| ユーザー名 | 初回課金日 | 前回課金日 | 何日ぶり | 今回tk |
+|---|---|---|---|---|
+${retLines.length > 0 ? retLines.join('\n') : '| (なし) | - | - | - | - |'}`);
+
+  // 5. DM用ユーザー名リスト
+  const dm = data.dmCopyNames;
+  const copyBlock = (label: string, names: string[]) => {
+    if (names.length === 0) return '';
+    return `### ${label}（${names.length}人）\n\`\`\`\n${names.join('\n')}\n\`\`\``;
+  };
+  const dmBlocks = [
+    copyBlock('🆕 新規チッパー', dm.newTippers),
+    copyBlock('🔄 リピーター', dm.repeaters),
+    copyBlock('🔙 復帰ユーザー', dm.returnUsers),
+  ].filter(Boolean);
+  if (dmBlocks.length > 0) {
+    sections.push(`## DM用ユーザー名リスト\n\n${dmBlocks.join('\n\n')}`);
   }
 
   return sections.join('\n\n---\n\n');
@@ -300,7 +307,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
 
       // ── 超軽量版: LLM不要、JSでマークダウン生成 ──
       setAiLoadingMessage('レポート生成中...');
-      const fullReport = generateDataOnlyReport(step1Data.five_axis_raw as FiveAxisRaw);
+      const fullReport = generateDataOnlyReport(step1Data.five_axis_raw.structured as StructuredTipperData);
       setFbReportMarkdown(fullReport);
 
       // ── cast_knowledge に保存（バックグラウンド） ──

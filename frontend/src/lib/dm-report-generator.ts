@@ -10,11 +10,8 @@ export interface DMData {
   highValueNewNames: Array<{ name: string; tk: number }>;
   repeaterNames: Array<{ name: string; tk: number; count: number; firstDate: string; totalTk: number }>;
   returnUserNames: Array<{ name: string; daysSince: number; tk: number }>;
-  churnRisk: Array<{ name: string; sessions: number; totalTk: number; currentTk: number }>;
   secondVisitRate: { rate: string; noSecondVisitUsers: Array<{ name: string }> };
   returnTriggers: Array<{ name: string; trigger: string; daysSince: number; tk: number }>;
-  escalationDown: Array<{ name: string; prevTk: number; currentTk: number }>;
-  escalationUp: Array<{ name: string; prevTk: number; currentTk: number }>;
   priorityA: Array<{ name: string; reason: string }>;
   priorityB: Array<{ name: string; reason: string }>;
   priorityC: Array<{ name: string; reason: string }>;
@@ -42,11 +39,8 @@ export function extractDMData(fiveAxisRaw: {
     highValueNewNames: [],
     repeaterNames: [],
     returnUserNames: [],
-    churnRisk: [],
     secondVisitRate: { rate: 'N/A', noSecondVisitUsers: [] },
     returnTriggers: [],
-    escalationDown: [],
-    escalationUp: [],
     priorityA: [],
     priorityB: [],
     priorityC: [],
@@ -87,14 +81,6 @@ export function extractDMData(fiveAxisRaw: {
     }
   }
 
-  // 離脱警告
-  const churnSection = ts.match(/🚩 離脱警告[\s\S]*?(?=##|$)/);
-  if (churnSection) {
-    for (const m of matchAllArray(churnSection[0], /🚩\s+([^\s:]+)[\s:]*.*?(\d+)\s*回.*?累計\s*(\d+)\s*tk.*?今回\s*(\d+)\s*tk/g)) {
-      result.churnRisk.push({ name: m[1], sessions: parseInt(m[2]), totalTk: parseInt(m[3]), currentTk: parseInt(m[4]) });
-    }
-  }
-
   // DM優先度
   const priorityASection = ts.match(/🔴 優先度A[\s\S]*?(?=🟡|🟢|##|$)/);
   if (priorityASection) {
@@ -118,16 +104,6 @@ export function extractDMData(fiveAxisRaw: {
   // --- dmActionLists から離脱予兆・再訪率・復帰きっかけを抽出 ---
   const dm = fiveAxisRaw.dmActionLists || '';
 
-  // #11 離脱予兆
-  const churnPredSection = dm.match(/## #11 離脱予兆[\s\S]*?(?=## #12|## #13|$)/);
-  if (churnPredSection) {
-    for (const m of matchAllArray(churnPredSection[0], /- ([^\s:]+)[\s:]+(\d+)\s*回.*?累計\s*(\d+)\s*tk/g)) {
-      if (!result.churnRisk.find(c => c.name === m[1])) {
-        result.churnRisk.push({ name: m[1], sessions: parseInt(m[2]), totalTk: parseInt(m[3]), currentTk: 0 });
-      }
-    }
-  }
-
   // #12 初回課金後2回目来訪率
   const secondVisitSection = dm.match(/## #12 初回課金後2回目来訪率[\s\S]*?(?=## #13|$)/);
   if (secondVisitSection) {
@@ -146,24 +122,6 @@ export function extractDMData(fiveAxisRaw: {
     for (const m of matchAllArray(triggerSection[0], /- ([^\s:]+)[\s:]+.*?空白\s*(\d+)\s*日.*?(\d+)\s*tk.*?([^\n]*)/g)) {
       const trigger = m[4]?.includes('ticketshow') ? 'ticketshow' : m[4]?.includes('tip') ? 'tip' : 'other';
       result.returnTriggers.push({ name: m[1], daysSince: parseInt(m[2]), tk: parseInt(m[3]), trigger });
-    }
-  }
-
-  // --- userBehavior から課金エスカレーション（増減）を抽出 ---
-  const ub = fiveAxisRaw.userBehavior || '';
-  const escSection = ub.match(/## #3 課金エスカレーション[\s\S]*?(?=## #4|$)/);
-  if (escSection) {
-    const upSection = escSection[0].match(/増加[\s\S]*?(?=減少|安定|##|$)/i);
-    if (upSection) {
-      for (const m of matchAllArray(upSection[0], /- ([^\s:]+)[\s:]+(\d+)\s*→\s*(\d+)/g)) {
-        result.escalationUp.push({ name: m[1], prevTk: parseInt(m[2]), currentTk: parseInt(m[3]) });
-      }
-    }
-    const downSection = escSection[0].match(/減少[\s\S]*?(?=安定|##|$)/i);
-    if (downSection) {
-      for (const m of matchAllArray(downSection[0], /- ([^\s:]+)[\s:]+(\d+)\s*→\s*(\d+)/g)) {
-        result.escalationDown.push({ name: m[1], prevTk: parseInt(m[2]), currentTk: parseInt(m[3]) });
-      }
     }
   }
 
@@ -201,15 +159,6 @@ export function generateDMReport(dmData: DMData): string {
     }
   }
 
-  // 離脱予兆アラート
-  if (dmData.churnRisk.length > 0) {
-    sections.push('\n## ⚠️ 離脱予兆アラート');
-    for (const u of dmData.churnRisk) {
-      sections.push(`- 🚩 **${u.name}** — ${u.sessions}回参加 / 累計${u.totalTk}tk${u.currentTk > 0 ? ` / 今回${u.currentTk}tk` : ''}`);
-    }
-    sections.push('\n> 💡 「また来てね」系DM推奨。累計高額なのに今回少額 = 離脱の兆候');
-  }
-
   // 新規チッパーリスト
   if (dmData.newTipperNames.length > 0) {
     sections.push('\n## 🆕 新規チッパー');
@@ -219,39 +168,12 @@ export function generateDMReport(dmData: DMData): string {
     sections.push('\n> 💡 「初回ありがとう」系DM推奨');
   }
 
-  // 高額新規
-  if (dmData.highValueNewNames.length > 0) {
-    sections.push('\n## 💎 高額新規（150tk以上）');
-    for (const u of dmData.highValueNewNames) {
-      sections.push(`- **${u.name}**: ${u.tk}tk`);
-    }
-    sections.push('\n> 💡 特別感のあるDM推奨。VIP候補');
-  }
-
   // リピーター
   if (dmData.repeaterNames.length > 0) {
     sections.push('\n## 🔄 リピーター');
     for (const u of dmData.repeaterNames) {
       sections.push(`- ${u.name}: ${u.tk}tk (${u.count}回) 初回:${u.firstDate} 累計:${u.totalTk}tk`);
     }
-  }
-
-  // 課金エスカレーション（増加 → 感謝DM）
-  if (dmData.escalationUp.length > 0) {
-    sections.push('\n## 📈 課金増加ユーザー');
-    for (const u of dmData.escalationUp) {
-      sections.push(`- ${u.name}: ${u.prevTk}tk → ${u.currentTk}tk (+${Math.round((u.currentTk / Math.max(u.prevTk, 1) - 1) * 100)}%)`);
-    }
-    sections.push('\n> 💡 感謝DM推奨「前回よりたくさんありがとう！」');
-  }
-
-  // 課金エスカレーション（減少 → フォローDM）
-  if (dmData.escalationDown.length > 0) {
-    sections.push('\n## 📉 課金減少ユーザー');
-    for (const u of dmData.escalationDown) {
-      sections.push(`- ${u.name}: ${u.prevTk}tk → ${u.currentTk}tk (${Math.round((u.currentTk / Math.max(u.prevTk, 1) - 1) * 100)}%)`);
-    }
-    sections.push('\n> 💡 フォローDM推奨「来てくれるだけで嬉しいよ」');
   }
 
   // 復帰ユーザー
@@ -298,9 +220,7 @@ export function generateDMReport(dmData: DMData): string {
   addCopyBlock('🔴 優先度A', dmData.priorityA.map(u => u.name));
   addCopyBlock('🟡 優先度B', dmData.priorityB.map(u => u.name));
   addCopyBlock('🟢 優先度C', dmData.priorityC.map(u => u.name));
-  addCopyBlock('⚠️ 離脱予兆', dmData.churnRisk.map(u => u.name));
   addCopyBlock('🆕 新規チッパー', dmData.newTipperNames.map(u => u.name));
-  addCopyBlock('💎 高額新規', dmData.highValueNewNames.map(u => u.name));
   addCopyBlock('🔄 リピーター', dmData.repeaterNames.map(u => u.name));
   addCopyBlock('🔙 復帰ユーザー', dmData.returnUserNames.map(u => u.name));
 

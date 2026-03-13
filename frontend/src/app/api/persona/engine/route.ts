@@ -76,6 +76,39 @@ interface AgentProfile {
   output_format: string | null;
 }
 
+/** 構造化チッパーデータ（JSレポート生成用） */
+export interface StructuredTipperData {
+  sessionSummary: {
+    totalTokens: number;
+    txCount: number;
+    durationMinutes: number;
+    uniqueTipperCount: number;
+    anonymousCount: number;
+    anonymousTokens: number;
+  };
+  newTippers: Array<{ username: string; tk: number; count: number }>;
+  repeaters: Array<{
+    username: string;
+    tk: number;
+    firstTipDate: string;   // YYYY-MM-DD
+    lastTipDate: string;    // YYYY-MM-DD（今回セッション前の最終課金日）
+    totalTk: number;        // 累計コイン（今回セッション含まず）
+    daysSince: number;      // セッション開始日 - lastTipDate
+  }>;
+  returnUsers: Array<{
+    username: string;
+    tk: number;
+    firstTipDate: string;
+    lastTipDate: string;
+    daysSince: number;
+  }>;
+  dmCopyNames: {
+    newTippers: string[];
+    repeaters: string[];
+    returnUsers: string[];
+  };
+}
+
 export interface FiveAxisData {
   tipperStructure: string;
   tipTriggers: string;
@@ -87,6 +120,7 @@ export interface FiveAxisData {
   broadcastQuality: string; // Group B: #5新規獲得率推移, #6常連維持率, #7チップ速度カーブ, #8ticketshow最適化
   realtimeMetrics: string;  // Group E: viewer_stats時系列, ゴール前後変化, ticketshow前後変化
   crossCompetitor: string;  // Group C: #9自社ファンの他社出現, #10他社ゴール設定パターン
+  structured?: StructuredTipperData; // JSレポート生成用の構造化データ
 }
 
 const DEFAULT_PERSONA: CastPersona = {
@@ -832,6 +866,49 @@ export async function collect5AxisData(
       .sort((a, b) => b.daysSince - a.daysSince);
 
     _mark('tipper history (N*4 queries)');
+
+    // ── 構造化データ（JSレポート生成用） ──
+    result.structured = {
+      sessionSummary: {
+        totalTokens,
+        txCount: latest.tx_count,
+        durationMinutes: latest.duration_minutes,
+        uniqueTipperCount,
+        anonymousCount,
+        anonymousTokens,
+      },
+      newTippers: newTippersSorted.map(t => ({ username: t.username, tk: t.total, count: t.count })),
+      repeaters: returningTippersSorted.map(t => {
+        const hist = returningMap.get(t.username);
+        const daysSince = hist
+          ? Math.floor((sessionStartMs - new Date(hist.lastTipDate).getTime()) / (24 * 60 * 60 * 1000))
+          : 0;
+        return {
+          username: t.username,
+          tk: t.total,
+          firstTipDate: hist?.firstTipDate?.slice(0, 10) || '',
+          lastTipDate: hist?.lastTipDate?.slice(0, 10) || '',
+          totalTk: hist?.historyTokens || 0,
+          daysSince,
+        };
+      }),
+      returnUsers: comebackUsers.map(u => {
+        const hist = returningMap.get(u.username);
+        return {
+          username: u.username,
+          tk: u.sessionTk,
+          firstTipDate: hist?.firstTipDate?.slice(0, 10) || '',
+          lastTipDate: u.lastTipDate,
+          daysSince: u.daysSince,
+        };
+      }),
+      dmCopyNames: {
+        newTippers: newTippersSorted.map(t => t.username),
+        repeaters: returningTippersSorted.map(t => t.username),
+        returnUsers: comebackUsers.map(u => u.username),
+      },
+    };
+
     // ── DM優先度分類 ──
     // 優先度A: 複数回チップの新規（本気度高い）
     const priorityA = newTippersSorted.filter(t => t.count >= 2);
