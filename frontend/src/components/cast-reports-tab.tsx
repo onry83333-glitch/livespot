@@ -193,7 +193,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         'Authorization': `Bearer ${token}`,
       };
 
-      // ── Step 1: データ収集（run-fb-report） ──
+      // ── Step 1: データ収集 + 3ブロック分割 ──
       const step1Res = await fetch('/api/analysis/run-fb-report', {
         method: 'POST',
         headers,
@@ -218,37 +218,75 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       const step1Data = await step1Res.json();
       console.log(`[fb-report][Step1] データ収集完了: ${step1Data.collect_time_ms}ms`);
 
-      // ── Step 2: LLM呼び出し（engine） ──
-      setAiLoadingMessage('AIがレポートを生成中...');
-      const step2Res = await fetch('/api/persona/engine', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          task_type: 'fb_report',
-          cast_name: castName,
-          account_id: accountId,
-          context: {},
-          user_prompt: step1Data.user_prompt,
-        }),
-      });
+      // ── Step 2a + 2b: 分析エンジン + ユーザー分類エンジン（並列実行） ──
+      setAiLoadingMessage('AIが分析中...（1/2）');
 
-      if (!step2Res.ok) {
-        const errText = await step2Res.text();
-        console.error('[fb-report][Step2] HTTP', step2Res.status, errText);
-        try {
-          const errJson = JSON.parse(errText);
-          setAiError(errJson.error || `HTTP ${step2Res.status}`);
-        } catch {
-          setAiError(`HTTP ${step2Res.status}: ${errText.slice(0, 200)}`);
+      // Step 2c: DM施策エンジン（LLM不要、即時生成）
+      const { generateDMReport } = await import('@/lib/dm-report-generator');
+      const dmReport = generateDMReport(step1Data.dm_data);
+
+      // Step 2a + 2b を並列実行
+      const [step2aRes, step2bRes] = await Promise.all([
+        fetch('/api/persona/engine', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            task_type: 'fb_report_analysis',
+            cast_name: castName,
+            account_id: accountId,
+            context: {},
+            user_prompt: step1Data.analysis_prompt,
+          }),
+        }),
+        fetch('/api/persona/engine', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            task_type: 'fb_report_users',
+            cast_name: castName,
+            account_id: accountId,
+            context: {},
+            user_prompt: step1Data.users_prompt,
+          }),
+        }),
+      ]);
+
+      // エラーチェック
+      for (const [label, res] of [['Step2a', step2aRes], ['Step2b', step2bRes]] as const) {
+        if (!res.ok) {
+          const errText = await res.text();
+          console.error(`[fb-report][${label}] HTTP`, res.status, errText);
+          try {
+            const errJson = JSON.parse(errText);
+            setAiError(errJson.error || `HTTP ${res.status}`);
+          } catch {
+            setAiError(`HTTP ${res.status}: ${errText.slice(0, 200)}`);
+          }
+          return;
         }
-        return;
       }
 
-      const step2Data = await step2Res.json();
-      const reportMarkdown = step2Data.output;
-      setFbReportMarkdown(reportMarkdown);
+      setAiLoadingMessage('レポート結合中...');
 
-      // ── Step 3: cast_knowledge に保存（バックグラウンド） ──
+      const step2aData = await step2aRes.json();
+      const step2bData = await step2bRes.json();
+
+      // ── Step 3: 3つのレポートを結合 ──
+      const fullReport = [
+        step2aData.output,
+        '\n\n---\n\n',
+        step2bData.output,
+        '\n\n---\n\n',
+        dmReport,
+      ].join('');
+
+      setFbReportMarkdown(fullReport);
+
+      // コスト合算
+      const totalTokens = (step2aData.cost_tokens || 0) + (step2bData.cost_tokens || 0);
+      const totalUsd = (step2aData.cost_usd || 0) + (step2bData.cost_usd || 0);
+
+      // ── Step 4: cast_knowledge に保存（バックグラウンド） ──
       fetch('/api/analysis/run-fb-report', {
         method: 'POST',
         headers,
@@ -256,11 +294,11 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
           cast_name: castName,
           account_id: accountId,
           step: 'save',
-          report_markdown: reportMarkdown,
-          cost_tokens: step2Data.cost_tokens,
-          cost_usd: step2Data.cost_usd,
-          model: step2Data.model,
-          confidence: step2Data.confidence,
+          report_markdown: fullReport,
+          cost_tokens: totalTokens,
+          cost_usd: totalUsd,
+          model: step2aData.model,
+          confidence: step2aData.confidence,
         }),
       }).catch(e => console.error('[fb-report][save] error:', e));
 

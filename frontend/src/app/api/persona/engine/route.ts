@@ -19,7 +19,7 @@ const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || '').replace(/[\s\r\n
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 
-type EngineTaskType = 'dm' | 'x_post' | 'recruitment' | 'content' | 'fb_report';
+type EngineTaskType = 'dm' | 'x_post' | 'recruitment' | 'content' | 'fb_report' | 'fb_report_analysis' | 'fb_report_users';
 
 interface EngineRequest {
   task_type: EngineTaskType;
@@ -412,6 +412,66 @@ ${fiveAxis?.crossCompetitor || 'データなし'}
 - #9自社ファンの他社出現データがある場合、ファンの流出先と時間帯から配信スケジュール改善を提案すること
 - #10他社ゴール設定パターンがある場合、自社のゴール金額設定の参考として具体的な提案をすること
 - 他社データはSPYログベースの参考値。「推測:」プレフィックスを付けて事実と分離すること`;
+    }
+
+    case 'fb_report_analysis': {
+      const summaryJson = context.axis_summary as string || '{}';
+      const castDisplayName = context.cast_display_name as string || context.cast_name as string || '';
+      return `# 配信FBレポート — 分析エンジン
+
+キャスト名: ${castDisplayName}
+
+## データソースについて（絶対遵守）
+以下のデータはSQL + ルールベースで収集した構造化データです。
+- [事実] タグ付きの数値は検証済み。1文字も変更せずそのまま引用すること。
+- 推測・分析を行う場合は必ず「推測:」「分析:」と明示すること。
+
+## 集計データ
+${summaryJson}
+
+## 分析指示
+以下のセクションをMarkdownで出力してください:
+1. 📊 データ分析 — 数値ファクト整理（セッション概要、チッパー構造、ticketshow、チップ速度カーブ）
+2. 🎯 マーケティング視点 — 安藤式7原則との紐付け
+3. 購買心理3ルート分析 — 衝動型/計画型/社会的証明型
+4. 🎨 キャスト視点 — 次の配信で実行すべき3アクション（具体的に）
+5. 💭 ファン心理分析 — セグメント別
+6. 📋 次回配信アクションプラン — 具体的なアクション3つ
+
+- DMだけでなく、配信構成・ゴール設定・コミュニケーション施策も提案すること
+- チップ速度カーブから序盤・中盤・終盤の盛り上がり分析を行い、配信構成の改善提案をすること
+- ticketshowのCVRとタイミングから最適な突入タイミングを具体的に提案すること
+- 抽象的な提案禁止（×「コミュニケーションを増やす」→ ○「配信開始10分以内にチャットで名前を3人呼ぶ」）
+- 改善提案は「次の配信で」実行可能な具体策のみ`;
+    }
+
+    case 'fb_report_users': {
+      const userDataJson = context.user_classification as string || '{}';
+      const castDisplayName = context.cast_display_name as string || context.cast_name as string || '';
+      return `# 配信FBレポート — ユーザー分類エンジン
+
+キャスト名: ${castDisplayName}
+
+## データソースについて（絶対遵守）
+以下のデータはSQL + ルールベースで収集した構造化データです。
+- ユーザーリストは全員そのまま転記すること。1人も省略するな。
+- [事実] タグ付きの数値は検証済み。
+
+## ユーザー分類データ
+${userDataJson}
+
+## 分析指示
+以下のセクションをMarkdownで出力してください:
+1. 🆕 新規チッパー分析 — 心理傾向（なぜ初めてチップしたのか）、高額新規は特に注目
+2. 🔄 リピーター分析 — 課金エスカレーションの心理変化、サンクコスト効果の活用提案
+3. 🔙 復帰ユーザー分析 — 復帰心理、きっかけ分析、復帰を促すDM文面提案
+4. ⚠️ 離脱リスク評価 — 課金減少ユーザーの心理分析、フォロー施策
+5. 全ユーザーリスト転記 — 新規/リピーター/復帰の全ユーザー名・tk・回数をそのまま転記
+
+- 心理分析にはサンクコスト効果、社会的証明、コミットメント一貫性の視点を含めること
+- 🚩離脱警告ユーザーは赤旗付きで最も目立つ形で表示すること
+- 課金減少ユーザーにはフォローDM、課金増加ユーザーには感謝DMの文面案を提案すること
+- 高額新規（150tk以上）はVIP候補として特別DM提案すること`;
     }
 
     default:
@@ -2119,9 +2179,10 @@ export async function POST(req: NextRequest) {
   if (!task_type || !cast_name) {
     return NextResponse.json({ error: 'task_type と cast_name は必須です' }, { status: 400 });
   }
-  if (!ENGINE_LAYER_C[task_type] && task_type !== 'fb_report') {
+  const FB_REPORT_TYPES = ['fb_report', 'fb_report_analysis', 'fb_report_users'] as const;
+  if (!ENGINE_LAYER_C[task_type] && !FB_REPORT_TYPES.includes(task_type as typeof FB_REPORT_TYPES[number])) {
     return NextResponse.json(
-      { error: `未対応のtask_type: ${task_type}。対応: dm, x_post, recruitment, content, fb_report` },
+      { error: `未対応のtask_type: ${task_type}。対応: dm, x_post, recruitment, content, fb_report, fb_report_analysis, fb_report_users` },
       { status: 400 },
     );
   }
@@ -2165,11 +2226,12 @@ export async function POST(req: NextRequest) {
       ? `\n=== キャスト分析ナレッジ（直近の配信データに基づく） ===\n${ragContext.summary}\n`
       : '';
 
-    // ── fb_report: 5軸データ収集 + agent_profiles から動的 Layer C ──
+    // ── fb_report系: 5軸データ収集 + agent_profiles から動的 Layer C ──
+    const isFbReport = FB_REPORT_TYPES.includes(task_type as typeof FB_REPORT_TYPES[number]);
     let fiveAxisData: FiveAxisData | undefined;
     let dynamicLayerC = '';
-    if (task_type === 'fb_report') {
-      if (!prebuiltUserPrompt) {
+    if (isFbReport) {
+      if (task_type === 'fb_report' && !prebuiltUserPrompt) {
         // 従来互換: collect5AxisData を実行（1リクエストモード）
         const effectiveAccountId = reqAccountId || (auth.accountIds?.[0]) || '';
         const t0 = Date.now();
@@ -2179,13 +2241,37 @@ export async function POST(req: NextRequest) {
         console.log('[fb_report] 5-Axis tipperStructure:', fiveAxisData.tipperStructure?.slice(0, 500));
         console.log('[fb_report] 5-Axis chatTemperature:', fiveAxisData.chatTemperature?.slice(0, 200));
       } else {
-        // 2リクエスト分離: Step2 — データ収集スキップ（フロントからuser_prompt渡し済み）
-        console.log('[fb_report] Step2: using prebuilt user_prompt, skipping collect5AxisData');
+        // 3エンジン分離 or 2リクエスト分離: データ収集スキップ
+        console.log(`[${task_type}] using prebuilt user_prompt, skipping collect5AxisData`);
       }
       const agents = await fetchAgentProfiles(auth.token);
-      dynamicLayerC = agents.length > 0
-        ? buildFbReportLayerC(agents)
-        : '配信FBレポートを生成してください。Markdown形式で出力。';
+      if (task_type === 'fb_report_analysis') {
+        // 分析エンジン用: 簡潔な分析指示
+        dynamicLayerC = agents.length > 0
+          ? buildFbReportLayerC(agents) + '\n\n## 注意: このエンジンはデータ分析専用です。ユーザーリストの全件転記は不要です。集計数字に基づく分析・提案のみ出力してください。'
+          : '配信データの分析レポートを生成してください。Markdown形式で出力。';
+      } else if (task_type === 'fb_report_users') {
+        // ユーザー分類エンジン用: ファン心理分析専用
+        dynamicLayerC = `=== ユーザー分類・心理分析エンジン ===
+
+あなたはライブ配信のファン心理分析専門家です。
+以下の心理学的フレームワークを使って分析してください:
+
+1. サンクコスト効果 — 累計課金額が大きいほど離脱しにくい。この効果が薄れるサインを見つけること
+2. 社会的証明 — 他のファンの行動が新規ファンの行動を促進する。高額チッパーの存在が持つ影響
+3. コミットメント一貫性 — 一度課金したユーザーは継続する傾向がある。2回目課金への導線が重要
+4. 返報性 — キャストからの個別対応（DM等）が課金を促進する
+5. 希少性 — ticketshow等の限定体験が課金を加速する
+
+## 出力ルール
+- ユーザーリストは全員のユーザー名・数値をそのまま転記すること。1人も省略するな
+- 心理分析は具体的に（×「関係性が深い」→ ○「累計3159tk・11回参加でサンクコスト効果が強く働いている」）
+- Markdown形式で出力`;
+      } else {
+        dynamicLayerC = agents.length > 0
+          ? buildFbReportLayerC(agents)
+          : '配信FBレポートを生成してください。Markdown形式で出力。';
+      }
     }
 
     // ── Layer A 選択 ──
@@ -2194,12 +2280,14 @@ export async function POST(req: NextRequest) {
     // ── Layer B: タスク別分岐 ──
     const layerB = task_type === 'recruitment'
       ? `=== あなたの役割 ===\nライブ配信エージェンシーの採用マーケター。\n温かく、共感的で、押しつけがましくない。\n「この人なら相談できそう」と思わせるトーン。`
-      : task_type === 'fb_report'
+      : task_type === 'fb_report' || task_type === 'fb_report_analysis'
       ? `=== あなたの役割 ===\nライブ配信の配信FBレポートを生成する4人のエージェントチーム。\nキャスト「${activePersona.display_name || cast_name}」の配信データを分析し、具体的な改善策を提案する。`
+      : task_type === 'fb_report_users'
+      ? `=== あなたの役割 ===\nライブ配信のファン心理分析専門家。\nキャスト「${activePersona.display_name || cast_name}」のファン一人一人の行動パターンを分析し、最適なDM施策を提案する。`
       : buildLayerB(activePersona, detail);
 
     // ── System Prompt 組み立て: Layer A + B + RAG + Feedback + Context + C ──
-    const layerC = task_type === 'fb_report' ? dynamicLayerC : ENGINE_LAYER_C[task_type];
+    const layerC = isFbReport ? dynamicLayerC : ENGINE_LAYER_C[task_type];
     const systemPrompt = [
       layerA,
       '',
@@ -2214,11 +2302,14 @@ export async function POST(req: NextRequest) {
       layerC,
     ].filter(Boolean).join('\n');
 
-    // ── User Prompt（fb_report は5軸データをcontextに注入） ──
+    // ── User Prompt（fb_report系 は5軸データ or 分割データをcontextに注入） ──
     let userPrompt: string;
     if (task_type === 'fb_report' && prebuiltUserPrompt) {
       // 2リクエスト分離: Step2 — フロントから渡されたプロンプトをそのまま使用
       userPrompt = prebuiltUserPrompt;
+    } else if (task_type === 'fb_report_analysis' || task_type === 'fb_report_users') {
+      // 3エンジン分離: フロントから渡されたuser_promptをそのまま使用
+      userPrompt = prebuiltUserPrompt || buildUserPrompt(task_type, context || {});
     } else {
       const effectiveContext = task_type === 'fb_report'
         ? { ...context, five_axis: fiveAxisData, cast_name }
@@ -2226,15 +2317,15 @@ export async function POST(req: NextRequest) {
       userPrompt = buildUserPrompt(task_type, effectiveContext);
     }
 
-    // ── API 呼び出し（fb_report は長い出力が必要） ──
-    const maxTokens = task_type === 'dm' ? 500 : task_type === 'fb_report' ? 4000 : 1000;
+    // ── API 呼び出し（fb_report系 は長い出力が必要） ──
+    const maxTokens = task_type === 'dm' ? 500 : isFbReport ? 4000 : 1000;
     const tLlm0 = Date.now();
     const result = await callClaude(systemPrompt, userPrompt, maxTokens);
     const tLlm1 = Date.now();
-    console.log(`[fb_report][PERF] callClaude: ${tLlm1 - tLlm0}ms (tokens: ${result.tokensUsed})`);
+    console.log(`[${task_type}][PERF] callClaude: ${tLlm1 - tLlm0}ms (tokens: ${result.tokensUsed})`);
 
-    // ── レスポンス処理（fb_report はMarkdown、それ以外はJSON） ──
-    if (task_type === 'fb_report') {
+    // ── レスポンス処理（fb_report系 はMarkdown、それ以外はJSON） ──
+    if (isFbReport) {
       return NextResponse.json({
         output: result.text,
         output_format: 'markdown',
@@ -2250,7 +2341,7 @@ export async function POST(req: NextRequest) {
         rag_data_points: ragContext.dataPoints,
         rag_last_updated: ragContext.lastUpdated || null,
         five_axis_collected: !!fiveAxisData,
-        agents_used: 4,
+        agents_used: task_type === 'fb_report' ? 4 : (task_type === 'fb_report_analysis' ? 4 : 1),
       });
     }
 

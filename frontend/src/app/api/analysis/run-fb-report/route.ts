@@ -1,19 +1,75 @@
 /**
  * POST /api/analysis/run-fb-report
- * 配信FBレポート — 2リクエスト分離アーキテクチャ
+ * 配信FBレポート — 3エンジン分割アーキテクチャ
  *
- * Step 1 (デフォルト): collect5AxisData でデータ収集 → user_prompt を返却
+ * Step 1 (デフォルト): collect5AxisData でデータ収集 → 3ブロック分割で返却
+ *   - analysis_prompt: 分析エンジン用（集計数字のみ、軽量）
+ *   - users_prompt: ユーザー分類エンジン用（ユーザー別取引情報）
+ *   - dm_data: DM施策エンジン用（LLM不要、JSテンプレート用の構造化データ）
  * Step 'save': レポート結果を cast_knowledge に保存
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { authenticateAndValidateAccount } from '@/lib/api-auth';
-import { collect5AxisData, buildUserPrompt } from '@/app/api/persona/engine/route';
+import { collect5AxisData, buildUserPrompt, FiveAxisData } from '@/app/api/persona/engine/route';
+import { extractDMData } from '@/lib/dm-report-generator';
 
 export const maxDuration = 60;
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+/**
+ * FiveAxisDataを3エンジン用に分割する
+ * - analysis: 集計数字のみ（軸2-5, 8-10の数値サマリ）
+ * - users: ユーザー別取引情報（軸1のリスト, 軸7のユーザー行動）
+ * - dm: DM施策用構造化データ（軸1のリスト, 軸6全体）
+ */
+function splitFiveAxisData(fiveAxis: FiveAxisData, castName: string) {
+  // --- Step 2a: 分析エンジン用（集計数字のみ、ユーザー名リスト除外） ---
+  const analysisPrompt = buildUserPrompt('fb_report_analysis', {
+    cast_name: castName,
+    axis_summary: `### チップトリガー
+${fiveAxis.tipTriggers || 'データなし'}
+
+### チャット温度
+${fiveAxis.chatTemperature || 'データなし'}
+
+### 前回との差分
+${fiveAxis.diffFromPrevious || 'データなし'}
+
+### ベンチマーク
+${fiveAxis.benchmark || 'データなし'}
+
+### 配信品質測定
+${fiveAxis.broadcastQuality || 'データなし'}
+
+### リアルタイム推移
+${fiveAxis.realtimeMetrics || 'データなし'}
+
+### 他社突合
+${fiveAxis.crossCompetitor || 'データなし'}`,
+  });
+
+  // --- Step 2b: ユーザー分類エンジン用（ユーザー別詳細） ---
+  const usersPrompt = buildUserPrompt('fb_report_users', {
+    cast_name: castName,
+    user_classification: `### チッパー構造（ユーザー別）
+${fiveAxis.tipperStructure || 'データなし'}
+
+### ユーザー行動パターン
+${fiveAxis.userBehavior || 'データなし'}`,
+  });
+
+  // --- Step 2c: DM施策エンジン用（構造化データ） ---
+  const dmData = extractDMData({
+    tipperStructure: fiveAxis.tipperStructure || '',
+    dmActionLists: fiveAxis.dmActionLists || '',
+    userBehavior: fiveAxis.userBehavior || '',
+  });
+
+  return { analysisPrompt, usersPrompt, dmData };
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -58,9 +114,10 @@ export async function POST(request: NextRequest) {
             model: model || 'unknown',
             five_axis_collected: true,
             agents_used: 4,
+            architecture: '3-engine-split',
           },
           insights_json: {
-            generated_by: 'fb_report_engine',
+            generated_by: 'fb_report_engine_v2',
             confidence: confidence || 0.85,
           },
         });
@@ -69,21 +126,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // ── Step 1 (デフォルト): データ収集のみ ──
+    // ── Step 1 (デフォルト): データ収集 + 3ブロック分割 ──
     const t0 = Date.now();
     const fiveAxisData = await collect5AxisData(auth.token, cast_name, account_id, {});
     const t1 = Date.now();
     console.log(`[run-fb-report][Step1] collect5AxisData: ${t1 - t0}ms`);
 
-    // user_prompt を構築
-    const userPrompt = buildUserPrompt('fb_report', {
-      five_axis: fiveAxisData,
-      cast_name,
-    });
+    // 3エンジン用にデータ分割
+    const { analysisPrompt, usersPrompt, dmData } = splitFiveAxisData(fiveAxisData, cast_name);
+    console.log(`[run-fb-report][Step1] analysis_prompt: ${analysisPrompt.length} chars, users_prompt: ${usersPrompt.length} chars`);
 
     return NextResponse.json({
       status: 'data_ready',
-      user_prompt: userPrompt,
+      analysis_prompt: analysisPrompt,
+      users_prompt: usersPrompt,
+      dm_data: dmData,
       cast_name,
       account_id,
       collect_time_ms: t1 - t0,
