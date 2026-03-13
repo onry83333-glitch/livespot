@@ -300,6 +300,7 @@ export async function POST(request: NextRequest) {
       new_users_prompt: newUsersPrompt,
       repeaters_prompt: repeatersPrompt,
       dm_data: dmData,
+      five_axis_raw: fiveAxisData,
       cast_name,
       account_id,
       collect_time_ms: t1 - t0,

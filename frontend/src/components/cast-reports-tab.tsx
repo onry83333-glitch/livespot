@@ -94,6 +94,86 @@ interface CastKnowledgeRecord {
 }
 
 /* ============================================================
+   FiveAxisData → Markdown（LLM不要・超軽量版）
+   ============================================================ */
+interface FiveAxisRaw {
+  tipperStructure: string;
+  tipTriggers: string;
+  chatTemperature: string;
+  diffFromPrevious: string;
+  benchmark: string;
+  dmActionLists: string;
+  userBehavior: string;
+  broadcastQuality: string;
+  realtimeMetrics: string;
+  crossCompetitor: string;
+}
+
+function generateDataOnlyReport(ax: FiveAxisRaw): string {
+  const ts = ax.tipperStructure || '';
+  const ub = ax.userBehavior || '';
+  const dm = ax.dmActionLists || '';
+
+  // --- セッション概要（tipperStructure 冒頭） ---
+  const summaryMatch = ts.match(/^[\s\S]*?(?=## 新規|## リピーター)/);
+  const summary = summaryMatch?.[0]?.trim() || '';
+
+  // --- 新規チッパー ---
+  const newSection = ts.match(/## 新規チッパー[\s\S]*?(?=## リピーター|## 復帰|## 🚩|## 高額新規|## DM|$)/)?.[0]?.trim() || '';
+
+  // --- 高額新規 ---
+  const highValueSection = ts.match(/## 高額新規[\s\S]*?(?=## リピーター|## 復帰|## 🚩|## DM|$)/)?.[0]?.trim() || '';
+
+  // --- リピーター ---
+  const repeaterSection = ts.match(/## リピーター[\s\S]*?(?=## 復帰|## 🚩|## DM|## 高額新規|$)/)?.[0]?.trim() || '';
+
+  // --- 復帰ユーザー ---
+  const returnSection = ts.match(/## 復帰ユーザー[\s\S]*?(?=## 🚩|## DM|$)/)?.[0]?.trim() || '';
+
+  // --- 離脱警告 ---
+  const churnSection = ts.match(/🚩 離脱警告[\s\S]*?(?=## DM|$)/)?.[0]?.trim() || '';
+
+  // --- 課金エスカレーション ---
+  const escSection = ub.match(/## #3 課金エスカレーション[\s\S]*?(?=## #4|$)/)?.[0]?.trim() || '';
+
+  // --- 初回課金後2回目来訪率 ---
+  const newAcqSection = ub.match(/## #5 セッション別新規獲得率[\s\S]*?(?=## #6|$)/)?.[0]?.trim() || '';
+
+  // --- 離脱予兆 (dmActionLists) ---
+  const churnAlert = dm.match(/## #11 離脱予兆[\s\S]*?(?=## #12|## #13|$)/)?.[0]?.trim() || '';
+
+  // --- DM用ユーザー名リスト（各セクションの## DM用を収集） ---
+  const dmSubsections: string[] = [];
+  const dmRegex = /## DM用[\s\S]*?(?=## [^D]|$)/g;
+  let dmMatch: RegExpExecArray | null;
+  for (const source of [ts, ub, dm]) {
+    dmRegex.lastIndex = 0;
+    while ((dmMatch = dmRegex.exec(source)) !== null) {
+      const block = dmMatch[0].trim();
+      if (block) dmSubsections.push(block);
+    }
+  }
+
+  // --- マークダウン組み立て ---
+  const sections: string[] = [];
+
+  if (summary) sections.push(`## セッション概要\n${summary}`);
+  if (newSection) sections.push(newSection);
+  if (highValueSection) sections.push(highValueSection);
+  if (repeaterSection) sections.push(repeaterSection);
+  if (returnSection) sections.push(returnSection);
+  if (escSection) sections.push(escSection.replace(/^## #3 /, '## '));
+  if (churnSection) sections.push(`## ${churnSection}`);
+  if (churnAlert) sections.push(churnAlert.replace(/^## #11 /, '## '));
+  if (newAcqSection) sections.push(newAcqSection.replace(/^## #5 /, '## '));
+  if (dmSubsections.length > 0) {
+    sections.push(`## DM用ユーザー名リスト\n\n${dmSubsections.join('\n\n')}`);
+  }
+
+  return sections.join('\n\n---\n\n');
+}
+
+/* ============================================================
    Props
    ============================================================ */
 interface CoinSession {
@@ -218,89 +298,12 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       const step1Data = await step1Res.json();
       console.log(`[fb-report][Step1] データ収集完了: ${step1Data.collect_time_ms}ms`);
 
-      // ── Step 2a + 2b + 2c + 2d: 4エンジン並列実行 ──
-      setAiLoadingMessage('AIが分析中...（3エンジン並列）');
-
-      // Step 2d: DM施策エンジン（LLM不要、即時生成）
-      const { generateDMReport } = await import('@/lib/dm-report-generator');
-      const dmReport = generateDMReport(step1Data.dm_data);
-
-      // Step 2a + 2b + 2c を並列実行
-      const [step2aRes, step2bRes, step2cRes] = await Promise.all([
-        fetch('/api/persona/engine', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            task_type: 'fb_report_analysis',
-            cast_name: castName,
-            account_id: accountId,
-            context: {},
-            user_prompt: step1Data.analysis_prompt,
-          }),
-        }),
-        fetch('/api/persona/engine', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            task_type: 'fb_report_new_users',
-            cast_name: castName,
-            account_id: accountId,
-            context: {},
-            user_prompt: step1Data.new_users_prompt,
-          }),
-        }),
-        fetch('/api/persona/engine', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            task_type: 'fb_report_repeaters',
-            cast_name: castName,
-            account_id: accountId,
-            context: {},
-            user_prompt: step1Data.repeaters_prompt,
-          }),
-        }),
-      ]);
-
-      // エラーチェック
-      for (const [label, res] of [['分析', step2aRes], ['新規', step2bRes], ['リピーター', step2cRes]] as const) {
-        if (!res.ok) {
-          const errText = await res.text();
-          console.error(`[fb-report][${label}] HTTP`, res.status, errText);
-          try {
-            const errJson = JSON.parse(errText);
-            setAiError(`${label}エンジンエラー: ${errJson.error || `HTTP ${res.status}`}`);
-          } catch {
-            setAiError(`${label}エンジンエラー: HTTP ${res.status}`);
-          }
-          return;
-        }
-      }
-
-      setAiLoadingMessage('レポート結合中...');
-
-      const step2aData = await step2aRes.json();
-      const step2bData = await step2bRes.json();
-      const step2cData = await step2cRes.json();
-
-      // ── Step 3: 4つのレポートを結合 ──
-      const fullReport = [
-        step2aData.output,
-        '\n\n---\n\n',
-        step2bData.output,
-        '\n\n---\n\n',
-        step2cData.output,
-        '\n\n---\n\n',
-        dmReport,
-      ].join('');
-
+      // ── 超軽量版: LLM不要、JSでマークダウン生成 ──
+      setAiLoadingMessage('レポート生成中...');
+      const fullReport = generateDataOnlyReport(step1Data.five_axis_raw as FiveAxisRaw);
       setFbReportMarkdown(fullReport);
 
-      // コスト合算
-      const totalTokens = (step2aData.cost_tokens || 0) + (step2bData.cost_tokens || 0) + (step2cData.cost_tokens || 0);
-      const totalUsd = (step2aData.cost_usd || 0) + (step2bData.cost_usd || 0) + (step2cData.cost_usd || 0);
-
-      // ── Step 4: cast_knowledge に保存（バックグラウンド） ──
+      // ── cast_knowledge に保存（バックグラウンド） ──
       fetch('/api/analysis/run-fb-report', {
         method: 'POST',
         headers,
@@ -309,10 +312,10 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
           account_id: accountId,
           step: 'save',
           report_markdown: fullReport,
-          cost_tokens: totalTokens,
-          cost_usd: totalUsd,
-          model: step2aData.model,
-          confidence: step2aData.confidence,
+          cost_tokens: 0,
+          cost_usd: 0,
+          model: 'data-only-js',
+          confidence: 1.0,
         }),
       }).catch(e => console.error('[fb-report][save] error:', e));
 
