@@ -5,6 +5,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { POST as enginePOST } from '@/app/api/persona/engine/route';
 
 export const maxDuration = 60;
 
@@ -23,12 +24,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Authorization ヘッダーをそのまま転送
     const authHeader = request.headers.get('authorization') || '';
 
-    // エンジンAPI呼び出し
-    const origin = request.nextUrl.origin;
-    const engineRes = await fetch(`${origin}/api/persona/engine`, {
+    // engineのPOST関数を直接呼び出し（self-fetch廃止）
+    const engineReq = new NextRequest('http://localhost/api/persona/engine', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -42,8 +41,10 @@ export async function POST(request: NextRequest) {
       }),
     });
 
+    const engineRes = await enginePOST(engineReq);
     const engineData = await engineRes.json();
-    if (!engineRes.ok) {
+
+    if (engineRes.status !== 200) {
       return NextResponse.json(engineData, { status: engineRes.status });
     }
 
