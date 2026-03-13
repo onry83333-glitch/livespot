@@ -176,31 +176,6 @@ ${retLines.length > 0 ? retLines.join('\n') : '(なし)'}`);
 }
 
 /* ============================================================
-   SessionSnapshot (cast_knowledge session_snapshot)
-   ============================================================ */
-interface SnapshotUser {
-  userName: string;
-  currentTk: number;
-  txCount?: number;
-  firstDate?: string;
-  lastDate?: string;
-  totalTk?: number;
-  daysSince?: number;
-}
-
-interface SessionSnapshot {
-  sessionStart: string;
-  totalTk: number;
-  tipperCount: number;
-  newCount: number;
-  repeaterCount: number;
-  comebackCount: number;
-  newTippers: SnapshotUser[];
-  repeaters: SnapshotUser[];
-  comebackUsers: SnapshotUser[];
-}
-
-/* ============================================================
    Props
    ============================================================ */
 interface CoinSession {
@@ -247,8 +222,6 @@ const SEGMENT_LABELS: Record<string, string> = {
 export default function CastReportsTab({ accountId, castId, castName }: CastReportsTabProps) {
   const [records, setRecords] = useState<CastKnowledgeRecord[]>([]);
   const [coinSessions, setCoinSessions] = useState<CoinSession[]>([]);
-  // session_snapshot データ（セッション開始時刻 → スナップショット）
-  const [snapshots, setSnapshots] = useState<Map<string, SessionSnapshot>>(new Map());
   const [loading, setLoading] = useState(true);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -279,25 +252,6 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
     }).then(({ data, error }) => {
       if (!error && data) setCoinSessions(data as CoinSession[]);
     });
-    // session_snapshot データ取得
-    sb.from('cast_knowledge')
-      .select('insights_json, period_start')
-      .eq('cast_id', castId)
-      .eq('report_type', 'session_snapshot')
-      .order('period_start', { ascending: false })
-      .limit(50)
-      .then(({ data, error }) => {
-        if (!error && data) {
-          const map = new Map<string, SessionSnapshot>();
-          for (const row of data) {
-            const snap = row.insights_json as SessionSnapshot;
-            if (snap?.sessionStart) {
-              map.set(new Date(snap.sessionStart).toISOString(), snap);
-            }
-          }
-          setSnapshots(map);
-        }
-      });
   }, [accountId, castId, castName]);
 
   useEffect(() => { fetchRecords(); }, [fetchRecords]);
@@ -321,34 +275,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         'Authorization': `Bearer ${token}`,
       };
 
-      // ── 全セッションの分類データを一括生成（未保存分のみ） ──
-      setAiLoadingMessage('セッションデータ一括生成中...');
-      const batchRes = await fetch('/api/analysis/batch-session-snapshots', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          cast_name: castName,
-          account_id: accountId,
-        }),
-      });
-
-      if (!batchRes.ok) {
-        const errText = await batchRes.text();
-        console.error('[fb-report][batch] HTTP', batchRes.status, errText);
-        try {
-          const errJson = JSON.parse(errText);
-          setAiError(errJson.error || `HTTP ${batchRes.status}`);
-        } catch {
-          setAiError(`HTTP ${batchRes.status}: ${errText.slice(0, 200)}`);
-        }
-        return;
-      }
-
-      const batchData = await batchRes.json();
-      console.log(`[fb-report][batch] 完了:`, batchData);
-      setAiLoadingMessage('');
-
-      // 直近セッションのレポートもJS生成
+      // ── Step 1: データ収集 + 3ブロック分割 ──
       const step1Res = await fetch('/api/analysis/run-fb-report', {
         method: 'POST',
         headers,
@@ -358,11 +285,41 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         }),
       });
 
-      if (step1Res.ok) {
-        const step1Data = await step1Res.json();
-        const fullReport = generateDataOnlyReport(step1Data.five_axis_raw.structured as StructuredTipperData);
-        setFbReportMarkdown(fullReport);
+      if (!step1Res.ok) {
+        const errText = await step1Res.text();
+        console.error('[fb-report][Step1] HTTP', step1Res.status, errText);
+        try {
+          const errJson = JSON.parse(errText);
+          setAiError(errJson.error || `HTTP ${step1Res.status}`);
+        } catch {
+          setAiError(`HTTP ${step1Res.status}: ${errText.slice(0, 200)}`);
+        }
+        return;
       }
+
+      const step1Data = await step1Res.json();
+      console.log(`[fb-report][Step1] データ収集完了: ${step1Data.collect_time_ms}ms`);
+
+      // ── 超軽量版: LLM不要、JSでマークダウン生成 ──
+      setAiLoadingMessage('レポート生成中...');
+      const fullReport = generateDataOnlyReport(step1Data.five_axis_raw.structured as StructuredTipperData);
+      setFbReportMarkdown(fullReport);
+
+      // ── cast_knowledge に保存（バックグラウンド） ──
+      fetch('/api/analysis/run-fb-report', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          cast_name: castName,
+          account_id: accountId,
+          step: 'save',
+          report_markdown: fullReport,
+          cost_tokens: 0,
+          cost_usd: 0,
+          model: 'data-only-js',
+          confidence: 1.0,
+        }),
+      }).catch(e => console.error('[fb-report][save] error:', e));
 
       fetchRecords();
     } catch (e) {
@@ -677,7 +634,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         <Accordion id="cast-coin-sessions" title="売上履歴（コインベース）" icon="💰" badge={`${coinSessions.length}件`} defaultOpen>
           <div className="space-y-3">
             {coinSessions.map((s, i) => (
-              <CoinSessionCard key={i} session={s} snapshot={snapshots.get(new Date(s.session_start).toISOString())} />
+              <CoinSessionCard key={i} session={s} />
             ))}
           </div>
         </Accordion>
@@ -1083,11 +1040,8 @@ function AiAnalysisCard({ report, periodStart }: { report: Record<string, unknow
 /* ============================================================
    CoinSessionCard（売上ベースセッション）
    ============================================================ */
-function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot?: SessionSnapshot }) {
+function CoinSessionCard({ session }: { session: CoinSession }) {
   const [expanded, setExpanded] = useState(false);
-  const [showNew, setShowNew] = useState(false);
-  const [showRep, setShowRep] = useState(false);
-  const [showCb, setShowCb] = useState(false);
   const startDate = new Date(session.session_start);
   const dateStr = startDate.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', timeZone: 'Asia/Tokyo' });
   const timeStr = startDate.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' });
@@ -1121,11 +1075,6 @@ function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot
             <span style={{ color: 'var(--text-muted)' }}>
               取引 <span className="font-bold text-slate-300">{session.tx_count}</span>件
             </span>
-            {snapshot && (
-              <span style={{ color: 'var(--text-muted)' }}>
-                新規{snapshot.newCount} / リピ{snapshot.repeaterCount} / 復帰{snapshot.comebackCount}
-              </span>
-            )}
           </div>
         </div>
       </button>
@@ -1138,58 +1087,6 @@ function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot
             <MetricCard label="円換算" value={tokensToJPY(session.total_tokens, COIN_RATE)} color="var(--accent-green)" />
             <MetricCard label="取引数" value={session.tx_count} unit="件" />
           </div>
-
-          {/* スナップショット: ユーザー分類 */}
-          {snapshot ? (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold" style={{ color: 'var(--text-muted)' }}>
-                {snapshot.tipperCount}人（新規{snapshot.newCount} / リピーター{snapshot.repeaterCount} / 復帰{snapshot.comebackCount}）
-              </p>
-
-              {/* 新規チッパー */}
-              <NestedSection
-                label={`新規チッパー（${snapshot.newCount}人）`}
-                open={showNew}
-                onToggle={() => setShowNew(!showNew)}
-              >
-                {snapshot.newTippers.map(u => (
-                  <div key={u.userName} className="text-[11px] py-0.5" style={{ color: 'var(--text-secondary)' }}>
-                    - {u.userName}: {u.currentTk}tk {u.txCount ? `(${u.txCount}回)` : ''} ← 初チップ
-                  </div>
-                ))}
-              </NestedSection>
-
-              {/* リピーター */}
-              <NestedSection
-                label={`リピーター（${snapshot.repeaterCount}人）`}
-                open={showRep}
-                onToggle={() => setShowRep(!showRep)}
-              >
-                {snapshot.repeaters.map((u, i) => (
-                  <div key={u.userName} className="text-[11px] py-0.5" style={{ color: 'var(--text-secondary)' }}>
-                    {i + 1}. {u.userName}: {u.currentTk}tk [初回{u.firstDate}, 累計{u.totalTk}tk, 前回{u.lastDate}, {u.daysSince}日ぶり]
-                  </div>
-                ))}
-              </NestedSection>
-
-              {/* 復帰ユーザー */}
-              {snapshot.comebackCount > 0 && (
-                <NestedSection
-                  label={`復帰ユーザー（${snapshot.comebackCount}人）`}
-                  open={showCb}
-                  onToggle={() => setShowCb(!showCb)}
-                >
-                  {snapshot.comebackUsers.map(u => (
-                    <div key={u.userName} className="text-[11px] py-0.5" style={{ color: 'var(--text-secondary)' }}>
-                      - {u.userName}: {u.currentTk}tk [初回{u.firstDate}, 前回{u.lastDate}, {u.daysSince}日ぶり]
-                    </div>
-                  ))}
-                </NestedSection>
-              )}
-            </div>
-          ) : (
-            <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>データ未生成</p>
-          )}
 
           {session.top_users && session.top_users.length > 0 && (
             <div>
@@ -1229,34 +1126,6 @@ function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot
               </div>
             </div>
           )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ============================================================
-   NestedSection（アコーディオン内のネストセクション）
-   ============================================================ */
-function NestedSection({ label, open, onToggle, children }: {
-  label: string; open: boolean; onToggle: () => void; children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <button
-        onClick={onToggle}
-        className="flex items-center gap-1.5 text-[11px] font-semibold py-1 hover:bg-white/[0.02] rounded w-full text-left"
-        style={{ color: 'var(--text-primary)' }}
-      >
-        <span className="text-[9px] transition-transform duration-150"
-          style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', color: 'var(--accent-amber)' }}>
-          ▶
-        </span>
-        {label}
-      </button>
-      {open && (
-        <div className="pl-4 pb-1">
-          {children}
         </div>
       )}
     </div>
