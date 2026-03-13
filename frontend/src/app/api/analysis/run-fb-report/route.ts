@@ -21,6 +21,60 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 
 /**
+ * リピーターリストをLLM用に圧縮する
+ * Top10(今回tk上位) + エスカレーション変動率Top5 + 復帰・離脱は別途渡すので除外
+ * 全員リストはStep 2d（DM施策JS）が出力する
+ */
+function compressRepeatersForLLM(repeaterSection: string, escSection: string): string {
+  // リピーターセクションから個別行を抽出 (numbered: "1. username: 100tk (3回) [...]")
+  const lineRegex = /^\d+\.\s+(\S+):\s+(\d+)tk\s+\((\d+)回\)\s*(.*)/gm;
+  const allRepeaters: Array<{ line: string; username: string; tk: number; count: number }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = lineRegex.exec(repeaterSection)) !== null) {
+    allRepeaters.push({ line: m[0], username: m[1], tk: parseInt(m[2]), count: parseInt(m[3]) });
+  }
+
+  if (allRepeaters.length <= 15) {
+    // 15人以下ならそのまま返す
+    return repeaterSection + '\n\n' + escSection;
+  }
+
+  // Top10: 今回tk上位
+  const top10 = allRepeaters.slice(0, 10); // already sorted by tk desc in original
+
+  // エスカレーション変動率Top5: escSectionから抽出
+  const escNames = new Set<string>();
+  const escLineRegex = /- (\S+)[\s:]+\d+\s*→\s*\d+/g;
+  while ((m = escLineRegex.exec(escSection)) !== null) {
+    escNames.add(m[1]);
+  }
+  const top10Names = new Set(top10.map(r => r.username));
+  const escTop5 = allRepeaters
+    .filter(r => escNames.has(r.username) && !top10Names.has(r.username))
+    .slice(0, 5);
+
+  // 結合（重複排除済み）
+  const selectedNames = new Set([...top10.map(r => r.username), ...escTop5.map(r => r.username)]);
+  const selectedLines = allRepeaters
+    .filter(r => selectedNames.has(r.username))
+    .map((r, i) => `${i + 1}. ${r.username}: ${r.tk}tk (${r.count}回) ${r.line.match(/\[.*\]/)?.[0] || ''}`);
+
+  // ヘッダー抽出（## リピーター（123人）の行）
+  const header = repeaterSection.match(/## リピーター（\d+人）/)?.[0] || '## リピーター';
+
+  return `${header}
+[注意] LLM分析用に注目${selectedLines.length}人に圧縮。全${allRepeaters.length}人のリストはDM施策セクションに掲載。
+
+### 今回tk上位10人
+${top10.map((r, i) => `${i + 1}. ${r.username}: ${r.tk}tk (${r.count}回) ${r.line.match(/\[.*\]/)?.[0] || ''}`).join('\n')}
+
+### 課金変動注目5人（エスカレーション変動率Top）
+${escTop5.length > 0 ? escTop5.map((r, i) => `${i + 1}. ${r.username}: ${r.tk}tk (${r.count}回) ${r.line.match(/\[.*\]/)?.[0] || ''}`).join('\n') : '(該当なし)'}
+
+${escSection}`;
+}
+
+/**
  * FiveAxisDataを4エンジン用に分割する
  * - analysis: 集計数字のみ（軸2-5, 8-10の数値サマリ）
  * - newUsers: 新規チッパー関連データ（軸1の新規セクション）
@@ -86,15 +140,17 @@ ${highValueSection}
 ${newAcqSection}`.trim(),
   });
 
-  // --- Step 2c: リピーター・復帰ユーザー分析エンジン用 ---
+  // --- Step 2c: リピーター・復帰ユーザー分析エンジン用（注目ユーザーのみ） ---
+  // LLMにはTop15 + 復帰全員 + 離脱予兆全員だけ渡す（全員リストはStep 2dが出力）
+  const compressedRepeaterSection = compressRepeatersForLLM(repeaterSection, escSection);
+
   const repeatersPrompt = buildUserPrompt('fb_report_repeaters', {
     cast_name: castName,
     repeater_data: `${summarySection}
-${repeaterSection}
+${compressedRepeaterSection}
 ${returnSection}
 ${churnSection}
 ${prioritySection}
-${escSection}
 ${retentionSection}
 ${intervalSection}
 ${typeSection}`.trim(),

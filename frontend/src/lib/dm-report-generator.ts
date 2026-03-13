@@ -301,6 +301,7 @@ export function generateDMReport(dmData: DMData): string {
   addCopyBlock('⚠️ 離脱予兆', dmData.churnRisk.map(u => u.name));
   addCopyBlock('🆕 新規チッパー', dmData.newTipperNames.map(u => u.name));
   addCopyBlock('💎 高額新規', dmData.highValueNewNames.map(u => u.name));
+  addCopyBlock('🔄 リピーター', dmData.repeaterNames.map(u => u.name));
   addCopyBlock('🔙 復帰ユーザー', dmData.returnUserNames.map(u => u.name));
 
   return sections.join('\n');
