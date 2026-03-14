@@ -163,7 +163,7 @@ export async function classifyTippers(
         .lt('date', sessionStartISO)
         .gt('tokens', 0)
         .order('date', { ascending: true })
-        .limit(5000);
+        .limit(100000);
 
       for (const row of histRows || []) {
         const uname = row.user_name as string;
