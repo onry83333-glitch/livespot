@@ -81,15 +81,17 @@ interface DailyBriefingMetrics {
 
 interface CastKnowledgeRecord {
   id: string;
-  report_type: 'post_session' | 'daily_briefing' | 'weekly_review' | 'session_report';
+  report_type: 'post_session' | 'daily_briefing' | 'weekly_review' | 'session_report' | 'ai_deep_analysis';
   knowledge_type?: string | null;
   period_start: string;
   period_end: string | null;
-  metrics_json: PostSessionMetrics | DailyBriefingMetrics;
+  metrics_json: PostSessionMetrics | DailyBriefingMetrics | Record<string, unknown>;
   insights_json: {
     highlights?: string[];
     concerns?: string[];
     suggestions?: string[];
+    content?: string;
+    [key: string]: unknown;
   };
   created_at: string;
 }
@@ -256,6 +258,9 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
   const [fbReportMarkdown, setFbReportMarkdown] = useState<string | null>(null);
   const [fbFeedbackSent, setFbFeedbackSent] = useState(false);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [andoMarkdown, setAndoMarkdown] = useState<string | null>(null);
+  const [alreadyGenerated, setAlreadyGenerated] = useState(false);
+  const [forceRegenerate, setForceRegenerate] = useState(false);
 
   // データ取得
   const fetchRecords = useCallback(() => {
@@ -302,16 +307,41 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
 
   useEffect(() => { fetchRecords(); }, [fetchRecords]);
 
-  // 配信FBレポート生成（2リクエスト分離: Step1=データ収集, Step2=LLM）
+  // 配信FBレポート生成（3ステップ: スナップショット→JSレポート→安藤推論）
   const [aiLoadingMessage, setAiLoadingMessage] = useState('');
-  const handleGenerateAiReport = useCallback(async () => {
+  const handleGenerateAiReport = useCallback(async (force = false) => {
+    // ── 重複チェック ──
+    if (!force) {
+      const sb0 = createClient();
+      const { data: existing } = await sb0
+        .from('cast_knowledge')
+        .select('id, period_start')
+        .eq('cast_id', castId)
+        .eq('report_type', 'ai_deep_analysis')
+        .order('period_start', { ascending: false })
+        .limit(1);
+      if (existing && existing.length > 0) {
+        // 直近セッションと比較
+        if (coinSessions.length > 0) {
+          const latestSessionStart = new Date(coinSessions[0].session_start).toISOString();
+          const latestReportStart = new Date(existing[0].period_start).toISOString();
+          if (latestSessionStart === latestReportStart) {
+            setAlreadyGenerated(true);
+            return;
+          }
+        }
+      }
+    }
+    setAlreadyGenerated(false);
+    setForceRegenerate(false);
     setAiGenerating(true);
     setAiError(null);
     setAiReport(null);
     setFbReportMarkdown(null);
+    setAndoMarkdown(null);
     setFbFeedbackSent(false);
     setCopySuccess(false);
-    setAiLoadingMessage('データ収集中...');
+    setAiLoadingMessage('セッション分析中...');
     try {
       const sb = createClient();
       const { data: { session } } = await sb.auth.getSession();
@@ -321,8 +351,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         'Authorization': `Bearer ${token}`,
       };
 
-      // ── Step 0: セッションスナップショット一括計算 ──
-      setAiLoadingMessage('セッション分析中...');
+      // ── Step 1: セッションスナップショット一括計算 ──
       try {
         await fetch('/api/analysis/batch-session-snapshots', {
           method: 'POST',
@@ -333,7 +362,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         console.warn('[batch-snapshots] non-critical error:', e);
       }
 
-      // ── Step 1: データ収集 + 3ブロック分割 ──
+      // ── Step 2: データ収集 + JSレポート生成 ──
       setAiLoadingMessage('データ収集中...');
       const step1Res = await fetch('/api/analysis/run-fb-report', {
         method: 'POST',
@@ -346,7 +375,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
 
       if (!step1Res.ok) {
         const errText = await step1Res.text();
-        console.error('[fb-report][Step1] HTTP', step1Res.status, errText);
+        console.error('[fb-report][Step2] HTTP', step1Res.status, errText);
         try {
           const errJson = JSON.parse(errText);
           setAiError(errJson.error || `HTTP ${step1Res.status}`);
@@ -357,14 +386,14 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       }
 
       const step1Data = await step1Res.json();
-      console.log(`[fb-report][Step1] データ収集完了: ${step1Data.collect_time_ms}ms`);
+      console.log(`[fb-report][Step2] データ収集完了: ${step1Data.collect_time_ms}ms`);
 
-      // ── 超軽量版: LLM不要、JSでマークダウン生成 ──
       setAiLoadingMessage('レポート生成中...');
-      const fullReport = generateDataOnlyReport(step1Data.five_axis_raw.structured as StructuredTipperData);
+      const structured = step1Data.five_axis_raw.structured as StructuredTipperData;
+      const fullReport = generateDataOnlyReport(structured);
       setFbReportMarkdown(fullReport);
 
-      // ── cast_knowledge に保存（バックグラウンド） ──
+      // cast_knowledge に保存（バックグラウンド）
       fetch('/api/analysis/run-fb-report', {
         method: 'POST',
         headers,
@@ -380,6 +409,99 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         }),
       }).catch(e => console.error('[fb-report][save] error:', e));
 
+      // ── Step 3: 安藤の推論（engine API） ──
+      setAiLoadingMessage('安藤の分析を生成中...');
+
+      // スナップショットデータ取得（最新を再fetch）
+      const { data: latestSnaps } = await sb
+        .from('cast_knowledge')
+        .select('insights_json')
+        .eq('cast_id', castId)
+        .eq('report_type', 'session_snapshot')
+        .order('period_start', { ascending: false })
+        .limit(1);
+      const latestSnap = latestSnaps?.[0]?.insights_json as SessionSnapshot | undefined;
+
+      // ユーザーリスト構築
+      let userListText = '';
+      if (latestSnap) {
+        const newLines = (latestSnap.newTippers || []).map(u => `  ${u.userName}: ${u.currentTk}tk`).join('\n');
+        const repLines = (latestSnap.repeaters || []).map(u =>
+          `  ${u.userName}: ${u.currentTk}tk [初回${u.firstDate ?? '-'}, 累計${(u.totalTk ?? 0)}tk, 前回${u.lastDate ?? '-'}, ${u.daysSince ?? '-'}日ぶり]`
+        ).join('\n');
+        const retLines = (latestSnap.comebackUsers || []).map(u =>
+          `  ${u.userName}: ${u.currentTk}tk [初回${u.firstDate ?? '-'}, 前回${u.lastDate ?? '-'}, ${u.daysSince ?? '-'}日ぶり]`
+        ).join('\n');
+        userListText = `
+新規チッパー（${latestSnap.newCount}人）:
+${newLines || '  (なし)'}
+
+リピーター（${latestSnap.repeaterCount}人）:
+${repLines || '  (なし)'}
+
+復帰ユーザー（${latestSnap.comebackCount}人）:
+${retLines || '  (なし)'}`;
+      }
+
+      const userPrompt = `以下の配信データを分析し、具体的な改善提案をマークダウンで出力してください。
+
+## セッション概要
+- 売上: ${structured.sessionSummary.totalTokens}tk
+- 配信時間: ${structured.sessionSummary.durationMinutes}分
+- チッパー数: ${structured.sessionSummary.uniqueTipperCount}人
+- 取引数: ${structured.sessionSummary.txCount}件
+
+## ユーザー構成
+${userListText || '(スナップショットなし)'}
+
+チャットログはありません。コイントランザクションのデータのみから推論してください。
+データから読み取れる傾向・パターン・改善点を具体的に述べてください。`;
+
+      try {
+        const engineRes = await fetch('/api/persona/engine', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            task_type: 'fb_report_analysis',
+            cast_name: castName,
+            account_id: accountId,
+            context: {},
+            user_prompt: userPrompt,
+          }),
+        });
+
+        if (engineRes.ok) {
+          const engineData = await engineRes.json();
+          const andoOutput = typeof engineData.output === 'string'
+            ? engineData.output
+            : JSON.stringify(engineData.output, null, 2);
+          setAndoMarkdown(andoOutput);
+
+          // cast_knowledge に ai_deep_analysis として保存
+          const sessionStart = coinSessions.length > 0 ? coinSessions[0].session_start : new Date().toISOString();
+          await sb.from('cast_knowledge').insert({
+            cast_id: castId,
+            account_id: accountId,
+            report_type: 'ai_deep_analysis',
+            period_start: sessionStart,
+            metrics_json: {
+              cost_tokens: engineData.cost_tokens,
+              cost_usd: engineData.cost_usd,
+              model: engineData.model,
+              confidence: engineData.confidence,
+            },
+            insights_json: {
+              content: andoOutput,
+              persona_used: engineData.persona_used,
+            },
+          });
+        } else {
+          console.error('[ando-analysis] HTTP', engineRes.status);
+        }
+      } catch (e) {
+        console.error('[ando-analysis] error:', e);
+      }
+
       fetchRecords();
     } catch (e) {
       console.error('[fb-report] catch:', e);
@@ -388,7 +510,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       setAiGenerating(false);
       setAiLoadingMessage('');
     }
-  }, [accountId, castName, fetchRecords]);
+  }, [accountId, castId, castName, coinSessions, fetchRecords]);
 
   // レポートコピー
   const handleCopyReport = useCallback(async () => {
@@ -448,6 +570,10 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
     records.filter(r => r.report_type === 'session_report')
   , [records]);
 
+  const aiDeepReports = useMemo(() =>
+    records.filter(r => r.report_type === 'ai_deep_analysis')
+  , [records]);
+
   if (loading) {
     return (
       <div className="space-y-3">
@@ -471,23 +597,14 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
             日次ブリーフィングは毎朝9時に自動作成されます。
           </p>
         </div>
-        <div className="glass-card p-4">
-          <button
-            onClick={handleGenerateAiReport}
-            disabled={aiGenerating}
-            className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {aiGenerating ? (aiLoadingMessage || '処理中...') : '配信FBレポートを生成'}
-          </button>
-          <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
-            5軸データ × 4人格エージェントで配信を深層分析します
-          </p>
-          {aiError && (
-            <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--accent-pink)' }}>
-              {aiError}
-            </p>
-          )}
-        </div>
+        <ReportGenerateButton
+          aiGenerating={aiGenerating}
+          aiLoadingMessage={aiLoadingMessage}
+          aiError={aiError}
+          alreadyGenerated={alreadyGenerated}
+          onGenerate={() => handleGenerateAiReport(false)}
+          onForceRegenerate={() => handleGenerateAiReport(true)}
+        />
         {fbReportMarkdown && (
           <div className="glass-card p-5">
             <div className="prose prose-invert prose-sm max-w-none" style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
@@ -513,23 +630,14 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
       )}
 
       {/* ========== 配信FBレポート生成ボタン + 結果 ========== */}
-      <div className="glass-card p-4">
-        <button
-          onClick={handleGenerateAiReport}
-          disabled={aiGenerating}
-          className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {aiGenerating ? (aiLoadingMessage || '処理中...') : '配信FBレポートを生成'}
-        </button>
-        <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
-          5軸データ × 4人格エージェントで配信を深層分析します
-        </p>
-        {aiError && (
-          <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--accent-pink)' }}>
-            {aiError}
-          </p>
-        )}
-      </div>
+      <ReportGenerateButton
+        aiGenerating={aiGenerating}
+        aiLoadingMessage={aiLoadingMessage}
+        aiError={aiError}
+        alreadyGenerated={alreadyGenerated}
+        onGenerate={() => handleGenerateAiReport(false)}
+        onForceRegenerate={() => handleGenerateAiReport(true)}
+      />
 
       {/* 配信FBレポート（Markdown） */}
       {fbReportMarkdown && (
@@ -672,14 +780,39 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         </div>
       )}
 
+      {/* 生成直後の安藤分析 */}
+      {andoMarkdown && (
+        <div className="glass-card p-5 space-y-2">
+          <h3 className="text-sm font-bold flex items-center gap-2">
+            🧠 安藤の分析
+            <span className="text-[10px] font-normal px-2 py-0.5 rounded-full"
+              style={{ background: 'rgba(168,85,247,0.08)', color: 'var(--accent-purple, #a855f7)' }}>最新</span>
+          </h3>
+          <div className="prose prose-invert prose-sm max-w-none" style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: '13px' }}>
+            <ReactMarkdown>{andoMarkdown}</ReactMarkdown>
+          </div>
+        </div>
+      )}
+
       {/* 生成直後のAIレポート表示（レガシー） */}
       {aiReport && (
         <AiAnalysisCard report={aiReport} />
       )}
 
-      {/* 過去のAI総合分析レポート */}
+      {/* 過去のAI分析レポート（ai_deep_analysis） */}
+      {aiDeepReports.length > 0 && (
+        <Accordion id="cast-ai-deep" title="安藤の分析履歴" icon="🧠" badge={`${aiDeepReports.length}件`}>
+          <div className="space-y-3">
+            {aiDeepReports.map(r => (
+              <AiDeepAnalysisCard key={r.id} record={r} />
+            ))}
+          </div>
+        </Accordion>
+      )}
+
+      {/* 過去のAI総合分析レポート（session_report - レガシー） */}
       {aiAnalysisReports.length > 0 && (
-        <Accordion id="cast-ai-analysis" title="AI総合分析レポート" icon="🧠" badge={`${aiAnalysisReports.length}件`}>
+        <Accordion id="cast-ai-analysis" title="AI総合分析レポート" icon="📊" badge={`${aiAnalysisReports.length}件`}>
           <div className="space-y-3">
             {aiAnalysisReports.map(r => (
               <AiAnalysisCard key={r.id} report={r.metrics_json as unknown as Record<string, unknown>} periodStart={r.period_start} />
@@ -1278,6 +1411,101 @@ function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot
               </p>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   ReportGenerateButton（レポート生成ボタン + 重複防止UI）
+   ============================================================ */
+function ReportGenerateButton({ aiGenerating, aiLoadingMessage, aiError, alreadyGenerated, onGenerate, onForceRegenerate }: {
+  aiGenerating: boolean;
+  aiLoadingMessage: string;
+  aiError: string | null;
+  alreadyGenerated: boolean;
+  onGenerate: () => void;
+  onForceRegenerate: () => void;
+}) {
+  return (
+    <div className="glass-card p-4">
+      {alreadyGenerated ? (
+        <div className="space-y-2">
+          <p className="text-[11px] text-center" style={{ color: 'var(--accent-green)' }}>
+            直近セッションのレポートは既に生成済みです
+          </p>
+          <button
+            onClick={onForceRegenerate}
+            className="w-full text-center text-sm py-2.5 rounded-xl transition-colors"
+            style={{ background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.3)', color: 'var(--accent-purple, #a855f7)' }}
+          >
+            強制的に再生成する
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={onGenerate}
+          disabled={aiGenerating}
+          className="btn-primary w-full text-center text-sm py-2.5 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {aiGenerating ? (aiLoadingMessage || '処理中...') : '配信FBレポートを生成'}
+        </button>
+      )}
+      {!alreadyGenerated && (
+        <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
+          データ収集 + 安藤の人格で配信を深層分析します
+        </p>
+      )}
+      {aiError && (
+        <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--accent-pink)' }}>
+          {aiError}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
+   AiDeepAnalysisCard（ai_deep_analysis レコード表示）
+   ============================================================ */
+function AiDeepAnalysisCard({ record }: { record: CastKnowledgeRecord }) {
+  const [expanded, setExpanded] = useState(false);
+  const startDate = new Date(record.period_start);
+  const dateStr = startDate.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', timeZone: 'Asia/Tokyo' });
+  const timeStr = startDate.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' });
+  const content = (record.insights_json as { content?: string })?.content || '';
+  const persona = (record.insights_json as { persona_used?: string })?.persona_used || '';
+
+  return (
+    <div className="glass-card overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full p-4 text-left flex items-center gap-3 transition-colors hover:bg-white/[0.02]"
+      >
+        <span className="text-[10px] transition-transform duration-200"
+          style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', color: 'var(--accent-purple, #a855f7)' }}>
+          ▶
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold" style={{ color: 'var(--text-primary)' }}>
+              {dateStr} {timeStr}
+            </span>
+            {persona && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded"
+                style={{ background: 'rgba(168,85,247,0.1)', color: 'var(--accent-purple, #a855f7)' }}>
+                {persona}
+              </span>
+            )}
+          </div>
+        </div>
+      </button>
+      {expanded && content && (
+        <div className="border-t px-4 pb-4 pt-3" style={{ borderColor: 'var(--border-glass)' }}>
+          <div className="prose prose-invert prose-sm max-w-none" style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: '13px' }}>
+            <ReactMarkdown>{content}</ReactMarkdown>
+          </div>
         </div>
       )}
     </div>
