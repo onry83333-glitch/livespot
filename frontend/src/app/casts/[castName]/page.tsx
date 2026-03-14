@@ -21,10 +21,8 @@ import DmCampaign from '@/components/dm/dm-campaign';
 import DmAnalytics from '@/components/dm/dm-analytics';
 import type { DmScheduleItem, DmCvrItem, ScenarioItem, EnrollmentDetail, DmEffItem } from '@/types/dm';
 import type { CoinTxItem, PaidUserItem, CampaignEffect, AcquisitionUser, MonthlyPL, RevenueShareRow, HourlyPerfItem } from '@/types/analytics';
-import SegmentAnalysis from '@/components/analytics/segment-analysis';
-import DmCampaignEffect from '@/components/analytics/dm-campaign-effect';
-import UserAcquisition from '@/components/analytics/user-acquisition';
-import HourlyAnalysis from '@/components/analytics/hourly-analysis';
+import RevenueTrend from '@/components/analytics/revenue-trend';
+import FanAnalysis from '@/components/analytics/fan-analysis';
 
 
 /* ============================================================
@@ -258,7 +256,7 @@ function CastDetailInner() {
   const [dmSection, setDmSection] = useState<'users' | 'send' | 'segments' | 'campaigns' | 'scenarios' | 'effectiveness'>('send');
 
   // Analytics sub-tab toggle
-  const [analyticsSection, setAnalyticsSection] = useState<'segments' | 'acquisition' | 'dm_campaign' | 'hourly'>('segments');
+  const [analyticsSection, setAnalyticsSection] = useState<'revenue' | 'fans'>('revenue');
 
   // DM Effectiveness state
   const [dmEffectiveness, setDmEffectiveness] = useState<DmEffItem[]>([]);
@@ -2212,126 +2210,31 @@ function CastDetailInner() {
           {/* ============ ANALYTICS ============ */}
           {activeTab === 'analytics' && (
             <div className="space-y-4">
-              {analyticsLoading ? (
-                <div className="space-y-3">
-                  <div className="h-8 rounded-lg animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                  <div className="h-32 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                    <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                    <div className="h-20 rounded-xl animate-pulse" style={{ background: 'var(--bg-card)' }} />
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {/* Sub-tab navigation */}
-                  <div className="flex gap-1.5">
-                    {([
-                      { key: 'segments' as const, icon: '📊', label: 'セグメント分析' },
-                      { key: 'acquisition' as const, icon: '👥', label: 'ユーザー獲得' },
-                      { key: 'dm_campaign' as const, icon: '📈', label: 'DMキャンペーン効果' },
-                      { key: 'hourly' as const, icon: '⏰', label: '時間帯分析' },
-                    ] as const).map(t => (
-                      <button key={t.key} onClick={() => setAnalyticsSection(t.key)}
-                        className={`text-[11px] px-4 py-2 rounded-lg font-medium transition-all ${
-                          analyticsSection === t.key ? 'text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
-                        }`}
-                        style={analyticsSection === t.key ? {
-                          background: 'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(56,189,248,0.05))',
-                          border: '1px solid rgba(56,189,248,0.2)',
-                        } : {}}>
-                        {t.icon} {t.label}
-                      </button>
-                    ))}
-                  </div>
+              {/* Sub-tab navigation */}
+              <div className="flex gap-1.5">
+                {([
+                  { key: 'revenue' as const, icon: '📈', label: '売上トレンド' },
+                  { key: 'fans' as const, icon: '👥', label: 'ファン分析' },
+                ] as const).map(t => (
+                  <button key={t.key} onClick={() => setAnalyticsSection(t.key)}
+                    className={`text-[11px] px-4 py-2 rounded-lg font-medium transition-all ${
+                      analyticsSection === t.key ? 'text-white' : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
+                    }`}
+                    style={analyticsSection === t.key ? {
+                      background: 'linear-gradient(135deg, rgba(56,189,248,0.15), rgba(56,189,248,0.05))',
+                      border: '1px solid rgba(56,189,248,0.2)',
+                    } : {}}>
+                    {t.icon} {t.label}
+                  </button>
+                ))}
+              </div>
 
-                  {/* ---- Sub-tab: segments ---- */}
-                  {analyticsSection === 'segments' && (
-                    <SegmentAnalysis
-                      castName={castName}
-                      coinRate={coinRate}
-                      segments={segments}
-                      segmentsLoading={segmentsLoading}
-                      segmentsLoadedAt={segmentsLoadedAt}
-                      refreshingSegments={refreshingSegments}
-                      refreshResult={refreshResult}
-                      handleRefreshSegments={handleRefreshSegments}
-                      sendSegmentDm={sendSegmentDm}
-                      segThresholdVip={segThresholdVip}
-                      setSegThresholdVip={setSegThresholdVip}
-                      segThresholdRegular={segThresholdRegular}
-                      setSegThresholdRegular={setSegThresholdRegular}
-                      segThresholdMid={segThresholdMid}
-                      setSegThresholdMid={setSegThresholdMid}
-                      segThresholdLight={segThresholdLight}
-                      setSegThresholdLight={setSegThresholdLight}
-                      lastTips={lastTips}
-                      lastTicketChats={lastTicketChats}
-                      salesLoading={salesLoading}
-                      coinTxs={coinTxs}
-                      thisWeekCoins={thisWeekCoins}
-                      salesThisWeek={salesThisWeek}
-                      salesLastWeek={salesLastWeek}
-                      monthlyPL={monthlyPL}
-                      monthlyPLLoading={monthlyPLLoading}
-                      monthlyPLError={monthlyPLError}
-                      revenueShare={revenueShare}
-                      revenueShareLoading={revenueShareLoading}
-                    />
-                  )}
+              {analyticsSection === 'revenue' && accountId && (
+                <RevenueTrend accountId={accountId} castName={castName} sb={sb} coinRate={coinRate} />
+              )}
 
-                  {/* ---- Sub-tab: dm_campaign ---- */}
-                  {analyticsSection === 'dm_campaign' && (
-                    <DmCampaignEffect
-                      coinRate={coinRate}
-                      campaignEffects={campaignEffects}
-                      dmCvr={dmCvr}
-                    />
-                  )}
-
-                  {/* ---- Sub-tab: acquisition ---- */}
-                  {analyticsSection === 'acquisition' && (
-                    <UserAcquisition
-                      coinRate={coinRate}
-                      acqUsers={acqUsers}
-                      acqLoading={acqLoading}
-                      acqDays={acqDays}
-                      setAcqDays={setAcqDays}
-                      acqMinCoins={acqMinCoins}
-                      setAcqMinCoins={setAcqMinCoins}
-                      acqMaxCoins={acqMaxCoins}
-                      setAcqMaxCoins={setAcqMaxCoins}
-                      acqPreset={acqPreset}
-                      setAcqPreset={setAcqPreset}
-                      acqFilter={acqFilter}
-                      setAcqFilter={setAcqFilter}
-                      acqSortKey={acqSortKey}
-                      setAcqSortKey={setAcqSortKey}
-                      acqSortAsc={acqSortAsc}
-                      setAcqSortAsc={setAcqSortAsc}
-                      searchQuery={searchQuery}
-                      setSearchQuery={setSearchQuery}
-                      searchResults={searchResults}
-                      searchLoading={searchLoading}
-                      handleSearchUser={handleSearchUser}
-                      overlapLoading={overlapLoading}
-                      overlapRefreshing={overlapRefreshing}
-                      overlapMatrix={overlapMatrix}
-                      spyTopUsers={spyTopUsers}
-                      lastProfileUpdate={lastProfileUpdate}
-                      handleRefreshProfiles={handleRefreshProfiles}
-                    />
-                  )}
-
-                  {/* ---- Sub-tab: hourly ---- */}
-                  {analyticsSection === 'hourly' && (
-                    <HourlyAnalysis
-                      hourlyPerf={hourlyPerf}
-                      hourlyPerfLoading={hourlyPerfLoading}
-                    />
-                  )}
-
-                </>
+              {analyticsSection === 'fans' && accountId && (
+                <FanAnalysis accountId={accountId} castName={castName} sb={sb} />
               )}
             </div>
           )}
