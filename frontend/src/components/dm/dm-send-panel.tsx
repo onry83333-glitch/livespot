@@ -575,7 +575,23 @@ export default function DmSendPanel({
                   {dmScheduleSaving ? '予約中...' : '🕐 送信予約'}
                 </button>
               ) : (
-                <button onClick={() => setShowConfirmModal(true)}
+                <button onClick={async () => {
+                    // セッション有効性チェック
+                    const { data: sess } = await sb
+                      .from('stripchat_sessions')
+                      .select('expires_at, is_valid, cast_name')
+                      .eq('cast_name', castName)
+                      .maybeSingle();
+                    if (!sess) {
+                      setDmError('Chrome拡張のセッションが見つかりません。Stripchatにログインし直してください。');
+                      return;
+                    }
+                    if (!sess.is_valid || new Date(sess.expires_at) < new Date()) {
+                      setDmError('Chrome拡張のセッションが無効または期限切れです。Stripchatにログインし直してください。');
+                      return;
+                    }
+                    setShowConfirmModal(true);
+                  }}
                   disabled={dmSending || dmTargets.size === 0 || !dmMessage.trim()}
                   className="btn-primary text-xs py-1.5 px-5 disabled:opacity-50">
                   {dmSending ? '送信中...' : '送信確認'}
@@ -749,9 +765,22 @@ export default function DmSendPanel({
 
               <div className="glass-panel p-3 rounded-xl">
                 <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>メッセージ</p>
-                <p className="text-xs whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
-                  {dmMessage.length > 200 ? dmMessage.slice(0, 200) + '...' : dmMessage}
-                </p>
+                {(() => {
+                  const firstUser = Array.from(dmTargets)[0] || 'ユーザー名';
+                  const preview = dmMessage.replace(/\{username\}/g, firstUser);
+                  return (
+                    <>
+                      <p className="text-xs whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                        {preview.length > 200 ? preview.slice(0, 200) + '...' : preview}
+                      </p>
+                      {dmMessage.includes('{username}') && (
+                        <p className="text-[9px] mt-1" style={{ color: 'var(--accent-amber)' }}>
+                          ※ {'{username}'} は送信時に各ユーザー名に自動置換されます
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
 
               {dmCampaign && (
