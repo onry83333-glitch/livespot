@@ -178,7 +178,7 @@ const BASE_TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'analytics',  icon: '📈', label: 'アナリティクス' },
   { key: 'reports',    icon: '📋', label: '配信レポート' },
   { key: 'competitors', icon: '⚔', label: '競合分析' },
-  { key: 'persona',    icon: '🧠', label: 'AIペルソナ' },
+  // { key: 'persona',    icon: '🧠', label: 'AIペルソナ' }, // 非表示（コンポーネントは残す）
   { key: 'settings',   icon: '⚙', label: '設定' },
 ];
 
@@ -241,6 +241,10 @@ function CastDetailInner() {
   const [lastWeekCoins, setLastWeekCoins] = useState(0);
   const [totalCoinTx, setTotalCoinTx] = useState<number | null>(null);
 
+  // Monthly revenue
+  const [thisMonthCoins, setThisMonthCoins] = useState(0);
+  const [lastMonthCoins, setLastMonthCoins] = useState(0);
+
   // Sessions
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
@@ -251,7 +255,7 @@ function CastDetailInner() {
   const [dmLogs, setDmLogs] = useState<DMLogItem[]>([]);
   const [dmSchedules, setDmSchedules] = useState<DmScheduleItem[]>([]);
   const [dmQueueCounts, setDmQueueCounts] = useState({ queued: 0, sending: 0, success: 0, error: 0, total: 0 });
-  const [dmSection, setDmSection] = useState<'users' | 'send' | 'segments' | 'campaigns' | 'scenarios' | 'effectiveness'>('users');
+  const [dmSection, setDmSection] = useState<'users' | 'send' | 'segments' | 'campaigns' | 'scenarios' | 'effectiveness'>('send');
 
   // Analytics sub-tab toggle
   const [analyticsSection, setAnalyticsSection] = useState<'segments' | 'acquisition' | 'dm_campaign' | 'hourly'>('segments');
@@ -561,6 +565,41 @@ function CastDetailInner() {
     setLastWeekCoins(hookLastWeek);
     setDaysSinceSync(hookDaysSync);
   }, [hookTotalTokens, hookThisWeek, hookLastWeek, hookDaysSync]);
+
+  // Monthly revenue (coin_transactions ベース)
+  useEffect(() => {
+    if (!accountId || !castName) return;
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
+
+    // 今月
+    sb.from('coin_transactions')
+      .select('tokens')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .gte('date', thisMonthStart)
+      .lte('date', thisMonthEnd)
+      .gt('tokens', 0)
+      .then(({ data }) => {
+        const total = (data || []).reduce((s, r) => s + ((r.tokens as number) || 0), 0);
+        setThisMonthCoins(total);
+      });
+    // 先月
+    sb.from('coin_transactions')
+      .select('tokens')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .gte('date', lastMonthStart)
+      .lte('date', lastMonthEnd)
+      .gt('tokens', 0)
+      .then(({ data }) => {
+        const total = (data || []).reduce((s, r) => s + ((r.tokens as number) || 0), 0);
+        setLastMonthCoins(total);
+      });
+  }, [accountId, castName, sb]);
 
   // Settings: castInfo → form state sync
   useEffect(() => {
@@ -1527,6 +1566,8 @@ function CastDetailInner() {
 
   // Weekly change %
   const weeklyChange = lastWeekCoins > 0 ? ((thisWeekCoins - lastWeekCoins) / lastWeekCoins * 100) : 0;
+  const monthlyChange = lastMonthCoins > 0 ? ((thisMonthCoins - lastMonthCoins) / lastMonthCoins * 100) : 0;
+  const MONTHLY_COIN_RATE = 7.7;
 
   if (!user) return null;
 
@@ -1600,6 +1641,36 @@ function CastDetailInner() {
           {/* ============ OVERVIEW ============ */}
           {activeTab === 'overview' && (
             <div className="space-y-4">
+                {/* Monthly revenue */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="glass-card p-4 text-center">
+                    <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
+                      {formatTokens(thisMonthCoins)}
+                    </p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今月の売上</p>
+                    <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                      ({'\u00A5'}{Math.round(thisMonthCoins * MONTHLY_COIN_RATE).toLocaleString()})
+                    </p>
+                  </div>
+                  <div className="glass-card p-4 text-center">
+                    <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
+                      {formatTokens(lastMonthCoins)}
+                    </p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先月の売上</p>
+                    <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                      ({'\u00A5'}{Math.round(lastMonthCoins * MONTHLY_COIN_RATE).toLocaleString()})
+                    </p>
+                  </div>
+                  <div className="glass-card p-4 text-center">
+                    <p className="text-xl font-bold" style={{
+                      color: monthlyChange >= 0 ? 'var(--accent-green)' : 'var(--accent-pink)'
+                    }}>
+                      {monthlyChange >= 0 ? '↑' : '↓'} {Math.abs(monthlyChange).toFixed(0)}%
+                    </p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>前月比</p>
+                  </div>
+                </div>
+
                 {/* Weekly revenue */}
                 <div className="grid grid-cols-3 gap-3">
                   <div className="glass-card p-4 text-center">
@@ -1629,7 +1700,7 @@ function CastDetailInner() {
                 {/* Stats */}
                 <div className="grid grid-cols-2 gap-3">
                   <div className="glass-card p-4 text-center">
-                    <p className="text-xl font-bold">{stats?.total_messages.toLocaleString() || 0}</p>
+                    <p className="text-xl font-bold">{(stats?.total_messages ?? 0).toLocaleString()}</p>
                     <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>総メッセージ</p>
                   </div>
                   <div className="glass-card p-4 text-center">
@@ -2048,12 +2119,12 @@ function CastDetailInner() {
               {/* Section tabs: ユーザー / 送信 / キャンペーン */}
               <div className="flex gap-1.5">
                 {([
-                  { key: 'users' as const, icon: '👥', label: 'ユーザー別' },
+                  // { key: 'users' as const, icon: '👥', label: 'ユーザー別' }, // 非表示
                   { key: 'send' as const, icon: '✉️', label: 'DM送信' },
                   { key: 'segments' as const, icon: '🎯', label: 'セグメント別' },
                   { key: 'campaigns' as const, icon: '📊', label: 'キャンペーン' },
-                  { key: 'scenarios' as const, icon: '📋', label: 'シナリオ' },
-                  { key: 'effectiveness' as const, icon: '📈', label: '効果測定' },
+                  // { key: 'scenarios' as const, icon: '📋', label: 'シナリオ' }, // 非表示
+                  // { key: 'effectiveness' as const, icon: '📈', label: '効果測定' }, // キャンペーンに統合済み
                 ] as const).map(t => (
                   <button key={t.key} onClick={() => setDmSection(t.key)}
                     className={`text-[11px] px-4 py-2 rounded-lg font-medium transition-all ${
