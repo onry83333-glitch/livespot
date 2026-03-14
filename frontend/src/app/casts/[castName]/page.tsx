@@ -580,9 +580,11 @@ function CastDetailInner() {
       .select('tokens')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
+      .neq('type', 'studio')
       .gte('date', thisMonthStart)
       .lte('date', thisMonthEnd)
       .gt('tokens', 0)
+      .limit(100000)
       .then(({ data }) => {
         const total = (data || []).reduce((s, r) => s + ((r.tokens as number) || 0), 0);
         setThisMonthCoins(total);
@@ -592,9 +594,11 @@ function CastDetailInner() {
       .select('tokens')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
+      .neq('type', 'studio')
       .gte('date', lastMonthStart)
       .lte('date', lastMonthEnd)
       .gt('tokens', 0)
+      .limit(100000)
       .then(({ data }) => {
         const total = (data || []).reduce((s, r) => s + ((r.tokens as number) || 0), 0);
         setLastMonthCoins(total);
