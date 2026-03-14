@@ -1184,8 +1184,9 @@ function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot
 
           {/* ユーザー構成 */}
           {snapshot ? (() => {
-            const total = snapshot.tipperCount || (snapshot.newCount + snapshot.repeaterCount + snapshot.comebackCount);
-            const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
+            const total = snapshot.newCount + snapshot.repeaterCount; // 復帰はリピーターの部分集合
+            const pctOfTotal = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
+            const pctOfRepeater = snapshot.repeaterCount > 0 ? Math.round((snapshot.comebackCount / snapshot.repeaterCount) * 100) : 0;
             return (
               <div className="space-y-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
@@ -1197,21 +1198,21 @@ function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot
                     <p className="text-lg font-bold" style={{ color: '#38bdf8' }}>
                       {snapshot.newCount}<span className="text-[10px] font-normal ml-0.5" style={{ color: 'var(--text-muted)' }}>人</span>
                     </p>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{pct(snapshot.newCount)}%</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{pctOfTotal(snapshot.newCount)}%</p>
                   </div>
                   <div className="glass-panel p-3 rounded-xl">
                     <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>リピーター</p>
                     <p className="text-lg font-bold" style={{ color: '#a78bfa' }}>
                       {snapshot.repeaterCount}<span className="text-[10px] font-normal ml-0.5" style={{ color: 'var(--text-muted)' }}>人</span>
                     </p>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{pct(snapshot.repeaterCount)}%</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{pctOfTotal(snapshot.repeaterCount)}%</p>
                   </div>
                   <div className="glass-panel p-3 rounded-xl">
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>復帰</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>うち復帰</p>
                     <p className="text-lg font-bold" style={{ color: '#22c55e' }}>
                       {snapshot.comebackCount}<span className="text-[10px] font-normal ml-0.5" style={{ color: 'var(--text-muted)' }}>人</span>
                     </p>
-                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{pct(snapshot.comebackCount)}%</p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>リピの{pctOfRepeater}%</p>
                   </div>
                 </div>
 
