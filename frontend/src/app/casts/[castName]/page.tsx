@@ -566,43 +566,41 @@ function CastDetailInner() {
     setDaysSinceSync(hookDaysSync);
   }, [hookTotalTokens, hookThisWeek, hookLastWeek, hookDaysSync]);
 
-  // Monthly revenue (coin_transactions ベース)
+  // Monthly revenue (RPC サーバー側SUM集計 — max_rows制限回避 + TZずれ修正)
   useEffect(() => {
     if (!accountId || !castName) return;
     const now = new Date();
-    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
-    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
-    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59).toISOString();
+    const y = now.getFullYear();
+    const m = now.getMonth(); // 0-based
+    // UTC文字列を直接構築（TZずれ防止）
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const thisMonthStart = `${y}-${pad(m + 1)}-01`;
+    const thisMonthEnd = m === 11 ? `${y + 1}-01-01` : `${y}-${pad(m + 2)}-01`;
+    const lastY = m === 0 ? y - 1 : y;
+    const lastM = m === 0 ? 12 : m; // 1-based for display
+    const lastMonthStart = `${lastY}-${pad(lastM)}-01`;
+    const lastMonthEnd = thisMonthStart; // 先月末 = 今月頭
 
     // 今月
-    sb.from('coin_transactions')
-      .select('tokens')
-      .eq('account_id', accountId)
-      .eq('cast_name', castName)
-      .neq('type', 'studio')
-      .gte('date', thisMonthStart)
-      .lte('date', thisMonthEnd)
-      .gt('tokens', 0)
-      .limit(100000)
-      .then(({ data }) => {
-        const total = (data || []).reduce((s, r) => s + ((r.tokens as number) || 0), 0);
-        setThisMonthCoins(total);
-      });
+    sb.rpc('get_monthly_revenue', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_start_date: thisMonthStart,
+      p_end_date: thisMonthEnd,
+    }).then(({ data }) => {
+      const row = Array.isArray(data) ? data[0] : data;
+      setThisMonthCoins(row?.total_tokens ?? 0);
+    });
     // 先月
-    sb.from('coin_transactions')
-      .select('tokens')
-      .eq('account_id', accountId)
-      .eq('cast_name', castName)
-      .neq('type', 'studio')
-      .gte('date', lastMonthStart)
-      .lte('date', lastMonthEnd)
-      .gt('tokens', 0)
-      .limit(100000)
-      .then(({ data }) => {
-        const total = (data || []).reduce((s, r) => s + ((r.tokens as number) || 0), 0);
-        setLastMonthCoins(total);
-      });
+    sb.rpc('get_monthly_revenue', {
+      p_account_id: accountId,
+      p_cast_name: castName,
+      p_start_date: lastMonthStart,
+      p_end_date: lastMonthEnd,
+    }).then(({ data }) => {
+      const row = Array.isArray(data) ? data[0] : data;
+      setLastMonthCoins(row?.total_tokens ?? 0);
+    });
   }, [accountId, castName, sb]);
 
   // Settings: castInfo → form state sync
