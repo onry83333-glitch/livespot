@@ -177,6 +177,31 @@ ${retLines.length > 0 ? retLines.join('\n') : '(なし)'}`);
 }
 
 /* ============================================================
+   SessionSnapshot (cast_knowledge session_snapshot)
+   ============================================================ */
+interface SnapshotUser {
+  userName: string;
+  currentTk: number;
+  txCount?: number;
+  firstDate?: string;
+  lastDate?: string;
+  totalTk?: number;
+  daysSince?: number;
+}
+
+interface SessionSnapshot {
+  sessionStart: string;
+  totalTk: number;
+  tipperCount: number;
+  newCount: number;
+  repeaterCount: number;
+  comebackCount: number;
+  newTippers: SnapshotUser[];
+  repeaters: SnapshotUser[];
+  comebackUsers: SnapshotUser[];
+}
+
+/* ============================================================
    Props
    ============================================================ */
 interface CoinSession {
@@ -223,6 +248,7 @@ const SEGMENT_LABELS: Record<string, string> = {
 export default function CastReportsTab({ accountId, castId, castName }: CastReportsTabProps) {
   const [records, setRecords] = useState<CastKnowledgeRecord[]>([]);
   const [coinSessions, setCoinSessions] = useState<CoinSession[]>([]);
+  const [snapshots, setSnapshots] = useState<Map<string, SessionSnapshot>>(new Map());
   const [loading, setLoading] = useState(true);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -253,6 +279,25 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
     }).then(({ data, error }) => {
       if (!error && data) setCoinSessions(data as CoinSession[]);
     });
+    // session_snapshot データ取得
+    sb.from('cast_knowledge')
+      .select('insights_json, period_start')
+      .eq('cast_id', castId)
+      .eq('report_type', 'session_snapshot')
+      .order('period_start', { ascending: false })
+      .limit(50)
+      .then(({ data, error }) => {
+        if (!error && data) {
+          const map = new Map<string, SessionSnapshot>();
+          for (const row of data) {
+            const snap = row.insights_json as SessionSnapshot;
+            if (snap?.sessionStart) {
+              map.set(new Date(snap.sessionStart).toISOString(), snap);
+            }
+          }
+          setSnapshots(map);
+        }
+      });
   }, [accountId, castId, castName]);
 
   useEffect(() => { fetchRecords(); }, [fetchRecords]);
@@ -276,7 +321,20 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         'Authorization': `Bearer ${token}`,
       };
 
+      // ── Step 0: セッションスナップショット一括計算 ──
+      setAiLoadingMessage('セッション分析中...');
+      try {
+        await fetch('/api/analysis/batch-session-snapshots', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ cast_name: castName, account_id: accountId }),
+        });
+      } catch (e) {
+        console.warn('[batch-snapshots] non-critical error:', e);
+      }
+
       // ── Step 1: データ収集 + 3ブロック分割 ──
+      setAiLoadingMessage('データ収集中...');
       const step1Res = await fetch('/api/analysis/run-fb-report', {
         method: 'POST',
         headers,
@@ -635,7 +693,7 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         <Accordion id="cast-coin-sessions" title="売上履歴（コインベース）" icon="💰" badge={`${coinSessions.length}件`} defaultOpen>
           <div className="space-y-3">
             {coinSessions.map((s, i) => (
-              <CoinSessionCard key={i} session={s} />
+              <CoinSessionCard key={i} session={s} snapshot={snapshots.get(new Date(s.session_start).toISOString())} />
             ))}
           </div>
         </Accordion>
@@ -1039,9 +1097,40 @@ function AiAnalysisCard({ report, periodStart }: { report: Record<string, unknow
 }
 
 /* ============================================================
+   NestedSection（展開可能なサブセクション）
+   ============================================================ */
+function NestedSection({ title, count, color, children }: {
+  title: string;
+  count: number;
+  color: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  if (count === 0) return null;
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${color}22` }}>
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full px-3 py-2 text-left flex items-center gap-2 text-[11px] font-semibold transition-colors hover:bg-white/[0.02]"
+        style={{ color }}
+      >
+        <span className="transition-transform duration-200" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', fontSize: 9 }}>▶</span>
+        {title}
+        <span className="ml-auto text-[10px] font-normal" style={{ color: 'var(--text-muted)' }}>{count}人</span>
+      </button>
+      {open && (
+        <div className="px-3 pb-2 pt-1" style={{ borderTop: `1px solid ${color}15` }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
    CoinSessionCard（売上ベースセッション）
    ============================================================ */
-function CoinSessionCard({ session }: { session: CoinSession }) {
+function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot?: SessionSnapshot }) {
   const [expanded, setExpanded] = useState(false);
   const startDate = new Date(session.session_start);
   const dateStr = startDate.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', timeZone: 'Asia/Tokyo' });
@@ -1073,58 +1162,119 @@ function CoinSessionCard({ session }: { session: CoinSession }) {
             <span style={{ color: 'var(--accent-green)' }}>
               <span className="font-bold">{tokensToJPY(session.total_tokens, COIN_RATE)}</span>
             </span>
-            <span style={{ color: 'var(--text-muted)' }}>
-              取引 <span className="font-bold text-slate-300">{session.tx_count}</span>件
-            </span>
+            {snapshot && (
+              <span style={{ color: 'var(--text-muted)' }}>
+                新規<span className="font-bold text-sky-400">{snapshot.newCount}</span>
+                {' '}リピ<span className="font-bold text-purple-400">{snapshot.repeaterCount}</span>
+                {' '}復帰<span className="font-bold text-green-400">{snapshot.comebackCount}</span>
+              </span>
+            )}
           </div>
         </div>
       </button>
 
       {expanded && (
         <div className="border-t px-4 pb-4 pt-3 space-y-4" style={{ borderColor: 'var(--border-glass)' }}>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          {/* KPI: 配信時間 / 売上 / 円換算 */}
+          <div className="grid grid-cols-3 gap-2">
             <MetricCard label="配信時間" value={session.duration_minutes} unit="分" />
             <MetricCard label="売上" value={formatTokens(session.total_tokens)} color="var(--accent-amber)" />
             <MetricCard label="円換算" value={tokensToJPY(session.total_tokens, COIN_RATE)} color="var(--accent-green)" />
-            <MetricCard label="取引数" value={session.tx_count} unit="件" />
           </div>
 
-          {session.top_users && session.top_users.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>
-                Top Tippers
-              </p>
-              <div className="overflow-x-auto">
-                <table className="w-full text-[11px]">
-                  <thead>
-                    <tr style={{ color: 'var(--text-muted)' }}>
-                      <th className="text-left py-1.5 px-2">#</th>
-                      <th className="text-left py-1.5 px-2">ユーザー</th>
-                      <th className="text-right py-1.5 px-2">コイン</th>
-                      <th className="text-right py-1.5 px-2">回数</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {session.top_users.map((t, i) => (
-                      <tr key={t.username} className="border-t" style={{ borderColor: 'var(--border-glass)' }}>
-                        <td className="py-1.5 px-2" style={{ color: 'var(--text-muted)' }}>{i + 1}</td>
-                        <td className="py-1.5 px-2">
-                          <Link href={`/spy/users/${encodeURIComponent(t.username)}`}
-                            className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
-                            {t.username}
-                          </Link>
-                        </td>
-                        <td className="py-1.5 px-2 text-right font-bold" style={{ color: 'var(--accent-amber)' }}>
-                          {(t.total ?? 0).toLocaleString()}
-                        </td>
-                        <td className="py-1.5 px-2 text-right" style={{ color: 'var(--text-secondary)' }}>
-                          {t.count}回
-                        </td>
-                      </tr>
+          {/* ユーザー構成 */}
+          {snapshot ? (() => {
+            const total = snapshot.tipperCount || (snapshot.newCount + snapshot.repeaterCount + snapshot.comebackCount);
+            const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
+            return (
+              <div className="space-y-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                  ユーザー構成（{total}人）
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="glass-panel p-3 rounded-xl">
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>新規</p>
+                    <p className="text-lg font-bold" style={{ color: '#38bdf8' }}>
+                      {snapshot.newCount}<span className="text-[10px] font-normal ml-0.5" style={{ color: 'var(--text-muted)' }}>人</span>
+                    </p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{pct(snapshot.newCount)}%</p>
+                  </div>
+                  <div className="glass-panel p-3 rounded-xl">
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>リピーター</p>
+                    <p className="text-lg font-bold" style={{ color: '#a78bfa' }}>
+                      {snapshot.repeaterCount}<span className="text-[10px] font-normal ml-0.5" style={{ color: 'var(--text-muted)' }}>人</span>
+                    </p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{pct(snapshot.repeaterCount)}%</p>
+                  </div>
+                  <div className="glass-panel p-3 rounded-xl">
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>復帰</p>
+                    <p className="text-lg font-bold" style={{ color: '#22c55e' }}>
+                      {snapshot.comebackCount}<span className="text-[10px] font-normal ml-0.5" style={{ color: 'var(--text-muted)' }}>人</span>
+                    </p>
+                    <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{pct(snapshot.comebackCount)}%</p>
+                  </div>
+                </div>
+
+                {/* ネストアコーディオン: 新規チッパー */}
+                <NestedSection title="新規チッパー" count={snapshot.newCount} color="#38bdf8">
+                  <div className="space-y-1">
+                    {snapshot.newTippers.map(u => (
+                      <div key={u.userName} className="flex items-center justify-between text-[11px]">
+                        <Link href={`/spy/users/${encodeURIComponent(u.userName)}`}
+                          className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                          {u.userName}
+                        </Link>
+                        <span style={{ color: 'var(--accent-amber)' }}>{(u.currentTk ?? 0).toLocaleString()}tk</span>
+                      </div>
                     ))}
-                  </tbody>
-                </table>
+                  </div>
+                </NestedSection>
+
+                {/* ネストアコーディオン: リピーター */}
+                <NestedSection title="リピーター" count={snapshot.repeaterCount} color="#a78bfa">
+                  <div className="space-y-1">
+                    {snapshot.repeaters.map(u => (
+                      <div key={u.userName} className="flex items-center justify-between text-[11px]">
+                        <Link href={`/spy/users/${encodeURIComponent(u.userName)}`}
+                          className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                          {u.userName}
+                        </Link>
+                        <span className="text-[10px] text-right" style={{ color: 'var(--text-secondary)' }}>
+                          <span style={{ color: 'var(--accent-amber)' }}>{(u.currentTk ?? 0).toLocaleString()}tk</span>
+                          {' '}[初回{u.firstDate ?? '-'}, 累計{(u.totalTk ?? 0).toLocaleString()}tk, 前回{u.lastDate ?? '-'}, {u.daysSince ?? '-'}日ぶり]
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </NestedSection>
+
+                {/* ネストアコーディオン: 復帰ユーザー */}
+                <NestedSection title="復帰ユーザー" count={snapshot.comebackCount} color="#22c55e">
+                  <div className="space-y-1">
+                    {snapshot.comebackUsers.map(u => (
+                      <div key={u.userName} className="flex items-center justify-between text-[11px]">
+                        <Link href={`/spy/users/${encodeURIComponent(u.userName)}`}
+                          className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                          {u.userName}
+                        </Link>
+                        <span className="text-[10px] text-right" style={{ color: 'var(--text-secondary)' }}>
+                          <span style={{ color: 'var(--accent-amber)' }}>{(u.currentTk ?? 0).toLocaleString()}tk</span>
+                          {' '}[初回{u.firstDate ?? '-'}, 前回{u.lastDate ?? '-'}, {u.daysSince ?? '-'}日ぶり]
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </NestedSection>
               </div>
+            );
+          })() : (
+            <div className="glass-panel p-3 rounded-xl text-center">
+              <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                ユーザー構成: 未生成
+              </p>
+              <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                「配信FBレポートを生成」で自動計算されます
+              </p>
             </div>
           )}
         </div>
