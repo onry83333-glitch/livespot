@@ -1647,7 +1647,7 @@ function CastDetailInner() {
                     <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
                       {formatTokens(thisMonthCoins)}
                     </p>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今月の売上</p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今月の売上（{`${new Date().getMonth() + 1}/1〜${new Date().getMonth() + 1}/${new Date().getDate()}`}）</p>
                     <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                       ({'\u00A5'}{Math.round(thisMonthCoins * MONTHLY_COIN_RATE).toLocaleString()})
                     </p>
@@ -1656,7 +1656,7 @@ function CastDetailInner() {
                     <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
                       {formatTokens(lastMonthCoins)}
                     </p>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先月の売上</p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先月の売上（{`${new Date().getMonth() || 12}/1〜${new Date().getMonth() || 12}/${new Date(new Date().getFullYear(), new Date().getMonth(), 0).getDate()}`}）</p>
                     <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
                       ({'\u00A5'}{Math.round(lastMonthCoins * MONTHLY_COIN_RATE).toLocaleString()})
                     </p>
@@ -1677,14 +1677,14 @@ function CastDetailInner() {
                     <p className="text-xl font-bold" style={{ color: 'var(--accent-green)' }}>
                       {formatTokens(thisWeekCoins)}
                     </p>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週の売上</p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>今週の売上（{(() => { const m = getWeekStartJST(0); return `${m.getMonth()+1}/${m.getDate()}〜${new Date().getMonth()+1}/${new Date().getDate()}`; })()}）</p>
                     <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(thisWeekCoins, coinRate)})</p>
                   </div>
                   <div className="glass-card p-4 text-center">
                     <p className="text-xl font-bold" style={{ color: 'var(--text-secondary)' }}>
                       {formatTokens(lastWeekCoins)}
                     </p>
-                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週の売上</p>
+                    <p className="text-[10px] mt-1" style={{ color: 'var(--text-muted)' }}>先週の売上（{(() => { const m = getWeekStartJST(1); const e = getWeekStartJST(0); e.setDate(e.getDate()-1); return `${m.getMonth()+1}/${m.getDate()}〜${e.getMonth()+1}/${e.getDate()}`; })()}）</p>
                     <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>({tokensToJPY(lastWeekCoins, coinRate)})</p>
                   </div>
                   <div className="glass-card p-4 text-center">
@@ -2339,8 +2339,8 @@ function CastDetailInner() {
 
           {/* ============ SCREENSHOTS — M-6: データ0件のため非表示。SPY基盤安定後に復元 ============ */}
 
-          {/* ============ PERSONA ============ */}
-          {activeTab === 'dm' && (
+          {/* ============ PERSONA — UI非表示（機能は維持） ============ */}
+          {false && activeTab === 'dm' && (
             <div className="space-y-4">
               {personaLoading ? (
                 <div className="space-y-3">

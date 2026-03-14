@@ -697,8 +697,8 @@ export default function DmSendPanel({
             </div>
           )}
 
-          {/* Fan list selection */}
-          <div className="glass-card p-4">
+          {/* Fan list selection — 非表示 */}
+          {/* <div className="glass-card p-4">
             <h3 className="text-sm font-bold mb-2">ファン選択</h3>
             <div className="flex gap-1.5 mb-3 flex-wrap">
               <button onClick={() => addFansAsTargets('all')} className="btn-ghost text-[9px] py-1 px-2">全ファン</button>
@@ -727,7 +727,7 @@ export default function DmSendPanel({
                 })}
               </div>
             )}
-          </div>
+          </div> */}
         </div>
       </div>
 

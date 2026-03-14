@@ -619,15 +619,14 @@ ${userListText || '(スナップショットなし)'}
 
   return (
     <div className="space-y-4">
-      {/* ========== 日次ブリーフィング ========== */}
+      {/* ========== 日次ブリーフィング — 非表示 ==========
       {latestBriefing && (
         <DailyBriefingCard record={latestBriefing} castName={castName} />
       )}
-
-      {/* ========== インサイト（AI分析結果） ========== */}
       {latestBriefing?.insights_json && Object.keys(latestBriefing.insights_json).length > 0 && (
         <InsightsCard insights={latestBriefing.insights_json} />
       )}
+      ========== */}
 
       {/* ========== 配信FBレポート生成ボタン + 結果 ========== */}
       <ReportGenerateButton
