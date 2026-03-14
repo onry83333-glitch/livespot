@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
 
   // P0-5: 日次送信上限チェック（account_id指定時）
   if (account_id) {
-    const dailyCheck = await checkDailyDmLimit(supabase, account_id);
+    const dailyCheck = await checkDailyDmLimit(supabase, account_id, body.cast_name);
     if (!dailyCheck.allowed) {
       return NextResponse.json(
         { error: dailyCheck.reason, blocked_by_limit: true },

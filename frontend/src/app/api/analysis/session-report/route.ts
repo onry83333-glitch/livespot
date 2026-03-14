@@ -54,18 +54,32 @@ export async function POST(request: NextRequest) {
       .limit(100);
 
     // 3. コイントランザクション取得
+    const effectiveAccountId = account_id || session.account_id;
     const sessionDate = session.started_at?.split('T')[0];
     const { data: coins } = await auth.supabase
       .from('coin_transactions')
       .select('tokens, type, username, date')
       .eq('cast_name', cast_name)
+      .eq('account_id', effectiveAccountId)
       .gte('date', sessionDate || '2026-01-01');
 
+    // cast_id をregistered_castsから取得
+    const { data: castRow } = await auth.supabase
+      .from('registered_casts')
+      .select('id')
+      .eq('cast_name', cast_name)
+      .single();
+    const castId = castRow?.id;
+
     // 4. 過去ナレッジ取得（最新5件）
-    const { data: pastKnowledge } = await auth.supabase
+    let pastKnowledgeQuery = auth.supabase
       .from('cast_knowledge')
       .select('report_type, metrics_json, insights_json, created_at')
-      .eq('account_id', account_id || session.account_id)
+      .eq('account_id', effectiveAccountId);
+    if (castId) {
+      pastKnowledgeQuery = pastKnowledgeQuery.eq('cast_id', castId);
+    }
+    const { data: pastKnowledge } = await pastKnowledgeQuery
       .order('created_at', { ascending: false })
       .limit(5);
 
@@ -115,10 +129,14 @@ ${pastKnowledgeSummary || 'なし'}
     }
 
     // 6. cast_knowledge に保存
+    if (!castId) {
+      console.error('[analysis/session-report] cast_id not found for cast_name:', cast_name);
+    }
     const { data: inserted, error: insertErr } = await auth.supabase
       .from('cast_knowledge')
       .insert({
-        account_id: account_id || session.account_id,
+        cast_id: castId,
+        account_id: effectiveAccountId,
         report_type: 'session_report',
         period_start: session.started_at,
         period_end: session.ended_at,

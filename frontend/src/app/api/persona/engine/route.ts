@@ -2376,7 +2376,7 @@ export async function POST(req: NextRequest) {
 
     // ── ペルソナ取得 ──
     let personaQuery = sb
-      .from('cast_personas')
+      .from('cast_persona')
       .select('*')
       .eq('cast_name', cast_name);
     if (reqAccountId) personaQuery = personaQuery.eq('account_id', reqAccountId);

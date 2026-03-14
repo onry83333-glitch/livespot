@@ -139,7 +139,7 @@ export async function queueDmBatch(
   }
 
   // P0-5: 1日あたりの送信上限チェック
-  const dailyCheck = await checkDailyDmLimit(supabase, accountId);
+  const dailyCheck = await checkDailyDmLimit(supabase, accountId, castName);
   if (!dailyCheck.allowed) {
     // 全件をblocked_by_limitとして記録
     const rows = targets.map(t => ({
@@ -166,7 +166,7 @@ export async function queueDmBatch(
 
   // P0-5: campaign単位の送信数制限チェック
   if (campaignMaxCount) {
-    const campCheck = await checkCampaignLimit(supabase, accountId, campaign, campaignMaxCount);
+    const campCheck = await checkCampaignLimit(supabase, accountId, campaign, campaignMaxCount, castName);
     if (!campCheck.allowed) {
       const rows = targets.map(t => ({
         account_id: accountId,

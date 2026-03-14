@@ -29,6 +29,7 @@ interface CampaignLimitResult {
 export async function checkDailyDmLimit(
   supabase: SupabaseClient,
   accountId: string,
+  castName?: string,
 ): Promise<DailyLimitResult> {
   // JST基準の今日の開始・終了
   const now = new Date();
@@ -39,13 +40,17 @@ export async function checkDailyDmLimit(
   const todayEnd = `${todayStr}T23:59:59+09:00`;
 
   // 今日の送信数カウント（queued/sending/success を対象、error/blocked_by_limitは除外）
-  const { count, error } = await supabase
+  let query = supabase
     .from('dm_send_log')
     .select('id', { count: 'exact', head: true })
     .eq('account_id', accountId)
     .in('status', ['queued', 'sending', 'success'])
     .gte('created_at', todayStart)
     .lt('created_at', todayEnd);
+  if (castName) {
+    query = query.eq('cast_name', castName);
+  }
+  const { count, error } = await query;
 
   if (error) {
     console.warn('[dm-safety] Daily limit check failed:', error.message);
@@ -77,17 +82,22 @@ export async function checkCampaignLimit(
   accountId: string,
   campaign: string,
   maxCount?: number,
+  castName?: string,
 ): Promise<CampaignLimitResult> {
   if (!maxCount || maxCount <= 0) {
     return { allowed: true, sentCount: 0, limit: 0 };
   }
 
-  const { count, error } = await supabase
+  let query = supabase
     .from('dm_send_log')
     .select('id', { count: 'exact', head: true })
     .eq('account_id', accountId)
     .eq('campaign', campaign)
     .in('status', ['queued', 'sending', 'success']);
+  if (castName) {
+    query = query.eq('cast_name', castName);
+  }
+  const { count, error } = await query;
 
   if (error) {
     console.warn('[dm-safety] Campaign limit check failed:', error.message);
