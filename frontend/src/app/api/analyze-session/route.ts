@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
     .from('chat_logs')
     .select('timestamp')
     .eq('account_id', account_id)
+    .eq('cast_name', cast_name)
     .eq('session_id', session_id)
     .order('timestamp', { ascending: true })
     .limit(1);
@@ -64,6 +65,7 @@ export async function POST(request: NextRequest) {
     .from('chat_logs')
     .select('timestamp')
     .eq('account_id', account_id)
+    .eq('cast_name', cast_name)
     .eq('session_id', session_id)
     .order('timestamp', { ascending: false })
     .limit(1);
@@ -80,6 +82,7 @@ export async function POST(request: NextRequest) {
     .from('chat_logs')
     .select('timestamp, message_type, username, message, tokens, is_vip, metadata')
     .eq('account_id', account_id)
+    .eq('cast_name', cast_name)
     .eq('session_id', session_id)
     .order('timestamp', { ascending: true })
     .limit(10000);

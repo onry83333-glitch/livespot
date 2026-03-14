@@ -200,12 +200,14 @@ export default function AlertsPage() {
 
     const [paidRes, dmRes] = await Promise.all([
       paidQuery.maybeSingle(),
-      sb.from('dm_send_log')
-        .select('queued_at')
-        .eq('account_id', accountId)
-        .eq('user_name', userName)
-        .order('queued_at', { ascending: false })
-        .limit(1),
+      (() => {
+        let q = sb.from('dm_send_log')
+          .select('queued_at')
+          .eq('account_id', accountId)
+          .eq('user_name', userName);
+        if (castName) q = q.eq('cast_name', castName);
+        return q.order('queued_at', { ascending: false }).limit(1);
+      })(),
     ]);
 
     const paid = paidRes.data;

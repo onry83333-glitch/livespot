@@ -1011,6 +1011,7 @@ ${typeBreakdown}`;
     const { data: spyRows } = await sb
       .from('spy_messages')
       .select('user_name, message_time, msg_type, message, tokens')
+      .eq('account_id', accountId)
       .eq('cast_name', castName)
       .gte('message_time', sessionStartISO)
       .lte('message_time', sessionEndISO);
@@ -1061,6 +1062,7 @@ ${typeBreakdown}`;
       const { data: chatRows } = await sb
         .from('chat_logs')
         .select('username, timestamp')
+        .eq('account_id', accountId)
         .eq('cast_name', castName)
         .gte('timestamp', sessionStartISO)
         .lte('timestamp', sessionEndISO);
@@ -1890,6 +1892,7 @@ ${tsLines.join('\n')}
       const { data: vsRows } = await sb
         .from('viewer_stats')
         .select('total, coin_users, others, coin_holders, ultimate_count, others_count, recorded_at')
+        .eq('account_id', accountId)
         .eq('cast_name', castName)
         .gte('recorded_at', sessionStartISO)
         .lte('recorded_at', sessionEndISO)
@@ -1951,6 +1954,7 @@ ${vsLines.join('\n')}`);
         const { data: allVs } = await sb
           .from('viewer_stats')
           .select('cast_name, recorded_at, total, coin_users')
+          .eq('account_id', accountId)
           .eq('cast_name', castName)
           .order('recorded_at', { ascending: false })
           .limit(5);
@@ -2183,6 +2187,7 @@ ${castRankLines.join('\n')}
         const { data: goalRows } = await sb
           .from('spy_messages')
           .select('cast_name, message, tokens, message_time')
+          .eq('account_id', accountId)
           .eq('msg_type', 'goal')
           .neq('cast_name', castName)
           .order('message_time', { ascending: false })
