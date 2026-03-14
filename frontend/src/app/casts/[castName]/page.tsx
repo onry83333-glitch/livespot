@@ -253,6 +253,8 @@ function CastDetailInner() {
   const [dmLogs, setDmLogs] = useState<DMLogItem[]>([]);
   const [dmSchedules, setDmSchedules] = useState<DmScheduleItem[]>([]);
   const [dmQueueCounts, setDmQueueCounts] = useState({ queued: 0, sending: 0, success: 0, error: 0, total: 0 });
+  const [dmViewMode, setDmViewMode] = useState<'latest' | 'all'>('latest');
+  const [dmLatestCampaign, setDmLatestCampaign] = useState<string | null>(null);
   const [dmSection, setDmSection] = useState<'users' | 'send' | 'segments' | 'campaigns' | 'scenarios' | 'effectiveness'>('send');
 
   // Analytics sub-tab toggle
@@ -826,9 +828,15 @@ function CastDetailInner() {
       .then(({ data }) => {
         const logs = (data || []) as DMLogItem[];
         setDmLogs(logs);
-        // Queue counts computation
-        const counts = { queued: 0, sending: 0, success: 0, error: 0, total: logs.length };
-        logs.forEach(l => {
+        // 最新キャンペーンを特定
+        const latest = logs.length > 0 ? logs[0].campaign : null;
+        setDmLatestCampaign(latest);
+        // Queue counts computation（dmViewModeに応じてフィルタ）
+        const target = dmViewMode === 'latest' && latest
+          ? logs.filter(l => l.campaign === latest)
+          : logs;
+        const counts = { queued: 0, sending: 0, success: 0, error: 0, total: target.length };
+        target.forEach(l => {
           if (l.status === 'queued') counts.queued++;
           else if (l.status === 'sending') counts.sending++;
           else if (l.status === 'success') counts.success++;
@@ -837,6 +845,26 @@ function CastDetailInner() {
         setDmQueueCounts(counts);
       });
 
+  }, [accountId, castName, activeTab, sb]);
+
+  // dmViewMode切替時にカウント再計算
+  useEffect(() => {
+    if (dmLogs.length === 0) return;
+    const target = dmViewMode === 'latest' && dmLatestCampaign
+      ? dmLogs.filter(l => l.campaign === dmLatestCampaign)
+      : dmLogs;
+    const counts = { queued: 0, sending: 0, success: 0, error: 0, total: target.length };
+    target.forEach(l => {
+      if (l.status === 'queued') counts.queued++;
+      else if (l.status === 'sending') counts.sending++;
+      else if (l.status === 'success') counts.success++;
+      else if (l.status === 'error') counts.error++;
+    });
+    setDmQueueCounts(counts);
+  }, [dmViewMode, dmLatestCampaign, dmLogs]);
+
+  useEffect(() => {
+    if (!accountId || activeTab !== 'dm') return;
     // スケジュール一覧取得
     sb.from('dm_schedules')
       .select('*')
@@ -2075,9 +2103,42 @@ function CastDetailInner() {
               <div className="glass-card p-4">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-bold">📨 DM送信状況</h3>
-                  <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                    全{dmQueueCounts.total.toLocaleString()}件
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex text-[9px] rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-glass)' }}>
+                      <button onClick={() => setDmViewMode('latest')}
+                        className="px-2 py-0.5"
+                        style={{ background: dmViewMode === 'latest' ? 'rgba(56,189,248,0.15)' : 'transparent', color: dmViewMode === 'latest' ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
+                        最新バッチ
+                      </button>
+                      <button onClick={() => setDmViewMode('all')}
+                        className="px-2 py-0.5"
+                        style={{ background: dmViewMode === 'all' ? 'rgba(56,189,248,0.15)' : 'transparent', color: dmViewMode === 'all' ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
+                        全件
+                      </button>
+                    </div>
+                    <button onClick={() => {
+                      sb.from('dm_send_log')
+                        .select('id, user_name, message, status, error, campaign, queued_at, sent_at')
+                        .eq('account_id', accountId!)
+                        .eq('cast_name', castName)
+                        .order('created_at', { ascending: false })
+                        .limit(200)
+                        .then(({ data }) => {
+                          const logs = (data || []) as DMLogItem[];
+                          setDmLogs(logs);
+                          const latest = logs.length > 0 ? logs[0].campaign : null;
+                          setDmLatestCampaign(latest);
+                        });
+                    }} className="text-[10px] px-1.5 py-0.5 rounded hover:bg-white/5" style={{ color: 'var(--text-muted)' }} title="更新">
+                      🔄
+                    </button>
+                    <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      {dmQueueCounts.total.toLocaleString()}件
+                      {dmViewMode === 'latest' && dmLatestCampaign && (
+                        <span className="ml-1" style={{ color: 'var(--accent-primary)' }}>({dmLatestCampaign.length > 20 ? dmLatestCampaign.slice(0, 20) + '...' : dmLatestCampaign})</span>
+                      )}
+                    </span>
+                  </div>
                 </div>
                 {(dmQueueCounts.queued > 0 || dmQueueCounts.sending > 0) && (
                   <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(245,158,11,0.08)' }}>
