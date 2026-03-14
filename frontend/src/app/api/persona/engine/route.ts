@@ -771,7 +771,7 @@ Markdownで出力してください。以下の構造を守ること:
 - 改善提案は「次の配信で」実行可能な具体策のみ
 - 抽象的な提案禁止（×「コミュニケーションを増やす」→ ○「配信開始10分以内にチャットで名前を3人呼ぶ」）
 - DMだけでなく、配信構成・ゴール設定・コミュニケーション施策も提案すること
-- 安藤式7原則・BYAF法に触れる場合は具体例付きで
+- 「安藤式7原則」「BYAF法」「購買心理3ルート」「サンクコスト効果」「社会的証明」「希少性原理」等のフレームワーク名・心理学用語を絶対に使うな。安藤自身の言葉で語れ。
 - JSON出力禁止。Markdownのみ。`;
 }
 
@@ -2332,8 +2332,12 @@ function selectLayerA(taskType: EngineTaskType, personaBase: string | null): str
 
 /** fb_report系用: 人格シミュレーション版 Layer A（ソース取得済みならそれを使う） */
 function selectLayerAForFbReport(marketerSources: string | null, personaBase: string | null): string {
-  if (marketerSources) return buildMarketerPersonaLayerA(marketerSources);
-  // フォールバック: 従来の安藤フレームワーク版
+  if (marketerSources) {
+    console.log('[selectLayerAForFbReport] marketerSources取得成功 → buildMarketerPersonaLayerA使用');
+    return buildMarketerPersonaLayerA(marketerSources);
+  }
+  // フォールバック: 従来版
+  console.log('[selectLayerAForFbReport] marketerSourcesなし → フォールバック:', personaBase ? 'personaBase' : 'LAYER_A_ANDO_FOUNDATION');
   return personaBase || LAYER_A_ANDO_FOUNDATION;
 }
 
