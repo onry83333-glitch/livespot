@@ -778,13 +778,13 @@ function CastDetailInner() {
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const mapped: SessionItem[] = (data as any[]).map(r => {
-        const d = new Date(r.started_at);
+        const d = new Date(r.session_start);
         const jst = new Date(d.getTime() + 9 * 60 * 60 * 1000);
         const sessionDate = `${jst.getUTCFullYear()}-${String(jst.getUTCMonth() + 1).padStart(2, '0')}-${String(jst.getUTCDate()).padStart(2, '0')}`;
         return {
           session_date: sessionDate,
-          session_start: r.started_at,
-          session_end: r.ended_at,
+          session_start: r.session_start,
+          session_end: r.session_end,
           message_count: r.msg_count ?? 0,
           tip_count: r.tip_count ?? 0,
           total_coins: r.total_revenue ?? 0,   // coin_transactions ベース
@@ -1768,7 +1768,7 @@ function CastDetailInner() {
                         <span className="text-xs">{isOpen ? '▼' : '►'}</span>
                         <div>
                           <p className="text-xs font-semibold">
-                            {s.session_date} {formatJST(s.session_start).split(' ')[1]?.slice(0, 5)}〜{formatJST(s.session_end).split(' ')[1]?.slice(0, 5)}
+                            {s.session_date} {formatJST(s.session_start).split(' ')[1]?.slice(0, 5)}〜{s.session_end ? formatJST(s.session_end).split(' ')[1]?.slice(0, 5) : '配信中'}
                             {s.broadcast_title && (
                               <span className="ml-2 text-[11px] font-normal px-2 py-0.5 rounded-md"
                                 style={{ background: 'rgba(168,85,247,0.1)', color: 'var(--accent-purple)' }}>
