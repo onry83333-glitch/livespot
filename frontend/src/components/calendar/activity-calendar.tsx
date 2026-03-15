@@ -21,6 +21,7 @@ interface ActivityDay {
 }
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
+const TK_TO_YEN = 7.7;
 
 export default function ActivityCalendar({ accountId, castName, sb }: ActivityCalendarProps) {
   const now = new Date();
@@ -126,14 +127,19 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
                 <div
                   key={cell.dayNum}
                   onClick={() => hasAny && setSelectedDay(cell)}
-                  className={`min-h-[72px] p-1.5 transition-colors ${hasAny ? 'cursor-pointer hover:bg-white/[0.03]' : ''}`}
+                  className={`min-h-[72px] p-1.5 transition-all duration-150 ${hasAny ? 'cursor-pointer hover:brightness-125 hover:scale-[1.02]' : ''}`}
                   style={{
                     borderBottom: '1px solid var(--border-primary)',
                     borderRight: i % 7 !== 6 ? '1px solid var(--border-primary)' : undefined,
-                    background: isToday ? 'rgba(56,189,248,0.08)' : undefined,
+                    background: isToday
+                      ? 'rgba(56,189,248,0.15)'
+                      : hasAny
+                        ? 'rgba(255,255,255,0.03)'
+                        : undefined,
+                    boxShadow: isToday ? 'inset 0 0 0 2px rgba(56,189,248,0.4)' : undefined,
                   }}
                 >
-                  <div className={`text-[11px] font-medium mb-1 ${isToday ? 'text-sky-400' : ''}`}
+                  <div className={`text-[11px] font-bold mb-1`}
                     style={{ color: isToday ? '#38bdf8' : dayOfWeek === 0 ? '#ef4444' : dayOfWeek === 6 ? '#38bdf8' : 'var(--text-primary)' }}>
                     {cell.dayNum}
                   </div>
@@ -183,7 +189,7 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
               {selectedDay.has_revenue && (
                 <div className="flex items-center gap-2">
                   <span>💰</span>
-                  <span>売上: {Number(selectedDay.revenue_tokens).toLocaleString()} tk</span>
+                  <span>売上: {Number(selectedDay.revenue_tokens).toLocaleString()} tk（¥{Math.round(Number(selectedDay.revenue_tokens) * TK_TO_YEN).toLocaleString()}）</span>
                 </div>
               )}
               {selectedDay.has_report && (

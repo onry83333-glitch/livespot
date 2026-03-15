@@ -36,12 +36,12 @@ BEGIN
     FROM dm_send_log
     WHERE account_id = p_account_id
       AND cast_name = p_cast_name
-      AND status = 'sent'
+      AND status = 'success'
       AND created_at >= v_start AND created_at < v_end
     GROUP BY created_at::DATE
   ),
   report_agg AS (
-    SELECT created_at::DATE AS d, COUNT(*)::INT AS cnt
+    SELECT created_at::DATE AS d, COUNT(DISTINCT report_type)::INT AS cnt
     FROM cast_knowledge
     WHERE cast_id = (
       SELECT id FROM registered_casts WHERE cast_name = p_cast_name LIMIT 1
