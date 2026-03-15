@@ -60,7 +60,8 @@ export default function DmCampaign({
   // Retention data per campaign
   const [retentionMap, setRetentionMap] = useState<Map<string, RetentionData>>(new Map());
   const [deleting, setDeleting] = useState<string | null>(null);
-  // C-1: Per-campaign expanded state
+  // Two-tier accordion: date group + campaign
+  const [dateExpanded, setDateExpanded] = useState<Set<string>>(new Set());
   const [campaignExpanded, setCampaignExpanded] = useState<Set<string>>(new Set());
   // C-2: Per-campaign slider days
   const [sliderDaysMap, setSliderDaysMap] = useState<Map<string, number>>(new Map());
@@ -156,21 +157,49 @@ export default function DmCampaign({
   };
 
   if (section === 'campaigns') {
-    // Build campaign stats map
-    const campMap = new Map<string, { total: number; success: number; error: number; sending: number; queued: number; lastSent: string | null }>();
+    const WEEKDAYS_JP = ['日', '月', '火', '水', '木', '金', '土'];
+
+    // Build campaign stats map + collect earliest queued_at per campaign
+    const campMap = new Map<string, { total: number; success: number; error: number; sending: number; queued: number; lastSent: string | null; earliestQueued: string }>();
     for (const log of dmLogs) {
       const c = log.campaign || '(タグなし)';
       if (!campMap.has(c)) {
-        campMap.set(c, { total: 0, success: 0, error: 0, sending: 0, queued: 0, lastSent: null });
+        campMap.set(c, { total: 0, success: 0, error: 0, sending: 0, queued: 0, lastSent: null, earliestQueued: log.queued_at });
       }
       const entry = campMap.get(c)!;
       entry.total++;
+      if (log.queued_at < entry.earliestQueued) entry.earliestQueued = log.queued_at;
       if (log.status === 'success') { entry.success++; if (!entry.lastSent || (log.sent_at && log.sent_at > entry.lastSent)) entry.lastSent = log.sent_at; }
       else if (log.status === 'error') entry.error++;
       else if (log.status === 'sending') entry.sending++;
       else if (log.status === 'queued') entry.queued++;
     }
-    const sortedCampaigns = Array.from(campMap.entries()).sort((a, b) => b[1].total - a[1].total);
+
+    // Group campaigns by queued_at date (JST)
+    const dateGroups = new Map<string, string[]>();
+    for (const [campaign, stats] of Array.from(campMap.entries())) {
+      const jstDate = new Date(new Date(stats.earliestQueued).getTime() + 9 * 60 * 60 * 1000);
+      const dateKey = `${jstDate.getFullYear()}-${String(jstDate.getMonth() + 1).padStart(2, '0')}-${String(jstDate.getDate()).padStart(2, '0')}`;
+      const list = dateGroups.get(dateKey) || [];
+      list.push(campaign);
+      dateGroups.set(dateKey, list);
+    }
+    // Sort date groups descending
+    const sortedDateKeys = Array.from(dateGroups.keys()).sort((a, b) => b.localeCompare(a));
+
+    // Helper: format date key to Japanese
+    const formatDateJP = (dateKey: string) => {
+      const [y, m, d] = dateKey.split('-').map(Number);
+      const dt = new Date(y, m - 1, d);
+      return `${m}月${d}日（${WEEKDAYS_JP[dt.getDay()]}）`;
+    };
+
+    // Helper: CVR color
+    const getCvrColor = (cvr: number, ended: boolean) => {
+      if (ended) return cvr >= 50 ? '#22c55e' : cvr >= 30 ? '#f59e0b' : '#ef4444';
+      if (cvr <= 0) return 'var(--text-muted)';
+      return cvr >= 50 ? 'rgba(34,197,94,0.6)' : cvr >= 30 ? 'rgba(245,158,11,0.6)' : 'rgba(239,68,68,0.6)';
+    };
 
     return (
       <div className="glass-card p-4">
@@ -179,145 +208,189 @@ export default function DmCampaign({
           <p className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>DM送信履歴なし</p>
         ) : (
           <div className="space-y-2">
-            {sortedCampaigns.map(([campaign, stats]) => {
-              const ret = retentionMap.get(campaign);
-              const retColor = ret
-                ? Number(ret.retention_rate) >= 50 ? '#22c55e'
-                  : Number(ret.retention_rate) >= 30 ? '#f59e0b'
-                  : '#ef4444'
-                : undefined;
-              const isOpen = campaignExpanded.has(campaign);
-              const successRate = stats.total > 0 ? Math.round((stats.success / stats.total) * 1000) / 10 : 0;
-              const { displayName, dateLabel } = parseCampaignName(campaign);
-              const days = sliderDaysMap.get(campaign) ?? 14;
+            {sortedDateKeys.map(dateKey => {
+              const campaigns = dateGroups.get(dateKey) || [];
+              const isDateOpen = dateExpanded.has(dateKey);
+              // Aggregate stats for date header
+              const dateTotalSuccess = campaigns.reduce((s, c) => s + (campMap.get(c)?.success || 0), 0);
+              const dateTotal = campaigns.reduce((s, c) => s + (campMap.get(c)?.total || 0), 0);
 
               return (
-                <div key={campaign} className="glass-panel rounded-xl overflow-hidden">
-                  {/* C-1: Collapsed header — clickable accordion */}
+                <div key={dateKey} className="glass-panel rounded-xl overflow-hidden">
+                  {/* === Tier 1: Date group header === */}
                   <div
-                    className="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-colors"
-                    onClick={() => setCampaignExpanded(prev => {
+                    className="px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-white/[0.03] transition-colors"
+                    onClick={() => setDateExpanded(prev => {
                       const next = new Set(prev);
-                      if (next.has(campaign)) next.delete(campaign); else next.add(campaign);
+                      if (next.has(dateKey)) next.delete(dateKey); else next.add(dateKey);
                       return next;
                     })}
                   >
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
-                      <span className="text-[11px] font-bold truncate">{displayName}</span>
-                      {dateLabel && (
-                        <span className="text-[10px] shrink-0 px-1.5 py-0.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
-                          {dateLabel}
-                        </span>
-                      )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>{isDateOpen ? '▼' : '▶'}</span>
+                      <span className="text-[12px] font-bold" style={{ color: 'var(--text-primary)' }}>{formatDateJP(dateKey)}</span>
                     </div>
-                    <div className="flex items-center gap-3 text-[10px] shrink-0">
-                      <span style={{ color: 'var(--accent-green)' }}>成功率 {successRate}%</span>
-                      {ret && (() => {
-                        const cvr = ret.total_sent > 0 ? Math.round(ret.returned_count / ret.total_sent * 1000) / 10 : 0;
-                        const color = ret.period_ended
-                          ? (cvr >= 50 ? '#22c55e' : cvr >= 30 ? '#f59e0b' : '#ef4444')
-                          : (cvr >= 50 ? 'rgba(34,197,94,0.6)' : cvr >= 30 ? 'rgba(245,158,11,0.6)' : cvr > 0 ? 'rgba(239,68,68,0.6)' : 'var(--text-muted)');
-                        return (
-                          <span style={{ color }}>
-                            CVR {cvr}%{!ret.period_ended && ' ⏳'}
-                          </span>
-                        );
-                      })()}
-                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
+                    <div className="flex items-center gap-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                      <span>{campaigns.length}キャンペーン</span>
+                      <span>{dateTotalSuccess}/{dateTotal}件成功</span>
                     </div>
                   </div>
 
-                  {/* C-1: Expanded detail */}
-                  {isOpen && (
-                    <div className="px-4 pb-3 space-y-3" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                      {/* Progress bar */}
-                      <div className="h-2 rounded-full overflow-hidden flex mt-3" style={{ background: 'rgba(0,0,0,0.2)' }}>
-                        {stats.success > 0 && <div style={{ width: `${(stats.success / stats.total) * 100}%`, background: 'var(--accent-green)' }} />}
-                        {stats.sending > 0 && <div style={{ width: `${(stats.sending / stats.total) * 100}%`, background: 'var(--accent-amber)' }} />}
-                        {stats.queued > 0 && <div style={{ width: `${(stats.queued / stats.total) * 100}%`, background: 'var(--accent-primary)' }} />}
-                        {stats.error > 0 && <div style={{ width: `${(stats.error / stats.total) * 100}%`, background: 'var(--accent-pink)' }} />}
-                      </div>
+                  {/* === Tier 1 expanded: campaign list === */}
+                  {isDateOpen && (
+                    <div className="pb-1" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                      {campaigns.map(campaign => {
+                        const stats = campMap.get(campaign)!;
+                        const ret = retentionMap.get(campaign);
+                        const isOpen = campaignExpanded.has(campaign);
+                        const successRate = stats.total > 0 ? Math.round((stats.success / stats.total) * 1000) / 10 : 0;
+                        const { displayName } = parseCampaignName(campaign);
+                        const days = sliderDaysMap.get(campaign) ?? 14;
 
-                      {/* Send stats */}
-                      <div className="flex flex-wrap gap-3 text-[10px]">
-                        <span style={{ color: 'var(--text-muted)' }}>全{stats.total}件</span>
-                        <span style={{ color: 'var(--accent-green)' }}>成功 {stats.success}</span>
-                        {stats.error > 0 && <span style={{ color: 'var(--accent-pink)' }}>失敗 {stats.error}</span>}
-                        {(stats.queued + stats.sending) > 0 && <span style={{ color: 'var(--accent-amber)' }}>処理中 {stats.queued + stats.sending}</span>}
-                        {stats.lastSent && <span style={{ color: 'var(--text-muted)' }}>最終: {new Date(stats.lastSent).toLocaleDateString('ja-JP')}</span>}
-                      </div>
+                        // CVR header values
+                        const cvr = ret && ret.total_sent > 0 ? Math.round(ret.returned_count / ret.total_sent * 1000) / 10 : 0;
+                        const cvrHeaderColor = ret ? getCvrColor(cvr, ret.period_ended) : 'var(--text-muted)';
 
-                      {/* C-2: Retention slider + presets */}
-                      {ret && (
-                        <div className="space-y-2 pt-1" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div className="flex items-center justify-between">
-                            <span className="text-[10px] font-bold" style={{ color: 'var(--text-secondary)' }}>
-                              リテンション判定期間: {days}日
-                            </span>
-                            <div className="flex items-center gap-1">
-                              {[1, 7, 14, 30].map(preset => (
-                                <button
-                                  key={preset}
-                                  onClick={() => handleSliderChange(campaign, preset)}
-                                  className="text-[9px] px-1.5 py-0.5 rounded transition-colors"
-                                  style={{
-                                    background: days === preset ? 'rgba(56,189,248,0.2)' : 'rgba(255,255,255,0.05)',
-                                    color: days === preset ? 'var(--accent-primary)' : 'var(--text-muted)',
-                                    border: days === preset ? '1px solid rgba(56,189,248,0.3)' : '1px solid transparent',
-                                  }}
-                                >
-                                  {preset}日
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                          <input
-                            type="range"
-                            min={1}
-                            max={30}
-                            value={days}
-                            onChange={e => handleSliderChange(campaign, Number(e.target.value))}
-                            className="w-full h-1 rounded-lg appearance-none cursor-pointer"
-                            style={{ accentColor: 'var(--accent-primary)', background: 'rgba(255,255,255,0.1)' }}
-                          />
-
-                          {/* CVR detail */}
-                          <div className="flex items-center gap-2 text-[10px]">
-                            <span style={{ color: 'var(--text-muted)' }}>CVR:</span>
-                            {ret.period_ended ? (
-                              <span style={{ color: retColor, fontWeight: 600 }}>
-                                確定: {ret.returned_count}/{ret.total_sent}人 ({ret.retention_rate}%)
-                              </span>
-                            ) : (() => {
-                              const latestDm = new Date(ret.latest_dm);
-                              const endDate = new Date(latestDm.getTime() + days * 24 * 60 * 60 * 1000);
-                              const remaining = Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
-                              const cvr = ret.total_sent > 0 ? Math.round(ret.returned_count / ret.total_sent * 1000) / 10 : 0;
-                              const pendingColor = cvr >= 50 ? 'rgba(34,197,94,0.6)' : cvr >= 30 ? 'rgba(245,158,11,0.6)' : cvr > 0 ? 'rgba(239,68,68,0.6)' : 'var(--text-muted)';
-                              return (
-                                <span>
-                                  <span style={{ color: 'var(--text-muted)' }}>判定中（残り{remaining}日）</span>
-                                  <span style={{ color: pendingColor, marginLeft: 4 }}>
-                                    暫定: {ret.returned_count}/{ret.total_sent}人 ({cvr}%)
-                                  </span>
+                        return (
+                          <div key={campaign} className="mx-2 mb-1 rounded-lg overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                            {/* === Tier 2: Campaign header === */}
+                            <div
+                              className="px-3 py-2 flex items-center justify-between cursor-pointer hover:bg-white/[0.03] transition-colors"
+                              onClick={() => setCampaignExpanded(prev => {
+                                const next = new Set(prev);
+                                if (next.has(campaign)) next.delete(campaign); else next.add(campaign);
+                                return next;
+                              })}
+                            >
+                              <div className="flex items-center gap-2 flex-1 min-w-0">
+                                <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{isOpen ? '▼' : '▶'}</span>
+                                <span className="text-[11px] font-medium truncate">{displayName}</span>
+                              </div>
+                              <div className="flex items-center gap-3 text-[10px] shrink-0">
+                                <span style={{ color: 'var(--accent-green)' }}>成功率 {successRate}%</span>
+                                <span style={{ color: cvrHeaderColor }}>
+                                  {ret ? (ret.period_ended ? `CVR ${cvr}%` : `CVR ${cvr > 0 ? cvr + '%' : '—'} ⏳`) : '—'}
                                 </span>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      )}
+                              </div>
+                            </div>
 
-                      {/* Delete button */}
-                      <div className="flex justify-end">
-                        <button
-                          onClick={() => handleDeleteCampaign(campaign)}
-                          disabled={deleting === campaign}
-                          className="text-[10px] px-2 py-1 rounded transition-colors hover:bg-red-500/20"
-                          style={{ color: deleting === campaign ? 'var(--text-muted)' : '#ef4444' }}
-                        >
-                          {deleting === campaign ? '削除中...' : '🗑️ 削除'}
-                        </button>
-                      </div>
+                            {/* === Tier 2 expanded: details === */}
+                            {isOpen && (
+                              <div className="px-3 pb-3 space-y-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                                {/* Send progress bar */}
+                                <div className="h-1.5 rounded-full overflow-hidden flex mt-2" style={{ background: 'rgba(0,0,0,0.2)' }}>
+                                  {stats.success > 0 && <div style={{ width: `${(stats.success / stats.total) * 100}%`, background: 'var(--accent-green)' }} />}
+                                  {stats.sending > 0 && <div style={{ width: `${(stats.sending / stats.total) * 100}%`, background: 'var(--accent-amber)' }} />}
+                                  {stats.queued > 0 && <div style={{ width: `${(stats.queued / stats.total) * 100}%`, background: 'var(--accent-primary)' }} />}
+                                  {stats.error > 0 && <div style={{ width: `${(stats.error / stats.total) * 100}%`, background: 'var(--accent-pink)' }} />}
+                                </div>
+
+                                {/* Send stats */}
+                                <div className="flex flex-wrap gap-3 text-[10px]">
+                                  <span style={{ color: 'var(--text-muted)' }}>全{stats.total}件</span>
+                                  <span style={{ color: 'var(--accent-green)' }}>成功 {stats.success}</span>
+                                  {stats.error > 0 && <span style={{ color: 'var(--accent-pink)' }}>失敗 {stats.error}</span>}
+                                  {(stats.queued + stats.sending) > 0 && <span style={{ color: 'var(--accent-amber)' }}>処理中 {stats.queued + stats.sending}</span>}
+                                </div>
+
+                                {/* === CVR / Retention section === */}
+                                {ret && (() => {
+                                  const retCvr = ret.total_sent > 0 ? Math.round(ret.returned_count / ret.total_sent * 1000) / 10 : 0;
+                                  const earliestDm = new Date(ret.earliest_dm);
+                                  const daysSinceSend = Math.max(1, Math.ceil((Date.now() - earliestDm.getTime()) / (24 * 60 * 60 * 1000)));
+                                  const cvrBarColor = getCvrColor(retCvr, ret.period_ended);
+
+                                  return (
+                                    <div className="space-y-2 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                                      {/* Status header */}
+                                      <div className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+                                        {ret.period_ended ? (
+                                          <span style={{ color: '#22c55e' }}>✅ 確定 — 判定期間{days}日 完了</span>
+                                        ) : (
+                                          <span>📊 計測中 — 送信から{daysSinceSend}日目 / 判定期間{days}日</span>
+                                        )}
+                                      </div>
+
+                                      {/* Retention value */}
+                                      <div className="text-[11px] font-medium">
+                                        {ret.period_ended ? (
+                                          <span style={{ color: cvrBarColor, fontWeight: 600 }}>
+                                            リテンション: {ret.returned_count}/{ret.total_sent}人 ({retCvr}%)
+                                          </span>
+                                        ) : retCvr > 0 ? (
+                                          <span style={{ color: cvrBarColor }}>
+                                            リテンション: {ret.returned_count}/{ret.total_sent}人 ({retCvr}%) <span style={{ opacity: 0.7 }}>暫定</span>
+                                          </span>
+                                        ) : (
+                                          <span style={{ color: 'var(--text-muted)' }}>
+                                            リテンション: まだデータなし（{ret.returned_count}/{ret.total_sent}人）
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {/* CVR progress bar */}
+                                      <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.08)' }}>
+                                        <div
+                                          className="h-full rounded-full transition-all duration-300"
+                                          style={{
+                                            width: `${Math.min(100, retCvr)}%`,
+                                            background: cvrBarColor,
+                                            opacity: ret.period_ended ? 1 : 0.6,
+                                          }}
+                                        />
+                                      </div>
+
+                                      {/* Slider + presets */}
+                                      <div className="flex items-center justify-between mt-1">
+                                        <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>
+                                          判定期間: {days}日
+                                        </span>
+                                        <div className="flex items-center gap-1">
+                                          {[1, 7, 14, 30].map(preset => (
+                                            <button
+                                              key={preset}
+                                              onClick={() => handleSliderChange(campaign, preset)}
+                                              className="text-[9px] px-1.5 py-0.5 rounded transition-colors"
+                                              style={{
+                                                background: days === preset ? 'rgba(56,189,248,0.2)' : 'rgba(255,255,255,0.05)',
+                                                color: days === preset ? 'var(--accent-primary)' : 'var(--text-muted)',
+                                                border: days === preset ? '1px solid rgba(56,189,248,0.3)' : '1px solid transparent',
+                                              }}
+                                            >
+                                              {preset}日
+                                            </button>
+                                          ))}
+                                        </div>
+                                      </div>
+                                      <input
+                                        type="range"
+                                        min={1}
+                                        max={30}
+                                        value={days}
+                                        onChange={e => handleSliderChange(campaign, Number(e.target.value))}
+                                        className="w-full h-1 rounded-lg appearance-none cursor-pointer"
+                                        style={{ accentColor: 'var(--accent-primary)', background: 'rgba(255,255,255,0.1)' }}
+                                      />
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* Delete button */}
+                                <div className="flex justify-end">
+                                  <button
+                                    onClick={() => handleDeleteCampaign(campaign)}
+                                    disabled={deleting === campaign}
+                                    className="text-[10px] px-2 py-1 rounded transition-colors hover:bg-red-500/20"
+                                    style={{ color: deleting === campaign ? 'var(--text-muted)' : '#ef4444' }}
+                                  >
+                                    {deleting === campaign ? '削除中...' : '🗑️ 削除'}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
