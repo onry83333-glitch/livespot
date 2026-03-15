@@ -1314,14 +1314,23 @@ function AiAnalysisCard({ report, periodStart }: { report: Record<string, unknow
 /* ============================================================
    NestedSection（展開可能なサブセクション）
    ============================================================ */
-function NestedSection({ title, count, color, children }: {
+function NestedSection({ title, count, color, userNames, children }: {
   title: string;
   count: number;
   color: string;
+  userNames?: string[];
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   if (count === 0) return null;
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!userNames || userNames.length === 0) return;
+    await navigator.clipboard.writeText(userNames.join('\n'));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
   return (
     <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${color}22` }}>
       <button
@@ -1331,7 +1340,16 @@ function NestedSection({ title, count, color, children }: {
       >
         <span className="transition-transform duration-200" style={{ transform: open ? 'rotate(90deg)' : 'rotate(0deg)', fontSize: 9 }}>▶</span>
         {title}
-        <span className="ml-auto text-[10px] font-normal" style={{ color: 'var(--text-muted)' }}>{count}人</span>
+        <span className="ml-auto flex items-center gap-2">
+          {userNames && userNames.length > 0 && (
+            <span onClick={handleCopy}
+              className="text-[9px] px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors cursor-pointer"
+              style={{ color: copied ? 'var(--accent-green)' : 'var(--text-muted)', border: `1px solid ${copied ? 'rgba(34,197,94,0.3)' : 'transparent'}` }}>
+              {copied ? '✓ コピーしました' : '📋 コピー'}
+            </span>
+          )}
+          <span className="text-[10px] font-normal" style={{ color: 'var(--text-muted)' }}>{count}人</span>
+        </span>
       </button>
       {open && (
         <div className="px-3 pb-2 pt-1" style={{ borderTop: `1px solid ${color}15` }}>
@@ -1444,7 +1462,7 @@ function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession
                 </div>
 
                 {/* ネストアコーディオン: 新規チッパー */}
-                <NestedSection title="新規チッパー" count={snapshot.newCount} color="#38bdf8">
+                <NestedSection title="新規チッパー" count={snapshot.newCount} color="#38bdf8" userNames={snapshot.newTippers.map(u => u.userName)}>
                   <div className="space-y-1">
                     {snapshot.newTippers.map(u => (
                       <div key={u.userName} className="flex items-center justify-between text-[11px]">
@@ -1459,7 +1477,7 @@ function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession
                 </NestedSection>
 
                 {/* ネストアコーディオン: リピーター */}
-                <NestedSection title="リピーター" count={snapshot.repeaterCount} color="#a78bfa">
+                <NestedSection title="リピーター" count={snapshot.repeaterCount} color="#a78bfa" userNames={snapshot.repeaters.map(u => u.userName)}>
                   <div className="space-y-1">
                     {snapshot.repeaters.map(u => (
                       <div key={u.userName} className="flex items-center justify-between text-[11px]">
@@ -1477,7 +1495,7 @@ function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession
                 </NestedSection>
 
                 {/* ネストアコーディオン: 復帰ユーザー */}
-                <NestedSection title="復帰ユーザー" count={snapshot.comebackCount} color="#22c55e">
+                <NestedSection title="復帰ユーザー" count={snapshot.comebackCount} color="#22c55e" userNames={snapshot.comebackUsers.map(u => u.userName)}>
                   <div className="space-y-1">
                     {snapshot.comebackUsers.map(u => (
                       <div key={u.userName} className="flex items-center justify-between text-[11px]">
