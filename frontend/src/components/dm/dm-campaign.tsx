@@ -212,11 +212,17 @@ export default function DmCampaign({
                     </div>
                     <div className="flex items-center gap-3 text-[10px] shrink-0">
                       <span style={{ color: 'var(--accent-green)' }}>成功率 {successRate}%</span>
-                      {ret && (
-                        <span style={{ color: retColor }}>
-                          CVR {ret.retention_rate ?? 0}%
-                        </span>
-                      )}
+                      {ret && (() => {
+                        const cvr = ret.total_sent > 0 ? Math.round(ret.returned_count / ret.total_sent * 1000) / 10 : 0;
+                        const color = ret.period_ended
+                          ? (cvr >= 50 ? '#22c55e' : cvr >= 30 ? '#f59e0b' : '#ef4444')
+                          : (cvr >= 50 ? 'rgba(34,197,94,0.6)' : cvr >= 30 ? 'rgba(245,158,11,0.6)' : cvr > 0 ? 'rgba(239,68,68,0.6)' : 'var(--text-muted)');
+                        return (
+                          <span style={{ color }}>
+                            CVR {cvr}%{!ret.period_ended && ' ⏳'}
+                          </span>
+                        );
+                      })()}
                       <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
                     </div>
                   </div>
@@ -279,16 +285,21 @@ export default function DmCampaign({
                           <div className="flex items-center gap-2 text-[10px]">
                             <span style={{ color: 'var(--text-muted)' }}>CVR:</span>
                             {ret.period_ended ? (
-                              <span style={{ color: retColor }}>
-                                {ret.returned_count}/{ret.total_sent}人 ({ret.retention_rate}%)
+                              <span style={{ color: retColor, fontWeight: 600 }}>
+                                確定: {ret.returned_count}/{ret.total_sent}人 ({ret.retention_rate}%)
                               </span>
                             ) : (() => {
                               const latestDm = new Date(ret.latest_dm);
                               const endDate = new Date(latestDm.getTime() + days * 24 * 60 * 60 * 1000);
                               const remaining = Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
+                              const cvr = ret.total_sent > 0 ? Math.round(ret.returned_count / ret.total_sent * 1000) / 10 : 0;
+                              const pendingColor = cvr >= 50 ? 'rgba(34,197,94,0.6)' : cvr >= 30 ? 'rgba(245,158,11,0.6)' : cvr > 0 ? 'rgba(239,68,68,0.6)' : 'var(--text-muted)';
                               return (
-                                <span style={{ color: 'var(--accent-amber)' }}>
-                                  判定中（残り{remaining}日）{ret.returned_count > 0 && ` — 暫定 ${ret.returned_count}/${ret.total_sent}人 (${ret.retention_rate}%)`}
+                                <span>
+                                  <span style={{ color: 'var(--text-muted)' }}>判定中（残り{remaining}日）</span>
+                                  <span style={{ color: pendingColor, marginLeft: 4 }}>
+                                    暫定: {ret.returned_count}/{ret.total_sent}人 ({cvr}%)
+                                  </span>
                                 </span>
                               );
                             })()}
