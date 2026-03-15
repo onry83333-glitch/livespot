@@ -2005,8 +2005,32 @@ async function handleSyncEarnings(castName, fromDate) {
   _coinStreamState.queue = [];
   _coinStreamState.processing = false;
 
-  // 5. content scriptにFETCH_COINSメッセージ送信（streaming: trueで随時COIN_BATCH送信）
-  const sinceISO = fromDate || null;
+  // 5. 差分同期: coin_transactionsのMAX(date)を取得してsinceISOに使用
+  let sinceISO = fromDate || null;
+  try {
+    const maxDateRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(castName)}&select=date&order=date.desc&limit=1`,
+      {
+        headers: {
+          'apikey': SERVICE_ROLE_KEY,
+          'Authorization': `Bearer ${SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
+    if (maxDateRes.ok) {
+      const rows = await maxDateRes.json();
+      if (rows.length > 0 && rows[0].date) {
+        sinceISO = rows[0].date;
+        console.log('[LS-BG] 差分同期: MAX(date)=', sinceISO);
+      } else {
+        console.log('[LS-BG] 初回同期: coin_transactionsにデータなし → 365日分取得');
+        sinceISO = null;
+      }
+    }
+  } catch (e) {
+    console.warn('[LS-BG] MAX(date)取得失敗（フォールバック: 365日分取得）:', e.message);
+    sinceISO = null;
+  }
   console.log('[LS-BG] Earnings同期: FETCH_COINS送信（ストリーミングモード） sinceISO=', sinceISO);
   let result;
   try {

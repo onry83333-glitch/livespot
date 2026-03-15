@@ -213,17 +213,28 @@ async function fetchViaUserTransactions(baseUrl, userId, options = {}) {
   let retryCount = 0;
   let numberOfTransactions = null; // APIレスポンスの全件数
 
-  // sinceISOは取得開始日としてAPIパラメータに使用（カットオフ打ち切りは行わない）
+  // sinceISOが渡されていればそれをfromに使用（差分同期）
+  // なければ従来通り365日分を取得（初回同期 or フォールバック）
   const sinceISO = options.sinceISO || null;
 
-  // 365日分のデータを取得（coin_api.py: COIN_API_DAYS_BACK = 365）
   const now = new Date();
-  const from = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
-  from.setHours(0, 0, 0, 0);
-  const fromISO = from.toISOString().replace(/\.\d{3}Z/, 'Z');
+  const fallback = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+  fallback.setHours(0, 0, 0, 0);
+
+  let fromISO;
+  let syncMode;
+  if (sinceISO) {
+    // 差分同期: sinceISOから1時間前を起点に（重複UPSERTで安全マージン）
+    const sinceDate = new Date(new Date(sinceISO).getTime() - 60 * 60 * 1000);
+    fromISO = sinceDate.toISOString().replace(/\.\d{3}Z/, 'Z');
+    syncMode = '差分';
+  } else {
+    fromISO = fallback.toISOString().replace(/\.\d{3}Z/, 'Z');
+    syncMode = '全件（365日）';
+  }
   const untilISO = now.toISOString().replace(/\.\d{3}Z/, 'Z');
 
-  console.log(LOG, `取得期間: ${from.toISOString().split('T')[0]} 〜 ${now.toISOString().split('T')[0]}（365日間）`);
+  console.log(LOG, `取得期間: ${fromISO.split('T')[0]} 〜 ${untilISO.split('T')[0]}（${syncMode}）`);
 
   // ストリーミング: バッファが溜まったらbackground.jsにCOIN_BATCHメッセージで送信
   const flushStream = async () => {
