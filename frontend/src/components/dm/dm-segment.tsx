@@ -21,7 +21,7 @@ export default function DmSegment({ accountId, castName, sb, setDmLogs }: DmSegm
     sb.from('dm_send_log')
       .select('id, user_name, message, status, error, campaign, queued_at, sent_at')
       .eq('account_id', accountId).eq('cast_name', castName)
-      .order('created_at', { ascending: false }).limit(200)
+      .order('created_at', { ascending: false }).limit(5000)
       .then(({ data }) => setDmLogs((data || []) as DMLogItem[]));
   };
 

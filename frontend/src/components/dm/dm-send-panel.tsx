@@ -264,7 +264,7 @@ export default function DmSendPanel({
 
       const { data: logs } = await sb.from('dm_send_log')
         .select('id, user_name, message, status, error, campaign, queued_at, sent_at')
-        .eq('account_id', accountId).eq('cast_name', castName).order('created_at', { ascending: false }).limit(200);
+        .eq('account_id', accountId).eq('cast_name', castName).order('created_at', { ascending: false }).limit(5000);
       setDmLogs((logs || []) as DMLogItem[]);
 
       console.log('[DM-Cast] handleDmSend complete: bid=', bid, 'count=', count, 'rpc=', usedRpc);

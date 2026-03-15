@@ -826,7 +826,7 @@ function CastDetailInner() {
       .eq('account_id', accountId)
       .eq('cast_name', castName)
       .order('created_at', { ascending: false })
-      .limit(200)
+      .limit(5000)
       .then(({ data }) => {
         const logs = (data || []) as DMLogItem[];
         setDmLogs(logs);
@@ -2124,7 +2124,7 @@ function CastDetailInner() {
                         .eq('account_id', accountId!)
                         .eq('cast_name', castName)
                         .order('created_at', { ascending: false })
-                        .limit(200)
+                        .limit(5000)
                         .then(({ data }) => {
                           const logs = (data || []) as DMLogItem[];
                           setDmLogs(logs);
@@ -2250,7 +2250,7 @@ function CastDetailInner() {
                       .eq('account_id', accountId)
                       .eq('cast_name', castName)
                       .order('created_at', { ascending: false })
-                      .limit(200)
+                      .limit(5000)
                       .then(({ data }) => setDmLogs((data || []) as DMLogItem[]));
                   }}
                 />
