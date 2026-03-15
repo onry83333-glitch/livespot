@@ -4413,7 +4413,7 @@ async function processDMQueue() {
     }
 
     // バッチ取得
-    const tasks = await fetchDMBatch(20);
+    const tasks = await fetchDMBatch(50);
     if (!tasks || tasks.length === 0) return;
 
     console.log('[LS-DM] キューから', tasks.length, '件取得');
