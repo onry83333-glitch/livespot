@@ -1,0 +1,5964 @@
+importScripts('config.js');
+
+/**
+ * Strip Live Spot - Background Service Worker
+ * Auth管理、DMキューポーリング、SPYメッセージリレー
+ *
+ * 修正: accountId null問題
+ * - CHAT_MESSAGEはaccountId不在でも常にバッファ
+ * - account_idはflush時にstorageから最新値を付与
+ * - accountId未設定ならflushを保留（30秒ごとにリトライ）
+ */
+
+let accessToken = null;
+let accountId = null;
+let dmPollingTimer = null;
+let spyEnabled = false;
+let currentSessionId = null; // SPYセッションID（spy_messages.session_id）
+
+// UUID v4 フォーマット検証（session_id の stale値検出用）
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+let messageBuffer = [];
+let bufferTimer = null;
+let spyMsgCount = 0;
+let viewerStatsBuffer = [];
+let viewerStatsTimer = null;
+let whisperPollingTimer = null;
+let dmProcessing = false;
+const pendingDMResults = new Map(); // taskId → { resolve, timeoutId }
+const successfulTaskIds = new Set(); // タイムアウト後の成功上書き防止用
+
+// DM API送信: 安全機構
+let dmApiConsecutiveErrors = 0;       // API連続エラー数
+let dmApiCooldownUntil = 0;           // クールダウン解除時刻(ms)
+const DM_API_MAX_CONSECUTIVE_ERRORS = 3; // この回数連続失敗でDOM自動フォールバック
+const DM_API_COOLDOWN_403 = 5 * 60 * 1000;  // 403時: 5分クールダウン
+const DM_API_COOLDOWN_429 = 10 * 60 * 1000; // 429時: 10分クールダウン
+
+// A.2: Heartbeat tracking
+let lastHeartbeat = 0;
+let heartbeatAlerted = false;
+
+// Badge: SPY稼働インジケーター
+function updateBadge() {
+  if (spyEnabled) {
+    chrome.action.setBadgeText({ text: 'REC' });
+    chrome.action.setBadgeBackgroundColor({ color: '#22c55e' });
+  } else {
+    chrome.action.setBadgeText({ text: '' });
+  }
+}
+
+// STT (Speech-to-Text) state
+let sttEnabled = false;
+let sttChunkQueue = [];
+let sttProcessing = 0;               // 同時処理数カウンター
+const STT_MAX_CONCURRENT = 2;        // 最大同時transcribe数
+const sttTabStates = {};              // tabId → { castName, lastChunkAt, chunkCount }
+
+const BUFFER_STORAGE_KEY = 'spy_message_buffer';
+const VIEWER_BUFFER_KEY = 'spy_viewer_buffer';
+const BUFFER_MAX = 1000;
+
+// 自社キャスト名キャッシュ（STTフィルタ用）
+let registeredCastNames = new Set();
+
+// Per-cast session tracking (C-1: Session Auto-Creation)
+const castSessions = new Map();      // cast_name → session_id
+const castLastActivity = new Map();  // cast_name → timestamp (ms)
+const castBroadcastTitles = new Map(); // cast_name → broadcast_title
+const castSessionStarted = new Map(); // cast_name → ISO string (session start time)
+
+// Persist session state across Service Worker restarts
+async function saveSessionState() {
+  try {
+    const sessions = Object.fromEntries(castSessions);
+    const activity = Object.fromEntries(castLastActivity);
+    const started = Object.fromEntries(castSessionStarted);
+    await chrome.storage.local.set({
+      _castSessions: sessions,
+      _castLastActivity: activity,
+      _castSessionStarted: started,
+    });
+    console.log('[LS-BG] セッション状態保存:', castSessions.size, '件');
+  } catch (e) {
+    console.warn('[LS-BG] セッション状態保存失敗:', e.message);
+  }
+}
+
+async function restoreSessionState() {
+  try {
+    const { _castSessions, _castLastActivity, _castSessionStarted } = await chrome.storage.local.get([
+      '_castSessions', '_castLastActivity', '_castSessionStarted',
+    ]);
+    if (_castSessions) {
+      for (const [k, v] of Object.entries(_castSessions)) castSessions.set(k, v);
+    }
+    if (_castLastActivity) {
+      for (const [k, v] of Object.entries(_castLastActivity)) castLastActivity.set(k, v);
+    }
+    if (_castSessionStarted) {
+      for (const [k, v] of Object.entries(_castSessionStarted)) castSessionStarted.set(k, v);
+    }
+    console.log('[LS-BG] セッション状態復元:', castSessions.size, '件');
+  } catch (e) {
+    console.warn('[LS-BG] セッション状態復元失敗:', e.message);
+  }
+}
+
+// CHAT_MESSAGE高頻度呼び出し対策: 30秒デバウンスでセッション状態を永続化
+let _sessionStateSaveTimer = null;
+function scheduleSessionStateSave() {
+  if (_sessionStateSaveTimer) return; // 既にスケジュール済み
+  _sessionStateSaveTimer = setTimeout(() => {
+    _sessionStateSaveTimer = null;
+    saveSessionState();
+  }, 30000); // 30秒後に保存
+}
+
+// AutoCoinSync 状態管理
+let isCoinSyncing = false;
+let coinSyncRetryCount = 0;
+const COIN_SYNC_MAX_RETRIES = 3;
+const COIN_SYNC_RETRY_DELAY_MS = 30 * 60 * 1000; // 30分
+
+// SPY自動巡回 状態管理
+let autoPatrolEnabled = false;          // 自動巡回ON/OFF（storage: auto_patrol_enabled）
+let monitoredCastStatus = {};           // { castName: 'public'|'offline'|... } — 前回ステータス
+let autoPatrolTabs = {};                // { castName: tabId } — 自動オープンしたタブの追跡
+
+// SPY他社ローテーション 状態管理
+let spyRotationEnabled = false;         // 他社ローテーションON/OFF（storage: spy_rotation_enabled）
+let spyRotationTabs = {};               // { castName: tabId } — ローテーションで開いたタブ
+let ownCastNamesCache = new Set();      // registered_castsのみ（自社キャスト保護用）
+let spyCastNamesCache = new Set();      // spy_castsのみ（ローテーション対象）
+const MAX_SPY_ROTATION_TABS = 40;       // 同時オープンタブ上限
+
+// スクリーンショット間隔キャッシュ: { castName: intervalMinutes } — 0=OFF
+let screenshotIntervalCache = {};
+let screenshotLastCapture = {};         // { castName: timestamp(ms) } — 前回撮影時刻
+
+// GC（グループチャット）課金トラッキング
+// key: "castName:userName" → { castName, userName, joinedAt (ms), ratePerMinute }
+const activeGroupChats = new Map();
+// キャスト別GCレート: { castName: coins_per_minute } — デフォルト12
+let gcRateCache = {};
+
+// DM文面フォールバックテンプレート（Persona API失敗時に使用）
+const FALLBACK_TEMPLATES = {
+  thankyou_vip: [
+    '{username}さん、今日は本当にありがとう💕 あなたがいてくれると特別な時間になります。また会えたら嬉しいな😊',
+    '{username}さん、実は次の配信でちょっと特別なことやろうと思ってるんだ😊 来てくれたら嬉しいな💕',
+    '{username}さん、元気にしてますか？😊 今度の配信で限定企画やるんだけど、気が向いたら来てくれたら嬉しいな💕',
+  ],
+  thankyou_regular: [
+    '{username}さん、ありがとう😊 あなたがいてくれるとすごく楽しいです！ またふらっと遊びに来てくださいね💕',
+    '{username}さん、最近どうですか？😊 いつも来てくれて嬉しいです。また気が向いたらね！',
+  ],
+  thankyou_first: [
+    '{username}さん、ありがとう😊 すごく嬉しかったです！',
+    '{username}さん、昨日はありがとうございました😊 また気が向いたら遊びに来てくださいね💕',
+  ],
+  churn_recovery: [
+    '{username}さん、最近見かけないので気になっちゃって😊 元気にしてますか？ 無理しないでね💕',
+    '{username}さん、お久しぶりです😊 気が向いたらふらっと来てくれたら嬉しいな💕 でも無理しないでね！',
+    '{username}さん、ずっと気になってました😊 またいつか会えたら嬉しいな。でも無理しないでね💕',
+  ],
+};
+
+function getFallbackMessage(triggerType, stepNumber, userName, segment) {
+  const templates = FALLBACK_TEMPLATES[triggerType] || FALLBACK_TEMPLATES.thankyou_regular;
+  const idx = Math.min(stepNumber, templates.length - 1);
+  return (templates[idx] || templates[0]).replace(/\{username\}/g, userName);
+}
+
+// ============================================================
+// A.1: Service Worker Keepalive via chrome.alarms
+// ============================================================
+chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
+chrome.alarms.create('coinSyncPeriodic', { periodInMinutes: 360 }); // 6時間ごと
+chrome.alarms.create('spyAutoPatrol', { periodInMinutes: 3 });      // 3分ごとに配信開始検出
+chrome.alarms.create('check-extinct-casts', { periodInMinutes: 1440 }); // 24時間ごと（消滅キャスト検出）
+chrome.alarms.create('spyRotation', { periodInMinutes: 3 });          // 3分ごと（他社SPYローテーション）
+chrome.alarms.create('scenarioSteps', { periodInMinutes: 60 });        // 1時間ごと（シナリオステップ処理）
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'keepalive') {
+    flushMessageBuffer();
+    flushViewerStats();
+    checkHeartbeatTimeout();
+    cleanupStaleSTTTabs();
+    checkBroadcastEnd(); // C-2: 配信終了検出（5分タイムアウト）
+    // GC安全弁: 60分以上経過したGCを強制精算
+    settleStaleGroupChats();
+    // DMスケジュールポーリング（30秒ごとにpending+期限到来をチェック）
+    checkDmSchedules().catch(e => {
+      console.warn('[LS-BG] DMスケジュールチェック失敗:', e.message);
+    });
+    // メモリ管理: 無制限オブジェクトの上限チェック
+    cleanupUnboundedCollections();
+  }
+
+  // 定期コイン同期（6時間ごと）
+  if (alarm.name === 'coinSyncPeriodic') {
+    console.log('[LS-BG] AutoCoinSync: 定期同期アラーム発火');
+    triggerAutoCoinSync('periodic').catch(e => {
+      console.warn('[LS-BG] AutoCoinSync: 定期同期失敗:', e.message);
+    });
+  }
+
+  // コイン同期リトライ
+  if (alarm.name === 'coinSyncRetry') {
+    console.log('[LS-BG] AutoCoinSync: リトライ発火 (', coinSyncRetryCount, '/', COIN_SYNC_MAX_RETRIES, ')');
+    triggerAutoCoinSync('retry').catch(e => {
+      console.warn('[LS-BG] AutoCoinSync: リトライ失敗:', e.message);
+    });
+  }
+
+  // 配信終了後5分ディレイのコイン同期
+  if (alarm.name === 'coinSyncAfterStream') {
+    console.log('[LS-BG] AutoCoinSync: 配信終了後同期発火');
+    triggerAutoCoinSync('after_stream').catch(e => {
+      console.warn('[LS-BG] AutoCoinSync: 配信終了後同期失敗:', e.message);
+    });
+  }
+
+  // SPY自動巡回（3分ごと）
+  if (alarm.name === 'spyAutoPatrol') {
+    runAutoPatrol().catch(e => {
+      console.warn('[LS-BG] AutoPatrol: 巡回エラー:', e.message);
+    });
+  }
+
+  // chrome.alarmsベースのDMスケジュール発火（フォールバック）
+  if (alarm.name.startsWith('dm_schedule_')) {
+    const scheduleId = alarm.name.replace('dm_schedule_', '');
+    console.log('[LS-BG] DMスケジュールアラーム発火:', scheduleId);
+    executeDmSchedule(scheduleId).catch(e => {
+      console.error('[LS-BG] DMスケジュール実行失敗:', e.message);
+    });
+  }
+
+  // Task K: 消滅キャスト検出（24時間ごと）
+  if (alarm.name === 'check-extinct-casts') {
+    checkExtinctCasts().catch(e => {
+      console.warn('[LS-BG] ExtinctCasts: チェック失敗:', e.message);
+    });
+  }
+
+  // 他社SPYローテーション（3分ごと）
+  if (alarm.name === 'spyRotation') {
+    handleSpyRotation().catch(e => {
+      console.warn('[LS-BG] SpyRotation: エラー:', e.message);
+    });
+  }
+
+  // シナリオステップ処理（1時間ごと）
+  if (alarm.name === 'scenarioSteps') {
+    processScenarioSteps().catch(e => {
+      console.warn('[LS-BG] ScenarioSteps: 処理失敗:', e.message);
+    });
+  }
+
+  // スクリーンショット（CDN方式優先、フォールバックでcaptureVisibleTab）
+  if (alarm.name === 'spy-screenshot') {
+    captureAllThumbnailsCDN().catch(e => {
+      console.warn('[LS-SPY] CDN thumbnail failed, falling back to captureVisibleTab:', e.message);
+      captureAllSpyTabs().catch(e2 => console.warn('[LS-SPY] Screenshot fallback also failed:', e2.message));
+    });
+  }
+
+  // Whisperポーリング（10秒ごと）
+  if (alarm.name === 'whisper-poll') {
+    pollWhispers();
+  }
+
+  // Viewer member list polling（1分ごと、SPY有効時のみ）
+  if (alarm.name === 'viewerMembers') {
+    if (spyEnabled) {
+      // 全登録キャスト（自社+SPY）のviewer memberリストを取得
+      const castNames = [...registeredCastNames];
+      (async () => {
+        for (const cn of castNames) {
+          await fetchViewerMembers(cn);
+          // レート制限: 各キャスト間に2秒待機
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      })().catch(e => {
+        console.warn('[LS-BG] viewerMembers alarm error:', e.message);
+      });
+    }
+  }
+
+  // セッション同期（1時間ごと）
+  if (alarm.name === 'sessionSync') {
+    exportSessionCookie().catch(e => {
+      console.warn('[LS-BG] SessionSync: エクスポート失敗:', e.message);
+    });
+  }
+});
+
+// STTタブの古いエントリをクリーンアップ（60秒以上チャンクなし）
+function cleanupStaleSTTTabs() {
+  const now = Date.now();
+  for (const tabId of Object.keys(sttTabStates)) {
+    if (now - sttTabStates[tabId].lastChunkAt > 60000) {
+      console.log('[LS-BG] STTタブ削除（stale）: tab=', tabId, 'cast=', sttTabStates[tabId].castName);
+      delete sttTabStates[tabId];
+    }
+  }
+}
+
+// GC安全弁: 60分以上経過したGCを強制精算
+function settleStaleGroupChats() {
+  if (activeGroupChats.size === 0) return;
+  const now = Date.now();
+  const GC_MAX_DURATION_MS = 60 * 60 * 1000; // 60分
+  const staleCasts = new Set();
+  for (const [key, gc] of activeGroupChats.entries()) {
+    if (now - gc.joinedAt > GC_MAX_DURATION_MS) {
+      staleCasts.add(gc.castName);
+    }
+  }
+  if (staleCasts.size > 0) {
+    console.log('[LS-BG] GC安全弁: 60分超過あり, casts=', [...staleCasts]);
+    for (const castName of staleCasts) {
+      settleGroupChats(castName).catch(e => {
+        console.warn('[LS-BG] GC安全弁精算失敗:', e.message);
+      });
+    }
+  }
+}
+
+// メモリ管理: 無制限オブジェクトのサイズ上限チェック
+const COLLECTION_LIMITS = {
+  autoPatrolTabs: 100,
+  spyRotationTabs: 100,
+  monitoredCastStatus: 200,
+  screenshotIntervalCache: 200,
+  screenshotLastCapture: 200,
+  gcRateCache: 200,
+};
+
+function cleanupUnboundedCollections() {
+  for (const [name, limit] of Object.entries(COLLECTION_LIMITS)) {
+    const obj = { autoPatrolTabs, spyRotationTabs, monitoredCastStatus, screenshotIntervalCache, screenshotLastCapture, gcRateCache }[name];
+    if (!obj) continue;
+    const keys = Object.keys(obj);
+    if (keys.length > limit) {
+      // 古い順に削除（FIFOで先頭から削除）
+      const toDelete = keys.slice(0, keys.length - limit);
+      for (const k of toDelete) delete obj[k];
+      console.log(`[LS-BG] メモリ管理: ${name} ${toDelete.length}件削除 → ${Object.keys(obj).length}件`);
+    }
+  }
+  // successfulTaskIds Set の上限（5000件）
+  if (successfulTaskIds.size > 5000) {
+    const arr = [...successfulTaskIds];
+    const toKeep = arr.slice(-2500);
+    successfulTaskIds.clear();
+    toKeep.forEach(id => successfulTaskIds.add(id));
+    console.log('[LS-BG] メモリ管理: successfulTaskIds 2500件に縮小');
+  }
+}
+
+// タブが閉じられたらSTT状態 + autoPatrolタブをクリーンアップ
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (sttTabStates[tabId]) {
+    console.log('[LS-BG] STTタブ削除（closed）: tab=', tabId, 'cast=', sttTabStates[tabId].castName);
+    delete sttTabStates[tabId];
+  }
+  // autoPatrolで開いたタブが閉じられた場合はトラッキングを解除
+  for (const [castName, tid] of Object.entries(autoPatrolTabs)) {
+    if (tid === tabId) {
+      console.log('[LS-BG] AutoPatrol: タブ閉鎖検出 cast=', castName, 'tab=', tabId);
+      delete autoPatrolTabs[castName];
+      break;
+    }
+  }
+});
+
+// ============================================================
+// A.2: Heartbeat監視
+// ============================================================
+function checkHeartbeatTimeout() {
+  if (!spyEnabled || !lastHeartbeat) return;
+
+  const elapsed = Date.now() - lastHeartbeat;
+  if (elapsed > 120000 && !heartbeatAlerted) {
+    heartbeatAlerted = true;
+    chrome.notifications.create('spy-heartbeat-lost', {
+      type: 'basic',
+      iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><text y="24" font-size="24">⚠️</text></svg>',
+      title: 'Strip Live Spot - 監視停止の可能性',
+      message: `SPY監視からのハートビートが${Math.round(elapsed / 1000)}秒間途絶えています。Stripchatタブを確認してください。`,
+      priority: 2,
+    });
+    console.warn('[LS-BG] ハートビートタイムアウト:', Math.round(elapsed / 1000), '秒');
+  }
+}
+
+// ============================================================
+// Config & Auth
+// ============================================================
+async function loadAuth() {
+  const data = await chrome.storage.local.get([
+    'access_token', 'account_id', 'api_base_url', 'spy_enabled', 'stt_enabled', 'current_session_id',
+  ]);
+  accessToken = data.access_token || null;
+  accountId = data.account_id || null;
+  spyEnabled = data.spy_enabled === true;
+  sttEnabled = data.stt_enabled === true;
+  currentSessionId = data.current_session_id || null;
+  // Bug fix: storageに残った旧形式session_id（spy_YYYYMMDD_...）をUUID v4に置換
+  if (currentSessionId && !UUID_RE.test(currentSessionId)) {
+    console.warn('[LS-BG] 旧形式session_id検出 → UUID再生成:', currentSessionId);
+    currentSessionId = crypto.randomUUID();
+    chrome.storage.local.set({ current_session_id: currentSessionId });
+  }
+  if (data.api_base_url) {
+    CONFIG.API_BASE_URL = data.api_base_url;
+  }
+  return { accessToken, accountId, spyEnabled, sttEnabled };
+}
+
+/**
+ * 自社キャスト名をSupabaseから取得してキャッシュ（STTフィルタ用）
+ * リトライ1回付き（ネットワーク一時障害対策）
+ */
+async function loadRegisteredCasts() {
+  if (!accessToken || !accountId) return;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      // registered_casts（自社）+ spy_casts（他社分析）の両方を取得
+      const [regRes, spyRes] = await Promise.all([
+        fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,screenshot_interval,gc_rate_per_minute`,
+          {
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+            },
+          }
+        ),
+        fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/spy_casts?account_id=eq.${accountId}&is_active=eq.true&select=cast_name,screenshot_interval,gc_rate_per_minute`,
+          {
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+            },
+          }
+        ),
+      ]);
+      if (regRes.ok) {
+        const regData = await regRes.json();
+        const spyData = spyRes.ok ? await spyRes.json() : [];
+        ownCastNamesCache = new Set(regData.map(r => r.cast_name));
+        spyCastNamesCache = new Set(spyData.map(r => r.cast_name));
+        registeredCastNames = new Set([
+          ...regData.map(r => r.cast_name),
+          ...spyData.map(r => r.cast_name),
+        ]);
+        // スクリーンショット間隔キャッシュ更新
+        const newIntervals = {};
+        for (const r of regData) newIntervals[r.cast_name] = r.screenshot_interval ?? 5;
+        for (const r of spyData) newIntervals[r.cast_name] = r.screenshot_interval ?? 0;
+        screenshotIntervalCache = newIntervals;
+        // GCレートキャッシュ更新
+        const newGcRates = {};
+        for (const r of regData) if (r.gc_rate_per_minute) newGcRates[r.cast_name] = r.gc_rate_per_minute;
+        for (const r of spyData) if (r.gc_rate_per_minute) newGcRates[r.cast_name] = r.gc_rate_per_minute;
+        gcRateCache = newGcRates;
+        console.log('[LS-BG] キャスト名キャッシュ更新: 自社=', [...ownCastNamesCache],
+          'SPY=', [...spyCastNamesCache],
+          '合計=', registeredCastNames.size, '件');
+        return;
+      }
+      console.warn('[LS-BG] キャスト名取得 HTTP', regRes.status, '(attempt', attempt, ')');
+    } catch (err) {
+      console.warn('[LS-BG] キャスト名取得失敗 (attempt', attempt, '):', err.message);
+    }
+    if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+async function refreshAccessToken() {
+  const data = await chrome.storage.local.get(['refresh_token']);
+  if (!data.refresh_token) {
+    console.log('[LS-BG] トークンリフレッシュ: refresh_tokenなし');
+    return false;
+  }
+  try {
+    console.log('[LS-BG] トークンリフレッシュ: 実行中...');
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'apikey': CONFIG.SUPABASE_ANON_KEY },
+      body: JSON.stringify({ refresh_token: data.refresh_token }),
+    });
+    if (!res.ok) {
+      console.warn('[LS-BG] トークンリフレッシュ失敗: status=', res.status);
+      return false;
+    }
+    const result = await res.json();
+    await chrome.storage.local.set({
+      access_token: result.access_token,
+      refresh_token: result.refresh_token,
+    });
+    accessToken = result.access_token;
+    console.log('[LS-BG] トークンリフレッシュ成功 → loadAuth再実行');
+    // リフレッシュ後に最新のauth状態をメモリに反映
+    await loadAuth();
+    return true;
+  } catch (e) {
+    console.error('[LS-BG] トークンリフレッシュエラー:', e.message);
+    return false;
+  }
+}
+
+async function apiRequest(path, options = {}) {
+  // 毎回storageから最新のaccess_tokenを取得
+  await loadAuth();
+  if (!accessToken) throw new Error('Not authenticated');
+
+  const makeHeaders = () => ({
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${accessToken}`,
+    ...(options.headers || {}),
+  });
+
+  const res = await fetch(`${CONFIG.API_BASE_URL}${path}`, {
+    ...options,
+    headers: makeHeaders(),
+  });
+
+  if (res.status === 401) {
+    console.warn('[LS-BG] API 401応答 path=', path, '（accessTokenはクリアしない）');
+    // 401でもaccessTokenをクリアしない — バックエンドAPIの問題でSPYを止めない
+    // DMポーリングだけ停止
+    stopDMPolling();
+    throw new Error('API 401: ' + path);
+  }
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ============================================================
+// A.3: バッファ永続化ヘルパー
+// ============================================================
+async function persistBuffer() {
+  try {
+    await chrome.storage.local.set({
+      [BUFFER_STORAGE_KEY]: messageBuffer.slice(-BUFFER_MAX),
+    });
+  } catch (e) {
+    console.warn('[LS-BG] バッファ永続化エラー:', e.message);
+  }
+}
+
+async function persistViewerBuffer() {
+  try {
+    await chrome.storage.local.set({
+      [VIEWER_BUFFER_KEY]: viewerStatsBuffer.slice(-200),
+    });
+  } catch (e) {
+    console.warn('[LS-BG] 視聴者バッファ永続化エラー:', e.message);
+  }
+}
+
+async function restoreBuffers() {
+  try {
+    const data = await chrome.storage.local.get([BUFFER_STORAGE_KEY, VIEWER_BUFFER_KEY]);
+    if (data[BUFFER_STORAGE_KEY]?.length > 0) {
+      messageBuffer = data[BUFFER_STORAGE_KEY];
+      console.log('[LS-BG] メッセージバッファ復元:', messageBuffer.length, '件');
+    }
+    if (data[VIEWER_BUFFER_KEY]?.length > 0) {
+      viewerStatsBuffer = data[VIEWER_BUFFER_KEY];
+      console.log('[LS-BG] 視聴者バッファ復元:', viewerStatsBuffer.length, '件');
+    }
+  } catch (e) {
+    console.warn('[LS-BG] バッファ復元エラー:', e.message);
+  }
+}
+
+// ============================================================
+// SPY データ品質バリデーション
+// ============================================================
+const VALID_MSG_TYPES = ['chat', 'tip', 'gift', 'goal', 'enter', 'leave', 'system', 'viewer_count', 'speech'];
+
+function validateSpyMessage(msg) {
+  // 1. メッセージ本文が500文字超 → 連結バグの残骸
+  if (msg.message && msg.message.length > 500) {
+    console.warn('[LS-BG] バリデーション除外: メッセージが500文字超',
+      msg.user_name, msg.message.length, '文字');
+    return false;
+  }
+
+  // 2. ユーザー名に改行・タブが含まれる
+  if (msg.user_name && /[\n\r\t]/.test(msg.user_name)) {
+    console.warn('[LS-BG] バリデーション除外: ユーザー名不正', msg.user_name);
+    return false;
+  }
+
+  // 3. msg_typeが想定値以外
+  if (msg.msg_type && !VALID_MSG_TYPES.includes(msg.msg_type)) {
+    console.warn('[LS-BG] バリデーション除外: 不正なmsg_type', msg.msg_type);
+    return false;
+  }
+
+  // 4. chatタイプでメッセージがユーザー名と完全一致（旧バグパターン）
+  if (msg.msg_type === 'chat' && msg.message && msg.user_name &&
+      msg.message.trim() === msg.user_name.trim()) {
+    console.warn('[LS-BG] バリデーション除外: メッセージ=ユーザー名', msg.user_name);
+    return false;
+  }
+
+  return true;
+}
+
+// Tip safety net — ゴール系メッセージの誤分類を防止
+function validateTipBeforeSave(data) {
+  // 1. Empty user_name tips are forbidden
+  if (data.msg_type === 'tip' && (!data.user_name || data.user_name.trim() === '')) {
+    console.warn('[LS-BG] チップ拒否: user_name空', (data.message || '').substring(0, 50));
+    data.msg_type = 'system';
+    data.tokens = 0;
+    return data;
+  }
+
+  // 2. Goal keywords in tip messages are forbidden
+  const goalPatterns = [/ゴール/, /goal/i, /エピック/, /epic/i, /達成/, /残り.*コイン/, /新しいゴール/, /new goal/i];
+  if (data.msg_type === 'tip' && goalPatterns.some(p => p.test(data.message || ''))) {
+    console.warn('[LS-BG] チップ拒否: ゴール系メッセージ', (data.message || '').substring(0, 50));
+    data.msg_type = 'goal';
+    data.tokens = 0;
+    return data;
+  }
+
+  // 3. Log high-value tips (warning only)
+  if (data.msg_type === 'tip' && data.tokens >= 5000) {
+    console.warn('[LS-BG] 高額チップ検出:', data.user_name, data.tokens, 'tk');
+  }
+
+  return data;
+}
+
+function deduplicateBuffer(messages) {
+  const seen = new Set();
+  return messages.filter(msg => {
+    const key = `${msg.message_time}|${msg.user_name}|${msg.message}`;
+    if (seen.has(key)) {
+      console.log('[LS-BG] 重複除去:', msg.user_name, msg.message?.substring(0, 30));
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+// ============================================================
+// SPY Message Buffer → Supabase REST API 直接POST
+// バックエンドを経由せず直接spy_messagesに挿入
+// ============================================================
+async function flushMessageBuffer() {
+  if (messageBuffer.length === 0) return;
+
+  await loadAuth();
+
+  if (!accountId) {
+    console.warn('[LS-BG] accountId未設定 バッファ保持中:', messageBuffer.length, '件（次回flush時にリトライ）');
+    return;
+  }
+
+  if (!accessToken) {
+    console.warn('[LS-BG] accessToken未設定 バッファ保持中:', messageBuffer.length, '件');
+    return;
+  }
+
+  const batch = [...messageBuffer];
+  messageBuffer = [];
+  persistBuffer();
+
+  // バリデーション + 重複除去
+  const validated = batch.filter(validateSpyMessage);
+  const deduplicated = deduplicateBuffer(validated);
+  const droppedCount = batch.length - deduplicated.length;
+  if (droppedCount > 0) {
+    console.log('[LS-BG] バリデーション/重複除去で', droppedCount, '件除外');
+  }
+  if (deduplicated.length === 0) {
+    console.log('[LS-BG] 有効なメッセージなし — 送信スキップ');
+    return;
+  }
+
+  // Bug fix: バッファ内の旧形式session_idも検証・置換
+  if (currentSessionId && !UUID_RE.test(currentSessionId)) {
+    console.warn('[LS-BG] flushMessageBuffer: 旧形式session_id検出 → UUID再生成:', currentSessionId);
+    currentSessionId = crypto.randomUUID();
+    chrome.storage.local.set({ current_session_id: currentSessionId });
+  }
+
+  // Supabase REST API用の行データを作成（一括INSERT）
+  // Final safety: tip classification correction before INSERT
+  const rows = deduplicated.map(msg => {
+    // バッファ内の各メッセージのsession_idも検証（push時に旧形式が付与された可能性）
+    let sid = msg.session_id || null;
+    if (sid && !UUID_RE.test(sid)) {
+      sid = currentSessionId || null; // 現在の正しいsession_idで上書き
+    }
+
+    let msgType = msg.msg_type || 'chat';
+    let tokens = msg.tokens || 0;
+    const userName = msg.user_name || '';
+    const message = msg.message || '';
+
+    // Safety: reject tips without user_name
+    if (msgType === 'tip' && !userName.trim()) {
+      console.warn('[LS-BG] flush安全弁: tip→system (user_name空)', message.substring(0, 50));
+      msgType = 'system';
+      tokens = 0;
+    }
+    // Safety: reject goal messages classified as tips
+    const goalPatterns = [/ゴール/, /goal/i, /エピック/, /達成/, /残り.*コイン/];
+    if (msgType === 'tip' && goalPatterns.some(p => p.test(message))) {
+      console.warn('[LS-BG] flush安全弁: tip→goal (ゴール系)', message.substring(0, 50));
+      msgType = 'goal';
+      tokens = 0;
+    }
+
+    return {
+      account_id: accountId,
+      cast_name: msg.cast_name || '',
+      message_time: msg.message_time || new Date().toISOString(),
+      msg_type: msgType,
+      user_name: userName,
+      message: message,
+      tokens: tokens,
+      is_vip: false,
+      user_color: msg.user_color || null,
+      user_league: msg.user_league || null,
+      user_level: msg.user_level != null ? msg.user_level : null,
+      metadata: msg.metadata || {},
+      session_id: sid,
+    };
+  });
+
+  const hasSessionId = rows.some(r => r.session_id);
+  // キャスト別件数をログ出力（データフロー診断用）
+  const castCounts = {};
+  rows.forEach(r => { castCounts[r.cast_name] = (castCounts[r.cast_name] || 0) + 1; });
+  console.log('[LS-BG] SPYメッセージ一括送信:', rows.length, '件 → Supabase REST API',
+    `session_id: ${hasSessionId ? rows[0].session_id : 'NULL'}`,
+    'casts:', JSON.stringify(castCounts));
+
+  try {
+    let res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/spy_messages`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(rows),
+    });
+
+    // 401 → トークンリフレッシュ後リトライ
+    if (res.status === 401) {
+      console.warn('[LS-BG] Supabase 401 → リフレッシュ試行');
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/spy_messages`, {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify(rows),
+        });
+      }
+    }
+
+    if (res.ok || res.status === 201) {
+      console.log('[LS-BG] SPYメッセージ一括送信成功:', rows.length, '件',
+        'casts:', Object.keys(castCounts).join(','));
+
+      // シナリオゴール検出: spy_messagesに含まれるユーザーのactiveエンロールメントをチェック
+      const uniqueUserNames = [...new Set(rows.filter(r => r.user_name).map(r => r.user_name))];
+      if (uniqueUserNames.length > 0) {
+        checkScenarioGoals(uniqueUserNames).catch(e => {
+          console.warn('[LS-BG] シナリオゴール検出失敗:', e.message);
+        });
+      }
+    } else {
+      const errText = await res.text().catch(() => '');
+      console.warn('[LS-BG] SPYメッセージ送信失敗:', res.status, errText,
+        'casts:', Object.keys(castCounts).join(','));
+      messageBuffer.push(...batch);
+      persistBuffer();
+    }
+  } catch (err) {
+    console.warn('[LS-BG] SPYメッセージ送信例外:', err.message);
+    messageBuffer.push(...batch);
+    persistBuffer();
+  }
+}
+
+// ============================================================
+// Viewer Stats Buffer → Supabase REST API 直接POST
+// ============================================================
+async function flushViewerStats() {
+  if (viewerStatsBuffer.length === 0) return;
+
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    console.warn('[LS-BG] viewerStats: 認証未完了 バッファ保持');
+    return;
+  }
+
+  const batch = [...viewerStatsBuffer];
+  viewerStatsBuffer = [];
+  persistViewerBuffer();
+
+  try {
+    const data = await chrome.storage.local.get(['last_cast_name']);
+    const castName = data.last_cast_name || 'unknown';
+
+    const rows = batch.map(s => ({
+      account_id: accountId,
+      cast_name: castName,
+      total: s.total,
+      coin_users: s.coin_users,
+      others: s.others,
+      // 視聴者パネル内訳（029_viewer_stats_breakdown で追加されたカラム）
+      ...(s.ultimate_count != null ? { ultimate_count: s.ultimate_count } : {}),
+      ...(s.coin_holders != null ? { coin_holders: s.coin_holders } : {}),
+      ...(s.others_count != null ? { others_count: s.others_count } : {}),
+      ...(s.recorded_at ? { recorded_at: s.recorded_at } : {}),
+    }));
+
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/viewer_stats`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(rows),
+    });
+
+    if (res.ok || res.status === 201) {
+      console.log('[LS-BG] 視聴者数バッチ送信成功:', rows.length, '件');
+    } else {
+      console.warn('[LS-BG] 視聴者数送信失敗:', res.status);
+      viewerStatsBuffer.unshift(...batch);
+      persistViewerBuffer();
+    }
+  } catch (err) {
+    console.warn('[LS-BG] 視聴者数送信例外:', err.message);
+    viewerStatsBuffer.unshift(...batch);
+    persistViewerBuffer();
+  }
+}
+
+// ============================================================
+// Session Lifecycle → Supabase REST API
+// ============================================================
+
+/**
+ * SPY開始時: sessionsテーブルにセッション開始を記録
+ * title カラムに cast_name を格納（sessions に cast_name カラムなし）
+ */
+async function insertSession(sessionId, acctId) {
+  if (!accessToken) return;
+
+  const storageData = await chrome.storage.local.get(['last_cast_name']);
+  const castName = storageData.last_cast_name || 'unknown';
+
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/sessions`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        account_id: acctId,
+        title: castName,
+        cast_name: castName,
+        started_at: new Date().toISOString(),
+      }),
+    });
+
+    if (res.ok || res.status === 201) {
+      console.log('[LS-BG] sessions開始記録:', sessionId, 'cast=', castName);
+    } else {
+      const errText = await res.text();
+      console.error('[LS-BG] sessions INSERT失敗:', res.status, errText);
+    }
+  } catch (e) {
+    console.error('[LS-BG] sessions INSERT例外:', e.message);
+  }
+}
+
+/**
+ * SPY停止時: sessionsテーブルにセッション終了を記録（集計値付き）
+ * 1. RPC update_session_stats → total_messages, total_tokens
+ * 2. viewer_stats → peak_viewers
+ * 3. PATCH sessions → ended_at, peak_viewers
+ */
+async function closeSession(sessionId, sessionStartTime) {
+  if (!accessToken || !accountId) return;
+
+  // 1. RPC update_session_stats で total_messages, total_tokens を更新
+  try {
+    const rpcRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/update_session_stats`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_session_id: sessionId }),
+    });
+    if (rpcRes.ok) {
+      console.log('[LS-BG] update_session_stats RPC成功:', sessionId);
+    } else {
+      console.warn('[LS-BG] update_session_stats RPC失敗:', rpcRes.status);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] update_session_stats RPC例外:', e.message);
+  }
+
+  // 2. viewer_statsからピーク視聴者数を取得
+  let peakViewers = 0;
+  if (sessionStartTime) {
+    try {
+      const viewerRes = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/viewer_stats?account_id=eq.${accountId}&recorded_at=gte.${encodeURIComponent(sessionStartTime)}&order=total.desc&limit=1&select=total`,
+        {
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        }
+      );
+      if (viewerRes.ok) {
+        const viewerData = await viewerRes.json();
+        if (viewerData.length > 0 && viewerData[0].total != null) {
+          peakViewers = viewerData[0].total;
+        }
+      }
+    } catch (e) {
+      console.warn('[LS-BG] viewer_stats取得スキップ:', e.message);
+    }
+  }
+
+  // 3. ended_at + peak_viewers を更新
+  try {
+    const updateRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/sessions?session_id=eq.${encodeURIComponent(sessionId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          ended_at: new Date().toISOString(),
+          peak_viewers: peakViewers,
+        }),
+      }
+    );
+
+    if (updateRes.ok) {
+      console.log(`[LS-BG] sessions終了記録: ${sessionId} | peak_viewers=${peakViewers}`);
+    } else {
+      const errText = await updateRes.text();
+      console.error('[LS-BG] sessions UPDATE失敗:', updateRes.status, errText);
+    }
+  } catch (e) {
+    console.error('[LS-BG] sessions UPDATE例外:', e.message);
+  }
+}
+
+// ============================================================
+// C-1: Per-cast Session Auto-Creation
+// ============================================================
+
+/**
+ * キャストの配信セッションを自動作成/取得
+ * CHAT_MESSAGE受信時に呼び出し、キャストごとにセッションを管理
+ */
+async function ensureSession(castName, acctId) {
+  if (castSessions.has(castName)) return castSessions.get(castName);
+  if (!accessToken || !acctId) return null;
+
+  const sessionId = crypto.randomUUID();
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/sessions`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        session_id: sessionId,
+        account_id: acctId,
+        cast_name: castName,
+        title: castName,
+        started_at: new Date().toISOString(),
+      }),
+    });
+    if (res.ok || res.status === 201) {
+      castSessions.set(castName, sessionId);
+      castSessionStarted.set(castName, new Date().toISOString());
+      saveSessionState(); // SW再起動対策: 状態永続化
+      console.log('[LS-BG] 新セッション作成:', castName, '→', sessionId);
+    } else {
+      const errText = await res.text();
+      console.warn('[LS-BG] セッション作成失敗:', res.status, errText);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] セッション作成例外:', e.message);
+  }
+  return castSessions.get(castName) || null;
+}
+
+/**
+ * C-2: キャストの配信セッションを終了（5分タイムアウト時）
+ */
+async function closeCastSession(castName) {
+  const sessionId = castSessions.get(castName);
+  if (!sessionId) return;
+
+  const sessionStarted = castSessionStarted.get(castName) || null;
+
+  // RPC update_session_stats で集計
+  try {
+    const rpcRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/update_session_stats`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ p_session_id: sessionId }),
+    });
+    if (rpcRes.ok) {
+      console.log('[LS-BG] closeCastSession update_session_stats成功:', sessionId);
+    } else {
+      console.warn('[LS-BG] closeCastSession update_session_stats失敗:', rpcRes.status);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] closeCastSession RPC例外:', e.message);
+  }
+
+  // ended_at を更新
+  try {
+    await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/sessions?session_id=eq.${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        ended_at: new Date().toISOString(),
+      }),
+    });
+    console.log('[LS-BG] セッション終了:', castName, sessionId);
+  } catch (e) {
+    console.warn('[LS-BG] セッション終了失敗:', e.message);
+  }
+
+  // C-3: チケットショー検出（セッション終了時にsession_idでtip/giftメッセージを集計）
+  if (sessionId && accessToken) {
+    try {
+      const tipRes = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/spy_messages?session_id=eq.${encodeURIComponent(sessionId)}&msg_type=in.(tip,gift)&tokens=gt.0&order=message_time.asc&limit=2000`,
+        {
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        }
+      );
+      if (tipRes.ok) {
+        const tips = await tipRes.json();
+        const ticketShows = detectTicketShowsSimple(tips);
+        if (ticketShows.length > 0) {
+          const totalTicketRevenue = ticketShows.reduce((s, sh) => s + sh.ticket_revenue, 0);
+          const totalTipRevenue = ticketShows.reduce((s, sh) => s + sh.tip_revenue, 0);
+          const totalAttendees = ticketShows.reduce((s, sh) => s + sh.attendees, 0);
+          await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/sessions?session_id=eq.${encodeURIComponent(sessionId)}`, {
+            method: 'PATCH',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              ticket_shows: ticketShows,
+              total_ticket_revenue: totalTicketRevenue,
+              total_tip_revenue: totalTipRevenue,
+              total_ticket_attendees: totalAttendees,
+            }),
+          });
+          console.log('[LS-BG] チケチャ検出:', castName, ticketShows.length, '回, 参加者計:', totalAttendees, 'tk計:', totalTicketRevenue);
+        }
+      }
+    } catch (e) {
+      console.warn('[LS-BG] チケチャ検出失敗:', e.message);
+    }
+  }
+
+  // GC精算: セッション終了時に未精算のGCをすべて精算
+  await settleGroupChats(castName).catch(e => {
+    console.warn('[LS-BG] GC精算（セッション終了時）失敗:', e.message);
+  });
+
+  // お礼DM自動トリガー（セッション終了時 — fire-and-forget）
+  triggerThankYouDMs(castName, sessionId).catch(e => {
+    console.warn('[LS-BG] お礼DMトリガー失敗:', e.message);
+  });
+
+  castSessions.delete(castName);
+  castLastActivity.delete(castName);
+  castBroadcastTitles.delete(castName);
+  castSessionStarted.delete(castName);
+  saveSessionState(); // SW再起動対策: 状態永続化
+}
+
+/**
+ * GC（グループチャット）精算: 指定キャストの全アクティブGCを精算し、coin_transactionsにINSERT
+ * castName指定: そのキャストの全GCを精算（group_end or セッション終了時）
+ * castName省略: 全GCを精算（安全弁用）
+ */
+async function settleGroupChats(castName) {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+
+  const keysToSettle = [];
+  for (const [key, gc] of activeGroupChats.entries()) {
+    if (!castName || gc.castName === castName) {
+      keysToSettle.push(key);
+    }
+  }
+
+  if (keysToSettle.length === 0) return;
+
+  console.log('[LS-BG] GC精算開始: cast=', castName || 'ALL', '対象=', keysToSettle.length, '件');
+
+  const transactions = [];
+  for (const key of keysToSettle) {
+    const gc = activeGroupChats.get(key);
+    if (!gc) continue;
+
+    const durationMs = Date.now() - gc.joinedAt;
+    const durationMin = Math.max(1, Math.round(durationMs / 60000)); // 最低1分
+    const tokens = durationMin * gc.ratePerMinute;
+
+    transactions.push({
+      account_id: accountId,
+      user_name: gc.userName,
+      cast_name: gc.castName,
+      tokens: tokens,
+      type: 'group_chat',
+      date: new Date(gc.joinedAt).toISOString(),
+      metadata: {
+        duration_minutes: durationMin,
+        rate_per_minute: gc.ratePerMinute,
+        joined_at: new Date(gc.joinedAt).toISOString(),
+        settled_at: new Date().toISOString(),
+        session_id: gc.sessionId,
+      },
+    });
+
+    activeGroupChats.delete(key);
+    console.log('[LS-BG] GC精算:', gc.userName, '@', gc.castName,
+      durationMin, '分 ×', gc.ratePerMinute, '=', tokens, 'tk');
+  }
+
+  if (transactions.length === 0) return;
+
+  // coin_transactions にバッチINSERT
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(transactions),
+    });
+    if (res.ok || res.status === 201) {
+      console.log('[LS-BG] GC coin_transactions INSERT成功:', transactions.length, '件');
+    } else {
+      const errText = await res.text();
+      console.warn('[LS-BG] GC coin_transactions INSERT失敗:', res.status, errText);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] GC coin_transactions INSERT例外:', e.message);
+  }
+}
+
+/**
+ * お礼DM自動トリガー: セッション終了時にtip/giftユーザーにDMを自動キュー登録
+ * get_thankyou_dm_candidates RPCで候補取得 → dm_send_logにINSERT (status='pending')
+ * 二重送信防止: 24時間以内に同一ユーザーへ auto_thankyou DM済みならスキップ
+ */
+async function triggerThankYouDMs(castName, sessionId) {
+  try {
+    await loadAuth();
+    if (!accountId || !accessToken) return;
+
+    // 自社キャストのみ（spy_castsは除外）
+    if (ownCastNamesCache.size > 0 && !ownCastNamesCache.has(castName)) {
+      console.log('[LS-BG] お礼DM: 自社キャストではないためスキップ:', castName);
+      return;
+    }
+
+    // get_thankyou_dm_candidates RPC呼び出し
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/get_thankyou_dm_candidates`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_session_id: sessionId,
+        p_min_tokens: 100,
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn('[LS-BG] お礼DM: RPC失敗 HTTP', res.status);
+      return;
+    }
+
+    const candidates = await res.json();
+    if (!Array.isArray(candidates) || candidates.length === 0) {
+      console.log('[LS-BG] お礼DM: 候補なし (cast:', castName, ')');
+      return;
+    }
+
+    console.log('[LS-BG] お礼DM: 候補', candidates.length, '名 (cast:', castName, ')');
+
+    // 二重送信防止: 24時間以内にauto_thankyou DMを送信済みのユーザーを除外
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const dupRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?account_id=eq.${accountId}&template_name=eq.auto_thankyou&queued_at=gte.${encodeURIComponent(since24h)}&select=user_name`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    const alreadySent = new Set();
+    if (dupRes.ok) {
+      const dupData = await dupRes.json();
+      (dupData || []).forEach(d => alreadySent.add(d.user_name));
+    }
+
+    // フィルタ: 二重送信防止 + dm_sent_this_session除外（RPCが既に除外しているが念のため）
+    const filtered = candidates.filter(c =>
+      !alreadySent.has(c.username) && !c.dm_sent_this_session
+    );
+
+    if (filtered.length === 0) {
+      console.log('[LS-BG] お礼DM: 全員24h以内にDM済み — スキップ');
+      return;
+    }
+
+    // dm_send_log にINSERT (status='pending' — フロントで承認後に'queued'に変更)
+    const campaign = `auto_thankyou_${Date.now()}`;
+    const rows = filtered.map(c => ({
+      account_id: accountId,
+      user_name: c.username,
+      cast_name: castName,
+      profile_url: `https://stripchat.com/user/${c.username}`,
+      message: c.suggested_template || `${c.username}さん、今日はありがとう😊 また遊びに来てくださいね。`,
+      status: 'pending',
+      campaign: campaign,
+      template_name: 'auto_thankyou',
+      queued_at: new Date().toISOString(),
+    }));
+
+    const insertRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(rows),
+    });
+
+    if (insertRes.ok || insertRes.status === 201) {
+      console.log('[LS-BG] お礼DM:', filtered.length, '件をキューに登録 (campaign:', campaign, ')');
+    } else {
+      console.warn('[LS-BG] お礼DM: INSERT失敗 HTTP', insertRes.status);
+    }
+
+    // シナリオエンロール（fire-and-forget）
+    for (const c of filtered) {
+      const seg = c.segment || 'S9';
+      let triggerType = 'thankyou_regular';
+      if (['S1', 'S2', 'S3'].includes(seg)) triggerType = 'thankyou_vip';
+      else if (seg === 'S9') triggerType = 'thankyou_first';
+
+      enrollScenario(triggerType, c.username, castName, seg).catch(e => {
+        console.warn('[LS-BG] シナリオエンロール失敗:', c.username, e.message);
+      });
+    }
+  } catch (e) {
+    console.warn('[LS-BG] お礼DM: エラー:', e.message);
+  }
+}
+
+/**
+ * 離脱DM自動トリガー: refresh_segments後に離脱リスクユーザーにDMを自動キュー登録
+ * detect_churn_risk RPCで候補取得 → dm_send_logにINSERT (status='pending')
+ * 二重送信防止: 7日以内に同一ユーザーへ auto_churn DM済みならスキップ
+ */
+async function triggerChurnRecoveryDMs() {
+  try {
+    await loadAuth();
+    if (!accountId || !accessToken) return;
+
+    // 自社キャストのみ対象
+    if (ownCastNamesCache.size === 0) {
+      console.log('[LS-BG] 離脱DM: 自社キャスト未キャッシュ — スキップ');
+      return;
+    }
+
+    // 7日以内のauto_churn DM送信済みユーザーを一括取得（全キャスト共通）
+    const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const globalDupRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?account_id=eq.${accountId}&template_name=eq.auto_churn&queued_at=gte.${encodeURIComponent(since7d)}&select=user_name`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    const globalAlreadySent = new Set();
+    if (globalDupRes.ok) {
+      const dupData = await globalDupRes.json();
+      (dupData || []).forEach(d => globalAlreadySent.add(d.user_name));
+    }
+
+    let totalQueued = 0;
+    const campaign = `auto_churn_${Date.now()}`;
+    const churnTemplate = '{username}さん、最近見かけないので気になっちゃって😊\n元気にしてますか？\nまた気が向いたらふらっと来てくれたら嬉しいです。\nでも無理しないでね、あなたの自由だから😊';
+
+    for (const castName of ownCastNamesCache) {
+      const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/detect_churn_risk`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          p_account_id: accountId,
+          p_cast_name: castName,
+          p_lookback_sessions: 7,
+          p_absence_threshold: 2,
+        }),
+      });
+
+      if (!res.ok) {
+        console.warn('[LS-BG] 離脱DM: detect_churn_risk失敗 (', castName, ') HTTP', res.status);
+        continue;
+      }
+
+      const candidates = await res.json();
+      if (!Array.isArray(candidates) || candidates.length === 0) continue;
+
+      // 二重送信防止
+      const filtered = candidates.filter(c => !globalAlreadySent.has(c.username));
+      if (filtered.length === 0) continue;
+
+      const rows = filtered.map(c => ({
+        account_id: accountId,
+        user_name: c.username,
+        cast_name: castName,
+        profile_url: `https://stripchat.com/user/${c.username}`,
+        message: churnTemplate.replace('{username}', c.username),
+        status: 'pending',
+        campaign: campaign,
+        template_name: 'auto_churn',
+        queued_at: new Date().toISOString(),
+      }));
+
+      const insertRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify(rows),
+      });
+
+      if (insertRes.ok || insertRes.status === 201) {
+        totalQueued += filtered.length;
+        // 送信済みセットに追加（次のキャストで重複しないように）
+        filtered.forEach(c => globalAlreadySent.add(c.username));
+
+        // シナリオエンロール（fire-and-forget）
+        for (const c of filtered) {
+          enrollScenario('churn_recovery', c.username, castName, c.segment || 'S9').catch(e => {
+            console.warn('[LS-BG] 離脱シナリオエンロール失敗:', c.username, e.message);
+          });
+        }
+      } else {
+        console.warn('[LS-BG] 離脱DM: INSERT失敗 (', castName, ') HTTP', insertRes.status);
+      }
+    }
+
+    if (totalQueued > 0) {
+      console.log('[LS-BG] 離脱DM:', totalQueued, '件をキューに登録 (campaign:', campaign, ')');
+    } else {
+      console.log('[LS-BG] 離脱DM: 候補なし');
+    }
+  } catch (e) {
+    console.warn('[LS-BG] 離脱DM: エラー:', e.message);
+  }
+}
+
+// ============================================================
+// DMシナリオエンジン
+// ============================================================
+
+/**
+ * generateDmMessage: Persona APIを呼び出してDM文面を生成
+ * フォールバック: API失敗時はFALLBACK_TEMPLATESを使用
+ * @returns { message, ai_generated, ai_reasoning, ai_confidence }
+ */
+async function generateDmMessage(userName, castName, triggerType, stepNumber, segment) {
+  const personaUrl = CONFIG.PERSONA_API_URL;
+
+  try {
+    await loadAuth();
+    if (!accessToken) throw new Error('No access token');
+
+    const res = await fetch(`${personaUrl}/api/persona`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        task_type: 'dm_generate',
+        cast_name: castName,
+        context: {
+          user_name: userName,
+          cast_name: castName,
+          scenario_type: triggerType,
+          step_number: stepNumber,
+          segment: segment,
+        },
+      }),
+    });
+
+    if (!res.ok) throw new Error(`API ${res.status}`);
+    const data = await res.json();
+
+    // Parse output (may be JSON string or object with .message)
+    let message = '';
+    let reasoning = null;
+    let confidence = null;
+
+    if (data.output && typeof data.output === 'object' && data.output.message) {
+      message = data.output.message;
+      reasoning = data.output.reasoning || data.reasoning || null;
+      confidence = data.confidence || null;
+    } else if (typeof data.raw_text === 'string') {
+      // Try JSON extraction from raw_text
+      try {
+        const jsonMatch = data.raw_text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          message = parsed.message || data.raw_text;
+          reasoning = parsed.reasoning || null;
+        } else {
+          message = data.raw_text;
+        }
+      } catch {
+        message = data.raw_text;
+      }
+    }
+
+    if (!message) throw new Error('Empty message from API');
+
+    // Replace {username} placeholder if still present
+    message = message.replace(/\{username\}/g, userName);
+
+    console.log('[LS-BG] AI DM生成成功:', userName, castName, triggerType, 'step', stepNumber);
+    return {
+      message,
+      ai_generated: true,
+      ai_reasoning: reasoning,
+      ai_confidence: confidence,
+    };
+  } catch (e) {
+    console.warn('[LS-BG] AI DM生成失敗 → フォールバック:', e.message);
+    // Fallback to FALLBACK_TEMPLATES
+    const fallbackMsg = getFallbackMessage(triggerType, stepNumber, userName, segment);
+    return {
+      message: fallbackMsg,
+      ai_generated: false,
+      ai_reasoning: `fallback: ${e.message}`,
+      ai_confidence: null,
+    };
+  }
+}
+
+/**
+ * enrollScenario: ユーザーをシナリオにエンロールする
+ * - 既にactiveなエンロールメントがあればcancelledに変更→新規エンロール
+ * - Step0のDMをdm_send_logにINSERT
+ */
+async function enrollScenario(triggerType, userName, castName, segment) {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+
+  try {
+    // 1. 該当トリガーのアクティブシナリオを取得
+    const scenarioRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenarios?account_id=eq.${accountId}&trigger_type=eq.${triggerType}&is_active=eq.true&limit=1`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!scenarioRes.ok) return;
+    const scenarios = await scenarioRes.json();
+    if (!scenarios || scenarios.length === 0) return;
+    const scenario = scenarios[0];
+
+    // セグメントターゲットチェック
+    if (scenario.segment_targets && scenario.segment_targets.length > 0) {
+      if (!scenario.segment_targets.includes(segment)) {
+        console.log('[LS-BG] シナリオ: セグメント対象外', userName, segment, '→', scenario.segment_targets);
+        return;
+      }
+    }
+
+    // 2. 既存activeエンロールメントをキャンセル
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?account_id=eq.${accountId}&username=eq.${encodeURIComponent(userName)}&status=eq.active`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ status: 'cancelled' }),
+      }
+    );
+
+    // 3. 新規エンロール
+    const steps = scenario.steps || [];
+    const step0 = steps[0] || null;
+    const nextStepDue = steps.length > 1
+      ? new Date(Date.now() + (steps[1].delay_hours || 24) * 3600000).toISOString()
+      : null;
+
+    const enrollRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        scenario_id: scenario.id,
+        account_id: accountId,
+        cast_name: castName,
+        username: userName,
+        current_step: 0,
+        status: 'active',
+        last_step_sent_at: new Date().toISOString(),
+        next_step_due_at: nextStepDue,
+        goal_type: step0?.goal || 'reply_or_visit',
+        metadata: { segment, trigger_type: triggerType },
+      }),
+    });
+
+    if (!enrollRes.ok && enrollRes.status !== 201) {
+      // UNIQUE制約違反は想定内（既にエンロール済み）
+      if (enrollRes.status === 409) {
+        console.log('[LS-BG] シナリオ: 既にエンロール済み', userName, triggerType);
+        return;
+      }
+      console.warn('[LS-BG] シナリオ: エンロール失敗', enrollRes.status);
+      return;
+    }
+
+    console.log('[LS-BG] シナリオ: エンロール成功', userName, '→', scenario.scenario_name, '(step0)');
+
+    // 4. Step0のDMをdm_send_logにINSERT（AI生成）
+    if (step0) {
+      const generated = await generateDmMessage(userName, castName, triggerType, 0, segment);
+      const status = scenario.auto_approve_step0 ? 'queued' : 'pending';
+      const campaign = `scenario_${scenario.id}_step0_${Date.now()}`;
+
+      await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          user_name: userName,
+          cast_name: castName,
+          profile_url: `https://stripchat.com/user/${userName}`,
+          message: generated.message,
+          status: status,
+          campaign: campaign,
+          template_name: `scenario_${triggerType}_step0`,
+          queued_at: new Date().toISOString(),
+          ai_generated: generated.ai_generated,
+          ai_reasoning: generated.ai_reasoning,
+          ai_confidence: generated.ai_confidence,
+          scenario_enrollment_id: null, // step0 is during enrollment, enrollment may not have ID yet
+        }),
+      });
+      console.log('[LS-BG] シナリオStep0 DM:', userName, status, '(', triggerType, ') AI:', generated.ai_generated);
+    }
+  } catch (e) {
+    console.warn('[LS-BG] enrollScenario失敗:', e.message);
+  }
+}
+
+/**
+ * processScenarioSteps: 1時間ごとにnext_step_due_at <= NOW()のエンロールメントを処理
+ * 次ステップのDMをdm_send_logにINSERT → current_step++
+ */
+async function processScenarioSteps() {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+
+  try {
+    // next_step_due_at <= NOW() かつ status='active' のエンロールメントを取得
+    const now = new Date().toISOString();
+    const enrollRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?account_id=eq.${accountId}&status=eq.active&next_step_due_at=lte.${encodeURIComponent(now)}&select=*&limit=100`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!enrollRes.ok) return;
+    const enrollments = await enrollRes.json();
+    if (!enrollments || enrollments.length === 0) return;
+
+    console.log('[LS-BG] シナリオステップ処理:', enrollments.length, '件');
+
+    // シナリオ定義をバッチ取得
+    const scenarioIds = [...new Set(enrollments.map(e => e.scenario_id))];
+    const scenarioRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenarios?id=in.(${scenarioIds.map(id => `"${id}"`).join(',')})&select=*`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!scenarioRes.ok) return;
+    const scenarioList = await scenarioRes.json();
+    const scenarioMap = {};
+    (scenarioList || []).forEach(s => { scenarioMap[s.id] = s; });
+
+    // 日別送信カウント（daily_send_limit チェック用）
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todaySentRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?account_id=eq.${accountId}&template_name=like.scenario_*&queued_at=gte.${encodeURIComponent(todayStart.toISOString())}&select=id`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Prefer': 'count=exact',
+        },
+      }
+    );
+    let todaySentCount = 0;
+    if (todaySentRes.ok) {
+      const countHeader = todaySentRes.headers.get('content-range');
+      if (countHeader) {
+        const match = countHeader.match(/\/(\d+)/);
+        if (match) todaySentCount = parseInt(match[1], 10);
+      }
+    }
+
+    let processedCount = 0;
+    for (const enrollment of enrollments) {
+      const scenario = scenarioMap[enrollment.scenario_id];
+      if (!scenario) continue;
+
+      // daily_send_limit チェック
+      if (todaySentCount + processedCount >= (scenario.daily_send_limit || 50)) {
+        console.log('[LS-BG] シナリオ: 日次上限到達', todaySentCount + processedCount);
+        break;
+      }
+
+      const steps = scenario.steps || [];
+      const nextStep = enrollment.current_step + 1;
+
+      // 全ステップ完了チェック
+      if (nextStep >= steps.length) {
+        // completed に更新
+        await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?id=eq.${enrollment.id}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal',
+            },
+            body: JSON.stringify({ status: 'completed', next_step_due_at: null }),
+          }
+        );
+        console.log('[LS-BG] シナリオ完了:', enrollment.username, scenario.scenario_name);
+        continue;
+      }
+
+      const stepDef = steps[nextStep];
+      if (!stepDef) continue;
+
+      // AI文面生成（フォールバック内蔵）
+      const seg = (enrollment.metadata && enrollment.metadata.segment) || 'S9';
+      const generated = await generateDmMessage(
+        enrollment.username,
+        enrollment.cast_name || '',
+        scenario.trigger_type,
+        nextStep,
+        seg
+      );
+
+      const campaign = `scenario_${scenario.id}_step${nextStep}_${Date.now()}`;
+      // Step1+は常にpending（承認待ち）、AI生成失敗時もpending
+      const dmStatus = 'pending';
+
+      await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          user_name: enrollment.username,
+          cast_name: enrollment.cast_name,
+          profile_url: `https://stripchat.com/user/${enrollment.username}`,
+          message: generated.message,
+          status: dmStatus,
+          campaign: campaign,
+          template_name: `scenario_${scenario.trigger_type}_step${nextStep}`,
+          queued_at: new Date().toISOString(),
+          ai_generated: generated.ai_generated,
+          ai_reasoning: generated.ai_reasoning,
+          ai_confidence: generated.ai_confidence,
+          scenario_enrollment_id: enrollment.id,
+        }),
+      });
+
+      // エンロールメント更新
+      const nextNextStep = nextStep + 1;
+      const nextDue = nextNextStep < steps.length
+        ? new Date(Date.now() + (steps[nextNextStep].delay_hours || 24) * 3600000).toISOString()
+        : null;
+
+      await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?id=eq.${enrollment.id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({
+            current_step: nextStep,
+            last_step_sent_at: new Date().toISOString(),
+            next_step_due_at: nextDue,
+            status: nextDue ? 'active' : 'completed',
+          }),
+        }
+      );
+
+      processedCount++;
+      console.log('[LS-BG] シナリオStep', nextStep, 'DM:', enrollment.username, scenario.scenario_name);
+    }
+
+    if (processedCount > 0) {
+      console.log('[LS-BG] シナリオステップ処理完了:', processedCount, '件');
+    }
+  } catch (e) {
+    console.warn('[LS-BG] processScenarioSteps失敗:', e.message);
+  }
+}
+
+/**
+ * checkScenarioGoals: spy_messagesバッチ後にゴール到達チェック
+ * activeなエンロールメントのユーザーがspy_messagesに新規メッセージを持っていれば
+ * goal_reached に更新（以降のステップは発火しない）
+ */
+async function checkScenarioGoals(userNames, castName) {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+  if (!userNames || userNames.length === 0) return;
+
+  try {
+    // activeなエンロールメントでuserNamesに含まれるものを検索
+    const nameFilter = userNames.map(u => `"${u}"`).join(',');
+    const enrollRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?account_id=eq.${accountId}&status=eq.active&username=in.(${nameFilter})&select=id,username,scenario_id`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!enrollRes.ok) return;
+    const enrollments = await enrollRes.json();
+    if (!enrollments || enrollments.length === 0) return;
+
+    // goal_reached に更新
+    const ids = enrollments.map(e => `"${e.id}"`).join(',');
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_scenario_enrollments?id=in.(${ids})`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          status: 'goal_reached',
+          goal_reached_at: new Date().toISOString(),
+          next_step_due_at: null,
+        }),
+      }
+    );
+
+    const userNamesList = enrollments.map(e => e.username);
+    console.log('[LS-BG] シナリオゴール到達:', userNamesList.length, '名', userNamesList.join(','));
+  } catch (e) {
+    console.warn('[LS-BG] checkScenarioGoals失敗:', e.message);
+  }
+}
+
+/**
+ * C-3: チケットショー検出（簡易版）
+ * 3件以上の同額チップが30秒以内に集中 → チケットショーと判定
+ */
+function detectTicketShowsSimple(tips) {
+  if (!tips || tips.length < 3) return [];
+  const shows = [];
+  let i = 0;
+  while (i < tips.length) {
+    const amount = tips[i].tokens;
+    const windowStart = new Date(tips[i].message_time).getTime();
+    let cluster = [tips[i]];
+    let j = i + 1;
+    while (j < tips.length && tips[j].tokens === amount && new Date(tips[j].message_time).getTime() - windowStart <= 30000) {
+      cluster.push(tips[j]);
+      j++;
+    }
+    if (cluster.length >= 3) {
+      // Extend: collect same-amount tips with 60s gaps
+      while (j < tips.length && tips[j].tokens === amount) {
+        const gap = new Date(tips[j].message_time).getTime() - new Date(cluster[cluster.length - 1].message_time).getTime();
+        if (gap <= 60000) { cluster.push(tips[j]); j++; } else break;
+      }
+      // Collect non-ticket tips during show period
+      const showStart = new Date(cluster[0].message_time).getTime();
+      const showEnd = new Date(cluster[cluster.length - 1].message_time).getTime();
+      let tipRevenue = 0;
+      for (const t of tips) {
+        const tt = new Date(t.message_time).getTime();
+        if (tt >= showStart && tt <= showEnd && t.tokens !== amount) {
+          tipRevenue += t.tokens;
+        }
+      }
+      shows.push({
+        started_at: cluster[0].message_time,
+        ended_at: cluster[cluster.length - 1].message_time,
+        ticket_price: amount,
+        ticket_revenue: cluster.length * amount,
+        attendees: cluster.length,
+        tip_revenue: tipRevenue,
+      });
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return shows;
+}
+
+/**
+ * C-2: 配信終了検出（5分タイムアウト）
+ * keepalive アラーム(30秒ごと)から呼び出し
+ */
+function checkBroadcastEnd() {
+  if (!spyEnabled) return;
+  const now = Date.now();
+  const TIMEOUT_MS = 5 * 60 * 1000; // 5分
+
+  for (const [castName, lastTime] of castLastActivity.entries()) {
+    if (now - lastTime > TIMEOUT_MS && castSessions.has(castName)) {
+      console.log('[LS-BG] 配信終了検出(5分タイムアウト):', castName);
+      closeCastSession(castName).catch(e => {
+        console.warn('[LS-BG] closeCastSession失敗:', castName, e.message);
+      });
+    }
+  }
+}
+
+// ============================================================
+// Whisper Polling (10秒間隔で未読whisperを取得 → Stripchatタブへ転送)
+// ============================================================
+async function pollWhispers() {
+  try {
+    await loadAuth();
+    if (!accountId || !accessToken) return;
+
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/whispers?account_id=eq.${accountId}&read_at=is.null&order=created_at.asc&limit=5`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+
+    if (!res.ok) return;
+
+    const whispers = await res.json();
+    if (!Array.isArray(whispers) || whispers.length === 0) return;
+
+    console.log('[LS-BG] 未読Whisper取得:', whispers.length, '件');
+
+    const tabs = await chrome.tabs.query({
+      url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+    });
+    if (tabs.length === 0) return;
+
+    for (const whisper of whispers) {
+      for (const tab of tabs) {
+        chrome.tabs.sendMessage(tab.id, {
+          type: 'SHOW_WHISPER',
+          whisper_id: whisper.id,
+          message: whisper.message,
+          cast_name: whisper.cast_name,
+          template_name: whisper.template_name,
+        }).catch(() => {});
+      }
+    }
+  } catch (e) {
+    // silent — polling errors are non-critical
+  }
+}
+
+function startWhisperPolling() {
+  if (whisperPollingTimer) return;
+  whisperPollingTimer = true; // フラグとして使用
+  console.log('[LS-BG] Whisperポーリング開始(chrome.alarms 10秒間隔)');
+  pollWhispers();
+  chrome.alarms.create('whisper-poll', { periodInMinutes: 10 / 60 }); // 10秒
+}
+
+function stopWhisperPolling() {
+  if (whisperPollingTimer) {
+    chrome.alarms.clear('whisper-poll');
+    whisperPollingTimer = null;
+  }
+}
+
+// ============================================================
+// Message Handlers
+// ============================================================
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // --- SPY: Chat message from content_spy.js ---
+  if (msg.type === 'CHAT_MESSAGE') {
+    // spyEnabledのみチェック — accountIdは不要（flush時に付与）
+    if (!spyEnabled) {
+      sendResponse({ ok: false, error: 'SPY not enabled' });
+      return false;
+    }
+
+    // 未登録キャストのデータは収集しない（registered_casts + spy_casts のみ許可）
+    const castName = msg.cast_name || '';
+    if (registeredCastNames.size > 0 && castName && !registeredCastNames.has(castName)) {
+      console.log('[LS-BG] 未登録キャスト スキップ: cast=', castName,
+        'registeredCastNames=', [...registeredCastNames].join(','));
+      sendResponse({ ok: false, error: '未登録キャスト' });
+      return false;
+    }
+
+    // C-1: Per-cast session auto-creation + C-2: activity tracking
+    if (castName) {
+      castLastActivity.set(castName, Date.now());
+      // SW再起動対策: activity更新を定期的に永続化（30秒デバウンス）
+      scheduleSessionStateSave();
+      // fire-and-forget: セッション自動作成（accountId不在時は次回flush時にリトライ）
+      if (accountId) {
+        ensureSession(castName, accountId).catch(e => {
+          console.warn('[LS-BG] ensureSession失敗:', e.message);
+        });
+      }
+    }
+
+    // session_id: per-cast session優先、fallback to global currentSessionId
+    const perCastSessionId = castName ? (castSessions.get(castName) || null) : null;
+
+    // account_id は含めない（flush時にstorageから最新値を付与）
+    const payload = {
+      cast_name: msg.cast_name || '',
+      message_time: msg.message_time || new Date().toISOString(),
+      msg_type: msg.msg_type || 'chat',
+      user_name: msg.user_name || '',
+      message: msg.message || '',
+      tokens: msg.tokens || 0,
+      user_color: msg.user_color || null,
+      user_league: msg.user_league || null,
+      user_level: msg.user_level != null ? msg.user_level : null,
+      metadata: msg.metadata || {},
+      session_id: perCastSessionId || currentSessionId || null,
+    };
+
+    // GC（グループチャット）トラッキング
+    if (payload.msg_type === 'group_join' && payload.user_name && castName) {
+      const gcKey = `${castName}:${payload.user_name}`;
+      const rate = gcRateCache[castName] || 12; // デフォルト12コイン/分
+      activeGroupChats.set(gcKey, {
+        castName,
+        userName: payload.user_name,
+        joinedAt: Date.now(),
+        ratePerMinute: rate,
+        sessionId: perCastSessionId || currentSessionId || null,
+      });
+      console.log('[LS-BG] GC参加:', gcKey, 'rate=', rate, '/分, active=', activeGroupChats.size);
+    }
+    if (payload.msg_type === 'group_end' && castName) {
+      // group_end: そのキャストの全GCを精算
+      settleGroupChats(castName).catch(e => {
+        console.warn('[LS-BG] GC精算失敗:', e.message);
+      });
+    }
+
+    // Safety net: validate tip classification before buffering
+    const validated = validateTipBeforeSave(payload);
+
+    messageBuffer.push(validated);
+    if (messageBuffer.length > BUFFER_MAX) {
+      messageBuffer = messageBuffer.slice(-BUFFER_MAX);
+    }
+    spyMsgCount++;
+    persistBuffer();
+
+    if (!bufferTimer) {
+      bufferTimer = setTimeout(() => {
+        flushMessageBuffer();
+        bufferTimer = null;
+      }, CONFIG.SPY_BATCH_INTERVAL);
+    }
+
+    sendResponse({ ok: true, buffered: true, bufferSize: messageBuffer.length });
+    return false;
+  }
+
+  // --- SPY: Viewer stats from content_spy.js ---
+  if (msg.type === 'VIEWER_STATS') {
+    // 未登録キャストのviewer statsは収集しない
+    const vsCastName = msg.cast_name || '';
+    if (registeredCastNames.size > 0 && vsCastName && !registeredCastNames.has(vsCastName)) {
+      console.log('[LS-BG] 未登録キャスト スキップ: cast=', vsCastName, '(viewer_stats)');
+      sendResponse({ ok: false, error: '未登録キャスト' });
+      return false;
+    }
+
+    // accountId不在でもバッファ（flush時に付与）
+    viewerStatsBuffer.push({
+      total: msg.total,
+      coin_users: msg.coin_users,
+      others: msg.others,
+      ultimate_count: msg.ultimate_count ?? null,
+      coin_holders: msg.coin_holders ?? null,
+      others_count: msg.others_count ?? null,
+      recorded_at: msg.timestamp || new Date().toISOString(),
+    });
+    persistViewerBuffer();
+
+    if (msg.cast_name) {
+      chrome.storage.local.set({ last_cast_name: msg.cast_name });
+    }
+
+    if (!viewerStatsTimer) {
+      viewerStatsTimer = setInterval(flushViewerStats, 180000);
+    }
+
+    sendResponse({ ok: true, buffered: true });
+    return false;
+  }
+
+  // --- M-3: Broadcast Title from content_spy.js ---
+  if (msg.type === 'BROADCAST_TITLE') {
+    const titleCastName = msg.cast_name || '';
+    const broadcastTitle = msg.broadcast_title || '';
+    if (titleCastName && broadcastTitle) {
+      const prevTitle = castBroadcastTitles.get(titleCastName);
+      if (prevTitle !== broadcastTitle) {
+        castBroadcastTitles.set(titleCastName, broadcastTitle);
+        console.log('[LS-BG] 配信タイトル更新:', titleCastName, '→', broadcastTitle);
+        // セッションの broadcast_title を PATCH で更新
+        const titleSessionId = castSessions.get(titleCastName);
+        if (titleSessionId && accessToken) {
+          fetch(`${CONFIG.SUPABASE_URL}/rest/v1/sessions?session_id=eq.${encodeURIComponent(titleSessionId)}`, {
+            method: 'PATCH',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ broadcast_title: broadcastTitle }),
+          }).then(res => {
+            if (res.ok) {
+              console.log('[LS-BG] broadcast_title PATCH成功:', titleSessionId);
+            } else {
+              console.warn('[LS-BG] broadcast_title PATCH失敗:', res.status);
+            }
+          }).catch(e => {
+            console.warn('[LS-BG] broadcast_title PATCH例外:', e.message);
+          });
+        }
+      }
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- A.2: Heartbeat from content_spy.js ---
+  if (msg.type === 'HEARTBEAT') {
+    lastHeartbeat = Date.now();
+    heartbeatAlerted = false;
+    console.log('[LS-BG] ハートビート受信: cast=', msg.castName, 'observing=', msg.observing, 'msgs=', msg.messageCount);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- STT: Audio chunk from content_stt_relay.js ---
+  if (msg.type === 'AUDIO_CHUNK') {
+    if (!sttEnabled) {
+      sendResponse({ ok: false, error: 'STT not enabled' });
+      return false;
+    }
+    const tabId = sender.tab?.id || 0;
+    const castName = msg.castName || 'unknown';
+
+    // STTは自社キャスト（registered_casts）のみ処理
+    if (registeredCastNames.size > 0 && !registeredCastNames.has(castName)) {
+      console.log('[LS-BG] STTスキップ: 他社キャスト cast=', castName);
+      sendResponse({ ok: false, error: '他社キャストはSTT対象外' });
+      return false;
+    }
+
+    // タブ別状態を更新
+    if (!sttTabStates[tabId]) {
+      sttTabStates[tabId] = { castName, lastChunkAt: Date.now(), chunkCount: 0 };
+      console.log('[LS-BG] STT新タブ検出: tab=', tabId, 'cast=', castName,
+        'アクティブタブ数:', Object.keys(sttTabStates).length);
+    }
+    sttTabStates[tabId].lastChunkAt = Date.now();
+    sttTabStates[tabId].chunkCount++;
+    sttTabStates[tabId].castName = castName;
+
+    // キューに追加（上限超過時は古いものを破棄）
+    sttChunkQueue.push({
+      data: msg.data,
+      castName: castName,
+      tabId: tabId,
+      timestamp: msg.timestamp,
+    });
+    if (sttChunkQueue.length > (CONFIG.STT_MAX_QUEUE_SIZE || 20)) {
+      const dropped = sttChunkQueue.shift();
+      console.warn('[LS-BG] STTキュー溢れ: 古いチャンク破棄 cast=', dropped.castName, 'tab=', dropped.tabId);
+    }
+    processSTTQueue();
+    sendResponse({ ok: true, queued: sttChunkQueue.length });
+    return false;
+  }
+
+  // --- STT: Status from content_stt_relay.js ---
+  if (msg.type === 'STT_STATUS') {
+    const tabId = sender.tab?.id || 0;
+    console.log('[LS-BG] STTステータス: tab=', tabId, msg.status, 'cast=', msg.castName, msg.message || '');
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- Task B: CAST_PROFILE from content_spy.js ---
+  if (msg.type === 'CAST_PROFILE') {
+    loadAuth().then(async () => {
+      if (!accessToken || !accountId) {
+        console.warn('[LS-BG] CAST_PROFILE: 未認証 — スキップ');
+        sendResponse({ ok: false, error: 'Not authenticated' });
+        return;
+      }
+      const p = msg.profile || {};
+      const row = {
+        account_id: accountId,
+        cast_name: msg.cast_name || '',
+        age: p.age || null,
+        origin: p.origin || null,
+        body_type: p.body_type || null,
+        details: p.details || null,
+        ethnicity: p.ethnicity || null,
+        hair_color: p.hair_color || null,
+        eye_color: p.eye_color || null,
+        bio: p.bio || null,
+        followers_count: p.followers_count || null,
+        tip_menu: p.tip_menu || null,
+        epic_goal: p.epic_goal || null,
+        profile_data: p.profile_data || {},
+        fetched_at: new Date().toISOString(),
+      };
+      try {
+        const res = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/cast_profiles?on_conflict=cast_name,account_id`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=merge-duplicates',
+            },
+            body: JSON.stringify(row),
+          }
+        );
+        if (res.ok || res.status === 201) {
+          console.log('[LS-BG] CAST_PROFILE UPSERT成功:', msg.cast_name);
+          sendResponse({ ok: true });
+        } else {
+          const errText = await res.text().catch(() => '');
+          console.warn('[LS-BG] CAST_PROFILE UPSERT失敗:', res.status, errText);
+          sendResponse({ ok: false, error: errText });
+        }
+      } catch (err) {
+        console.warn('[LS-BG] CAST_PROFILE例外:', err.message);
+        sendResponse({ ok: false, error: err.message });
+      }
+    });
+    return true; // async
+  }
+
+  // --- Task B: CAST_FEED from content_spy.js ---
+  if (msg.type === 'CAST_FEED') {
+    loadAuth().then(async () => {
+      if (!accessToken || !accountId) {
+        console.warn('[LS-BG] CAST_FEED: 未認証 — スキップ');
+        sendResponse({ ok: false, error: 'Not authenticated' });
+        return;
+      }
+      const posts = msg.posts || [];
+      if (posts.length === 0) {
+        sendResponse({ ok: true, inserted: 0 });
+        return;
+      }
+      const rows = posts.map(p => ({
+        account_id: accountId,
+        cast_name: msg.cast_name || '',
+        post_text: p.post_text || null,
+        post_date: p.post_date || null,
+        likes_count: p.likes_count || 0,
+        has_image: p.has_image || false,
+        fetched_at: new Date().toISOString(),
+      }));
+      try {
+        const res = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/cast_feeds`,
+          {
+            method: 'POST',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=ignore-duplicates,return=minimal',
+            },
+            body: JSON.stringify(rows),
+          }
+        );
+        if (res.ok || res.status === 201) {
+          console.log('[LS-BG] CAST_FEED INSERT成功:', msg.cast_name, rows.length, '件');
+          sendResponse({ ok: true, inserted: rows.length });
+        } else {
+          const errText = await res.text().catch(() => '');
+          console.warn('[LS-BG] CAST_FEED INSERT失敗:', res.status, errText);
+          sendResponse({ ok: false, error: errText });
+        }
+      } catch (err) {
+        console.warn('[LS-BG] CAST_FEED例外:', err.message);
+        sendResponse({ ok: false, error: err.message });
+      }
+    });
+    return true; // async
+  }
+
+  // --- Whisper: Mark as read (content_whisper.jsから) ---
+  if (msg.type === 'WHISPER_READ') {
+    loadAuth().then(async () => {
+      if (!accessToken) {
+        sendResponse({ ok: false });
+        return;
+      }
+      try {
+        await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/whispers?id=eq.${msg.whisper_id}`,
+          {
+            method: 'PATCH',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ read_at: new Date().toISOString() }),
+          }
+        );
+        console.log('[LS-BG] Whisper既読更新:', msg.whisper_id);
+        sendResponse({ ok: true });
+      } catch (err) {
+        console.warn('[LS-BG] Whisper既読更新失敗:', err.message);
+        sendResponse({ ok: false });
+      }
+    });
+    return true;
+  }
+
+  // --- Popup: Auth credentials updated (ログイン直後に即通知) ---
+  if (msg.type === 'AUTH_UPDATED') {
+    accessToken = msg.access_token || null;
+    console.log('[LS-BG] AUTH_UPDATED受信: token=', accessToken ? accessToken.substring(0, 20) + '...' : 'null');
+    // storageにも保存（popup側で既に保存済みだが念のため）
+    const authData = {};
+    if (msg.access_token) authData.access_token = msg.access_token;
+    if (msg.refresh_token) authData.refresh_token = msg.refresh_token;
+    chrome.storage.local.set(authData);
+    // バッファにデータがあれば即座にflush試行
+    if (messageBuffer.length > 0 && accountId) {
+      console.log('[LS-BG] AUTH_UPDATED → バッファflush試行:', messageBuffer.length, '件');
+      flushMessageBuffer();
+    }
+    sendResponse({ ok: true, authenticated: !!accessToken });
+    return false;
+  }
+
+  // --- DM: Result from dm_executor.js (v2: SEND_DM → DM_SEND_RESULT) ---
+  if (msg.type === 'DM_SEND_RESULT') {
+    console.log('[LS-BG] DM_SEND_RESULT受信: taskId=', msg.taskId, 'success=', msg.success, 'error=', msg.error);
+    // 成功したtaskIdを記録（タイムアウト発火時のerror上書き防止）
+    if (msg.success) successfulTaskIds.add(msg.taskId);
+    const entry = pendingDMResults.get(msg.taskId);
+    if (entry) {
+      clearTimeout(entry.timeoutId);
+      pendingDMResults.delete(msg.taskId);
+      entry.resolve({ success: msg.success, error: msg.error || null });
+      console.log('[LS-BG] DM結果をPromiseに反映済み: taskId=', msg.taskId, 'success=', msg.success);
+    } else {
+      // タイムアウト済み — 遅延到着した成功結果でステータスを上書き
+      console.warn('[LS-BG] DM_SEND_RESULT: タイムアウト済み（遅延到着） taskId=', msg.taskId, 'success=', msg.success);
+      if (msg.success) {
+        console.log('[LS-BG] 遅延成功 → error→successに上書き: taskId=', msg.taskId);
+        updateDMTaskStatus(msg.taskId, 'success', null);
+      }
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- DM: username → userId解決（spy_viewers / paid_users / coin_transactions から）---
+  if (msg.type === 'RESOLVE_USER_ID') {
+    (async () => {
+      try {
+        const username = msg.username;
+        if (!username || !accountId || !accessToken) {
+          sendResponse({ userId: null });
+          return;
+        }
+        const headers = {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        };
+        const enc = encodeURIComponent(username);
+
+        // 1. spy_viewers.user_id_stripchat (TEXT)
+        try {
+          const res1 = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers?account_id=eq.${accountId}&user_name=eq.${enc}&user_id_stripchat=not.is.null&select=user_id_stripchat&order=last_seen_at.desc&limit=1`,
+            { headers }
+          );
+          if (res1.ok) {
+            const rows = await res1.json();
+            if (rows?.[0]?.user_id_stripchat) {
+              console.log('[LS-BG] RESOLVE_USER_ID (spy_viewers):', username, '→', rows[0].user_id_stripchat);
+              sendResponse({ userId: rows[0].user_id_stripchat });
+              return;
+            }
+          }
+        } catch (e) { /* fallthrough */ }
+
+        // 2. paid_users.user_id_stripchat (TEXT)
+        try {
+          const res2 = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/paid_users?account_id=eq.${accountId}&user_name=eq.${enc}&user_id_stripchat=not.is.null&select=user_id_stripchat&limit=1`,
+            { headers }
+          );
+          if (res2.ok) {
+            const rows = await res2.json();
+            if (rows?.[0]?.user_id_stripchat) {
+              console.log('[LS-BG] RESOLVE_USER_ID (paid_users):', username, '→', rows[0].user_id_stripchat);
+              sendResponse({ userId: rows[0].user_id_stripchat });
+              return;
+            }
+          }
+        } catch (e) { /* fallthrough */ }
+
+        // 3. coin_transactions.user_id (BIGINT — カラム名注意: user_id_stripchatではない)
+        try {
+          const res3 = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions?account_id=eq.${accountId}&user_name=eq.${enc}&user_id=not.is.null&select=user_id&limit=1`,
+            { headers }
+          );
+          if (res3.ok) {
+            const rows = await res3.json();
+            if (rows?.[0]?.user_id) {
+              const uid = String(rows[0].user_id);
+              console.log('[LS-BG] RESOLVE_USER_ID (coin_transactions):', username, '→', uid);
+              sendResponse({ userId: uid });
+              return;
+            }
+          }
+        } catch (e) { /* fallthrough */ }
+
+        console.log('[LS-BG] RESOLVE_USER_ID: not found for', username);
+        sendResponse({ userId: null });
+      } catch (e) {
+        console.warn('[LS-BG] RESOLVE_USER_ID error:', e.message);
+        sendResponse({ userId: null });
+      }
+    })();
+    return true;
+  }
+
+  // --- DM: Legacy DM_RESULT (互換性) ---
+  if (msg.type === 'DM_RESULT') {
+    console.log('[LS-BG] DM_RESULT (レガシー): dm_id=', msg.dm_id);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- Popup: Coin Sync trigger ---
+  if (msg.type === 'SYNC_COINS') {
+    console.log('[LS-BG] SYNC_COINS リクエスト受信');
+    handleCoinSync().then(sendResponse).catch(err => {
+      sendResponse({ ok: false, error: err.message });
+    });
+    return true; // async
+  }
+
+  // --- Popup: Get extension status ---
+  if (msg.type === 'GET_STATUS') {
+    loadAuth().then(async (auth) => {
+      const syncData = await chrome.storage.local.get(['last_coin_sync', 'coin_sync_count']);
+      // STTタブ情報を収集
+      const sttTabs = Object.entries(sttTabStates).map(([tid, s]) => ({
+        tabId: parseInt(tid),
+        castName: s.castName,
+        chunkCount: s.chunkCount,
+        lastChunkAt: s.lastChunkAt,
+      }));
+
+      const status = {
+        ok: true,
+        authenticated: !!auth.accessToken,
+        accountId: auth.accountId,
+        spyEnabled: auth.spyEnabled,
+        sttEnabled: sttEnabled,
+        sttTabs: sttTabs,
+        autoPatrolEnabled: autoPatrolEnabled,
+        spyRotationEnabled: spyRotationEnabled,
+        monitoredCasts: Object.entries(monitoredCastStatus).map(([name, st]) => ({ name, status: st })),
+        polling: !!dmPollingTimer,
+        spyMsgCount,
+        lastHeartbeat: lastHeartbeat || null,
+        bufferSize: messageBuffer.length,
+        lastCoinSync: syncData.last_coin_sync || null,
+        coinSyncCount: syncData.coin_sync_count || 0,
+      };
+      console.log('[LS-BG] GET_STATUS応答:', JSON.stringify(status));
+      sendResponse(status);
+    });
+    return true;
+  }
+
+  // --- Popup: Get DM queue (Supabase直接) ---
+  if (msg.type === 'GET_DM_QUEUE') {
+    loadAuth().then(async () => {
+      if (!accountId || !accessToken) {
+        sendResponse({ ok: true, data: [] });
+        return;
+      }
+      try {
+        const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+          + `?account_id=eq.${accountId}&status=in.(queued,sending)`
+          + `&order=created_at.asc&limit=50`
+          + `&select=id,user_name,message,status,campaign,created_at`;
+        const res = await fetch(url, {
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        });
+        if (!res.ok) throw new Error(`Supabase error: ${res.status}`);
+        const data = await res.json();
+        sendResponse({ ok: true, data });
+      } catch (err) {
+        sendResponse({ ok: false, error: err.message });
+      }
+    });
+    return true;
+  }
+
+  // --- OPEN_ALL_SPY_TABS: 全SPY監視タブ一斉オープン ---
+  if (msg.type === 'OPEN_ALL_SPY_TABS') {
+    (async () => {
+      try {
+        // フロントエンドからキャスト一覧が渡された場合はそれを使う、なければDB取得
+        let castNames;
+        if (msg.castNames && Array.isArray(msg.castNames) && msg.castNames.length > 0) {
+          castNames = msg.castNames;
+        } else {
+          await loadRegisteredCasts();
+          castNames = [...registeredCastNames];
+        }
+        if (castNames.length === 0) {
+          sendResponse({ ok: true, opened: 0, skipped: 0, total: 0, message: '登録キャストなし' });
+          return;
+        }
+
+        // 既に開いているStripchatタブのキャスト名を取得
+        const existingTabs = await chrome.tabs.query({ url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] });
+        const openCasts = new Set();
+        for (const tab of existingTabs) {
+          if (!tab.url) continue;
+          const m = tab.url.match(/stripchat\.com\/([A-Za-z0-9_-]+)/);
+          if (m) openCasts.add(m[1]);
+        }
+
+        // 未オープンのキャストだけタブを開く
+        const toOpen = castNames.filter(name => !openCasts.has(name));
+        for (const castName of toOpen) {
+          await chrome.tabs.create({
+            url: `https://stripchat.com/${castName}`,
+            active: false,
+          });
+          await sleep_bg(500); // ブラウザ負荷軽減
+        }
+
+        const result = { ok: true, opened: toOpen.length, skipped: castNames.length - toOpen.length, total: castNames.length };
+        console.log('[LS-BG] OPEN_ALL_SPY_TABS:', result);
+        sendResponse(result);
+      } catch (err) {
+        console.error('[LS-BG] OPEN_ALL_SPY_TABS失敗:', err.message);
+        sendResponse({ ok: false, error: err.message });
+      }
+    })();
+    return true; // async
+  }
+
+  // --- Frontend: DM Schedule 予約 ---
+  if (msg.type === 'SCHEDULE_DM') {
+    const { scheduleId, scheduledAt } = msg;
+    const delayMs = new Date(scheduledAt).getTime() - Date.now();
+    console.log('[LS-BG] SCHEDULE_DM受信: id=', scheduleId, 'at=', scheduledAt, 'delay=', delayMs, 'ms');
+
+    if (delayMs <= 60000) {
+      // 1分以内 → 即時実行
+      executeDmSchedule(scheduleId).catch(e => {
+        console.error('[LS-BG] DMスケジュール即時実行失敗:', e.message);
+      });
+    } else {
+      // chrome.alarmsで予約（分単位、最低1分）
+      const delayMinutes = Math.max(1, Math.ceil(delayMs / 60000));
+      chrome.alarms.create(`dm_schedule_${scheduleId}`, { delayInMinutes: delayMinutes });
+      console.log('[LS-BG] DMスケジュールアラーム設定:', delayMinutes, '分後');
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- Frontend: DM Schedule キャンセル ---
+  if (msg.type === 'CANCEL_DM_SCHEDULE') {
+    const { scheduleId } = msg;
+    chrome.alarms.clear(`dm_schedule_${scheduleId}`);
+    console.log('[LS-BG] DMスケジュールアラーム解除:', scheduleId);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- Popup: Toggle SPY ---
+  if (msg.type === 'TOGGLE_SPY') {
+    spyEnabled = msg.enabled;
+    chrome.storage.local.set({ spy_enabled: spyEnabled });
+    updateBadge();
+    console.log('[LS-BG] SPY切替: enabled=', spyEnabled, 'accountId=', accountId);
+    if (spyEnabled) {
+      // セッションID生成: UUID v4（spy_messagesテーブルのsession_id列がUUID型）
+      currentSessionId = crypto.randomUUID();
+      console.log('[LS-BG] SPYセッション開始: session_id=', currentSessionId);
+      lastHeartbeat = Date.now();
+      heartbeatAlerted = false;
+      chrome.storage.local.set({ spy_started_at: new Date().toISOString(), current_session_id: currentSessionId });
+      // sessionsテーブルにセッション開始を記録（fire-and-forget）
+      if (accountId) {
+        insertSession(currentSessionId, accountId).catch(e => {
+          console.error('[LS-BG] sessions開始記録失敗:', e.message);
+        });
+      }
+      // スクリーンショットタイマー開始
+      startScreenshotCapture();
+      // Viewer member list ポーリング開始（1分ごと）
+      chrome.alarms.create('viewerMembers', { periodInMinutes: 1 });
+      // SPY開始時にもセッション同期
+      exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync(SPY start):', e.message));
+      // SPY開始時にaccountIdが未設定なら警告
+      if (!accountId) {
+        console.warn('[LS-BG] 注意: SPY有効化されたがaccountId未設定 メッセージはバッファされflush時に付与');
+      }
+    } else {
+      // SPY OFF — セッション終了処理（fire-and-forget）
+      if (currentSessionId && accountId && accessToken) {
+        const closingSessionId = currentSessionId;
+        chrome.storage.local.get(['spy_started_at']).then(data => {
+          return closeSession(closingSessionId, data.spy_started_at);
+        }).catch(e => {
+          console.error('[LS-BG] sessions終了処理失敗:', e.message);
+        });
+      }
+      // C-1/C-2: 全キャストのper-castセッションも終了
+      for (const cn of [...castSessions.keys()]) {
+        closeCastSession(cn).catch(e => {
+          console.warn('[LS-BG] SPY OFF closeCastSession失敗:', cn, e.message);
+        });
+      }
+      console.log('[LS-BG] SPYセッション終了: session_id=', currentSessionId);
+      currentSessionId = null;
+      chrome.storage.local.set({ spy_started_at: null, spy_cast: null, current_session_id: null });
+
+      // スクリーンショットタイマー停止
+      stopScreenshotCapture();
+      // Viewer member list ポーリング停止
+      chrome.alarms.clear('viewerMembers');
+
+      // 配信終了 → 5分後にコイン同期を自動実行
+      console.log('[LS-BG] AutoCoinSync: 配信終了検出 → 5分後に同期予約');
+      chrome.alarms.create('coinSyncAfterStream', { delayInMinutes: 5 });
+    }
+    chrome.tabs.query(
+      { url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] },
+      (tabs) => {
+        console.log('[LS-BG] Stripchatタブ数:', tabs.length);
+        tabs.forEach((tab) => {
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'SPY_STATE',
+            enabled: spyEnabled,
+          }).then(() => {
+            console.log('[LS-BG] SPY_STATE送信成功 tab=', tab.id);
+          }).catch((e) => {
+            console.warn('[LS-BG] SPY_STATE送信失敗 tab=', tab.id, e.message);
+          });
+        });
+      }
+    );
+    sendResponse({ ok: true, spyEnabled });
+    return false;
+  }
+
+  // --- Popup: Toggle STT ---
+  if (msg.type === 'TOGGLE_STT') {
+    sttEnabled = msg.enabled;
+    chrome.storage.local.set({ stt_enabled: sttEnabled });
+    console.log('[LS-BG] STT切替: enabled=', sttEnabled);
+
+    // Stripchatタブに通知
+    chrome.tabs.query(
+      { url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] },
+      (tabs) => {
+        tabs.forEach((tab) => {
+          chrome.tabs.sendMessage(tab.id, {
+            type: 'STT_STATE',
+            enabled: sttEnabled,
+          }).catch(() => {});
+        });
+      }
+    );
+    sendResponse({ ok: true, sttEnabled });
+    return false;
+  }
+
+  // --- Popup: Toggle Auto Patrol ---
+  if (msg.type === 'TOGGLE_AUTO_PATROL') {
+    autoPatrolEnabled = msg.enabled;
+    chrome.storage.local.set({ auto_patrol_enabled: autoPatrolEnabled });
+    console.log('[LS-BG] AutoPatrol切替: enabled=', autoPatrolEnabled);
+    if (autoPatrolEnabled) {
+      // ON時に即時巡回
+      runAutoPatrol().catch(e => {
+        console.warn('[LS-BG] AutoPatrol: 手動ON後の巡回エラー:', e.message);
+      });
+    }
+    sendResponse({ ok: true, autoPatrolEnabled });
+    return false;
+  }
+
+  // --- Toggle SPY Rotation ---
+  if (msg.type === 'TOGGLE_SPY_ROTATION') {
+    spyRotationEnabled = msg.enabled;
+    chrome.storage.local.set({ spy_rotation_enabled: spyRotationEnabled });
+    console.log('[LS-BG] SpyRotation切替: enabled=', spyRotationEnabled);
+    if (spyRotationEnabled) {
+      handleSpyRotation().catch(e => {
+        console.warn('[LS-BG] SpyRotation: 手動ON後エラー:', e.message);
+      });
+    }
+    sendResponse({ ok: true, spyRotationEnabled });
+    return false;
+  }
+
+  // --- Popup: Get accounts list (Supabase REST API直接) ---
+  if (msg.type === 'GET_ACCOUNTS') {
+    loadAuth().then(async () => {
+      if (!accessToken) {
+        sendResponse({ ok: false, error: 'Not authenticated' });
+        return;
+      }
+      try {
+        const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/accounts?select=id,account_name`, {
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        });
+        if (!res.ok) throw new Error(`Supabase error: ${res.status}`);
+        const data = await res.json();
+        // アカウントが1つだけの場合は自動選択
+        if (Array.isArray(data) && data.length === 1 && !accountId) {
+          accountId = data[0].id;
+          chrome.storage.local.set({ account_id: accountId });
+          console.log('[LS-BG] アカウント自動選択:', accountId, data[0].account_name);
+        }
+        sendResponse({ ok: true, data });
+      } catch (err) {
+        console.warn('[LS-BG] アカウント取得失敗:', err.message);
+        sendResponse({ ok: false, error: err.message });
+      }
+    });
+    return true;
+  }
+
+  // --- JWT captured from content_jwt_capture.js ---
+  if (msg.type === 'JWT_CAPTURED') {
+    handleJwtCaptured(msg);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  // --- Popup: Set active account ---
+  if (msg.type === 'SET_ACCOUNT') {
+    accountId = msg.account_id;
+    chrome.storage.local.set({ account_id: msg.account_id });
+    console.log('[LS-BG] アカウント設定:', msg.account_id);
+    // accountIdが設定されたら溜まっているバッファのflushを試行
+    if (messageBuffer.length > 0) {
+      console.log('[LS-BG] アカウント設定完了 → 溜まっているバッファ', messageBuffer.length, '件のflush試行');
+      flushMessageBuffer();
+    }
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  return false;
+});
+
+// ============================================================
+// STT Queue Processing — 音声チャンクをFastAPIに送信（並行処理対応）
+// 最大STT_MAX_CONCURRENT件を同時にtranscribe
+// ============================================================
+async function processSTTQueue() {
+  if (sttChunkQueue.length === 0) return;
+  if (sttProcessing >= STT_MAX_CONCURRENT) return;
+
+  // 処理できる分だけ取り出す
+  while (sttChunkQueue.length > 0 && sttProcessing < STT_MAX_CONCURRENT) {
+    const chunk = sttChunkQueue.shift();
+    sttProcessing++;
+    processOneSTTChunk(chunk).finally(() => {
+      sttProcessing--;
+      // 残りがあれば続行
+      if (sttChunkQueue.length > 0) processSTTQueue();
+    });
+  }
+}
+
+async function processOneSTTChunk(chunk) {
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    console.warn('[LS-BG] STT: 認証未完了 チャンク破棄 cast=', chunk.castName);
+    return;
+  }
+
+  try {
+    const endpoint = CONFIG.STT_API_ENDPOINT || '/api/stt/transcribe';
+    let res = await fetch(`${CONFIG.API_BASE_URL}${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        account_id: accountId,
+        cast_name: chunk.castName,
+        audio_base64: chunk.data,
+        timestamp: chunk.timestamp,
+      }),
+    });
+
+    // 401 → トークンリフレッシュ後リトライ
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        res = await fetch(`${CONFIG.API_BASE_URL}${endpoint}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            account_id: accountId,
+            cast_name: chunk.castName,
+            audio_base64: chunk.data,
+            timestamp: chunk.timestamp,
+          }),
+        });
+      }
+    }
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.text) {
+        console.log('[LS-BG] STT結果: tab=', chunk.tabId, 'cast=', chunk.castName,
+          'text=', data.text.substring(0, 80), 'conf=', data.confidence);
+      }
+    } else {
+      console.warn('[LS-BG] STT API error: tab=', chunk.tabId, 'cast=', chunk.castName, 'status=', res.status);
+    }
+  } catch (err) {
+    console.warn('[LS-BG] STT処理エラー: tab=', chunk.tabId, 'cast=', chunk.castName, err.message);
+  }
+}
+
+// ============================================================
+// Coin Sync — Stripchat Earnings API → Supabase直接INSERT
+// ============================================================
+
+/**
+ * coin_transactionsテーブルから直近のcast_nameを取得
+ * popup未操作 + SPY未使用時のフォールバック用
+ */
+async function getLastSyncedCastName() {
+  if (!accessToken || !accountId) return null;
+  try {
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions?account_id=eq.${accountId}&cast_name=neq.unknown&select=cast_name&order=synced_at.desc&limit=1`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (data.length > 0 && data[0].cast_name) {
+        console.log('[LS-BG] CoinSync: 直近同期のcast_nameを取得:', data[0].cast_name);
+        return data[0].cast_name;
+      }
+    }
+  } catch (err) {
+    console.warn('[LS-BG] CoinSync: 直近cast_name取得失敗:', err.message);
+  }
+  return null;
+}
+
+/**
+ * コイン同期メインフロー（coin_api.py準拠）
+ * 1. /earnings/tokens-history ページのタブを探す or 遷移
+ * 2. content_coin_sync.jsを動的注入
+ * 3. FETCH_COINSメッセージ送信（365日分、全ページ取得）
+ * 4. 取得データをSupabaseに保存
+ */
+async function handleCoinSync() {
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    return { ok: false, error: 'ログインしてアカウントを選択してください' };
+  }
+
+  // ===== cast_name解決（5段階フォールバック） =====
+  // 1. last_sync_cast_name（ポップアップで選択されたキャスト）← 最優先
+  // 2. registered_casts（Supabase）から最初のアクティブキャスト（1件のみなら自動保存）
+  // 3. last_cast_name（SPY監視時に保存される）
+  // 4. coin_transactionsの直近cast_name（過去の同期実績から引き継ぎ）
+  // 5. フォールバック: 'unknown'（警告ログ付き）
+  const syncCastData = await chrome.storage.local.get(['last_sync_cast_name', 'last_cast_name']);
+  let syncCastName = syncCastData.last_sync_cast_name || null;
+
+  if (!syncCastName) {
+    await loadRegisteredCasts();
+    if (registeredCastNames.size > 0) {
+      syncCastName = [...registeredCastNames][0];
+      // キャスト1件のみなら次回以降のために保存
+      if (registeredCastNames.size === 1) {
+        chrome.storage.local.set({ last_sync_cast_name: syncCastName });
+      }
+    }
+  }
+  if (!syncCastName) {
+    syncCastName = syncCastData.last_cast_name || null;
+  }
+  if (!syncCastName) {
+    syncCastName = await getLastSyncedCastName();
+  }
+  if (!syncCastName) {
+    syncCastName = 'unknown';
+    console.warn('[LS-BG] CoinSync: cast_name解決失敗 — 全フォールバック経由で "unknown" を使用');
+  }
+  console.log('[LS-BG] CoinSync: cast_name =', syncCastName);
+
+  // ===== 差分同期ロジック =====
+  const syncStorageKey = `coin_sync_last_${accountId}`;
+  const stored = await chrome.storage.local.get(syncStorageKey);
+  const lastSyncISO = stored[syncStorageKey] || null;
+  const now = new Date();
+
+  const FULL_SYNC_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30日
+  const isFullSync = !lastSyncISO ||
+    (now.getTime() - new Date(lastSyncISO).getTime()) > FULL_SYNC_INTERVAL_MS;
+
+  if (isFullSync) {
+    console.log('[LS-BG] CoinSync: フル同期モード（全件取得）');
+  } else {
+    console.log(`[LS-BG] CoinSync: 差分同期モード（${lastSyncISO} 以降）`);
+  }
+  // ===========================
+
+  // Step 1: earningsページのタブを探す、なければStripchatタブを遷移
+  let targetTab;
+
+  // まず /earnings/ 配下のタブがあるか確認
+  let earningsTabs = await chrome.tabs.query({
+    url: ['*://stripchat.com/earnings/*', '*://*.stripchat.com/earnings/*'],
+  });
+
+  if (earningsTabs.length > 0) {
+    targetTab = earningsTabs[0];
+    console.log('[LS-BG] Coin同期: 既存earningsタブ使用 tab=', targetTab.id, targetTab.url);
+
+    // F5リロード直後はまだロード中の可能性がある — 完了を待つ
+    const tabInfo = await chrome.tabs.get(targetTab.id);
+    if (tabInfo.status !== 'complete') {
+      console.log('[LS-BG] Coin同期: タブがまだロード中 → 完了待ち');
+      const loaded = await waitForTabComplete(targetTab.id, 15000);
+      if (!loaded) {
+        return { ok: false, error: 'earningsページのロードがタイムアウトしました' };
+      }
+      await sleep_bg(2000);
+    }
+  } else {
+    // Stripchatタブを /earnings/tokens-history に遷移
+    const tabs = await chrome.tabs.query({
+      url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+    });
+
+    if (tabs.length === 0) {
+      return { ok: false, error: 'Stripchatタブを開いてログインしてください' };
+    }
+
+    targetTab = tabs[0];
+    console.log('[LS-BG] Coin同期: earningsページへ遷移 tab=', targetTab.id);
+
+    await chrome.tabs.update(targetTab.id, {
+      url: 'https://ja.stripchat.com/earnings/tokens-history',
+    });
+
+    // ページロード完了待ち
+    const loaded = await waitForTabComplete(targetTab.id, 15000);
+    if (!loaded) {
+      return { ok: false, error: 'earningsページのロードがタイムアウトしました' };
+    }
+    // DOMとCookie安定待ち（coin_api.pyと同様に十分な時間を確保）
+    await sleep_bg(3000);
+  }
+
+  // Step 2: content_coin_sync.jsを動的注入 + PING確認（最大2回リトライ）
+  const MAX_INJECT_ATTEMPTS = 2;
+  let scriptReady = false;
+
+  for (let attempt = 1; attempt <= MAX_INJECT_ATTEMPTS; attempt++) {
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: targetTab.id },
+        files: ['content_coin_sync.js'],
+      });
+      console.log(`[LS-BG] content_coin_sync.js 動的注入成功 (attempt ${attempt}): tab=`, targetTab.id);
+      await sleep_bg(500);
+    } catch (injectErr) {
+      console.error(`[LS-BG] content_coin_sync.js 注入失敗 (attempt ${attempt}):`, injectErr.message);
+      if (attempt === MAX_INJECT_ATTEMPTS) {
+        return { ok: false, error: 'Content script注入失敗: ' + injectErr.message };
+      }
+      await sleep_bg(2000);
+      continue;
+    }
+
+    // PING送信でcontent scriptのlistenerが応答するか確認
+    try {
+      const pingResult = await Promise.race([
+        chrome.tabs.sendMessage(targetTab.id, { type: 'COIN_SYNC_PING' }),
+        sleep_bg(3000).then(() => null),
+      ]);
+      if (pingResult && pingResult.pong) {
+        console.log('[LS-BG] COIN_SYNC_PING成功 — content script応答確認');
+        scriptReady = true;
+        break;
+      } else {
+        console.warn(`[LS-BG] COIN_SYNC_PING応答なし (attempt ${attempt})`);
+      }
+    } catch (pingErr) {
+      console.warn(`[LS-BG] COIN_SYNC_PING失敗 (attempt ${attempt}):`, pingErr.message);
+    }
+
+    if (attempt < MAX_INJECT_ATTEMPTS) {
+      // 次の試行前にページが安定するのを待つ
+      console.log('[LS-BG] content script再注入を試行します...');
+      await sleep_bg(2000);
+    }
+  }
+
+  if (!scriptReady) {
+    return { ok: false, error: 'Content scriptが応答しません。ページをリロードして再試行してください。' };
+  }
+
+  // Step 3: FETCH_COINS送信（10分タイムアウト付き）
+  const fetchOptions = isFullSync
+    ? { maxPages: 600, limit: 100 }
+    : { maxPages: 600, limit: 100, sinceISO: lastSyncISO };
+  console.log('[LS-BG] FETCH_COINS options:', JSON.stringify(fetchOptions));
+
+  const FETCH_TIMEOUT_MS = 10 * 60 * 1000; // 10分
+  let fetchResult;
+  try {
+    fetchResult = await Promise.race([
+      chrome.tabs.sendMessage(targetTab.id, {
+        type: 'FETCH_COINS',
+        options: fetchOptions,
+      }),
+      sleep_bg(FETCH_TIMEOUT_MS).then(() => ({ error: 'timeout', message: `${FETCH_TIMEOUT_MS / 60000}分タイムアウト` })),
+    ]);
+  } catch (err) {
+    console.error('[LS-BG] FETCH_COINS送信失敗:', err.message);
+    return { ok: false, error: 'Content script通信失敗: ' + err.message };
+  }
+
+  if (!fetchResult || fetchResult.error) {
+    const errMsg = fetchResult?.message || fetchResult?.error || '不明なエラー';
+    console.warn('[LS-BG] Coin取得エラー:', errMsg);
+    return { ok: false, error: errMsg };
+  }
+
+  const transactions = fetchResult.transactions || [];
+  const payingUsers = fetchResult.payingUsers || [];
+
+  if (transactions.length === 0 && payingUsers.length === 0) {
+    return { ok: true, synced: 0, message: 'トランザクションが見つかりませんでした' };
+  }
+
+  console.log('[LS-BG] COIN_SYNC_DATA:', transactions.length, '件受信, 有料ユーザー:', payingUsers.length, '名');
+
+  // Supabaseに保存
+  const result = await processCoinSyncData(transactions, syncCastName);
+
+  // 有料ユーザー一覧をpaid_usersにUPSERT（transactions APIとは別に）
+  if (payingUsers.length > 0) {
+    await processPayingUsersData(payingUsers, syncCastName);
+    result.payingUsers = payingUsers.length;
+    result.message = `${result.synced || 0}件のトランザクション、${payingUsers.length}名の有料ユーザーを同期しました`;
+  }
+
+  // 同期完了日時を保存（差分同期の基準点）
+  await chrome.storage.local.set({ [syncStorageKey]: now.toISOString() });
+  console.log(`[LS-BG] CoinSync: 同期日時保存 ${now.toISOString()}`);
+
+  return result;
+}
+
+/**
+ * コイントランザクションデータをSupabase REST APIで直接保存
+ * 1. coin_transactions UPSERT（500件バッチ、stripchat_tx_idで重複排除）
+ * 2. refresh_paying_users RPC（マテビュー更新）
+ * ※ paid_usersはprocessPayingUsersData()が担当（二重書き込み防止）
+ */
+async function processCoinSyncData(transactions, castName = 'unknown') {
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    return { ok: false, error: '認証エラー' };
+  }
+
+  const BATCH_SIZE = 500;
+  const now = new Date().toISOString();
+
+  // フィールドマッピング（content_coin_sync.js parseTransaction → coin_transactions）
+  const txRows = [];
+  for (const tx of transactions) {
+    const rawName = tx.userName || tx.user_name || tx.username || '';
+    const userName = rawName || (tx.isAnonymous === 1 ? 'anonymous' : 'unknown');
+    const tokens = parseInt(tx.tokens ?? 0, 10);
+    if (tokens <= 0) {
+      console.warn('[LS-BG] tokens <= 0 スキップ:', tokens, 'user=', rawName, 'type=', tx.type);
+      continue;
+    }
+    const txType = tx.type || 'unknown';
+    const txDate = tx.date || now;
+    const sourceDetail = tx.sourceDetail || tx.sourceType || '';
+    const stripchatTxId = tx.id ?? null;
+
+    txRows.push({
+      account_id: accountId,
+      cast_name: castName,
+      stripchat_tx_id: stripchatTxId,
+      user_name: userName,
+      user_id: tx.userId || null,
+      tokens: tokens,
+      amount: tx.amount ?? null,
+      type: txType,
+      date: txDate,
+      source_detail: sourceDetail,
+      is_anonymous: tx.isAnonymous === 1,
+      synced_at: now,
+    });
+  }
+
+  console.log('[LS-BG] coin_transactions マッピング完了:', txRows.length, '/', transactions.length, '件');
+
+  if (txRows.length === 0) {
+    return { ok: true, synced: 0, message: '有効なトランザクションがありません' };
+  }
+
+  // 1. coin_transactions UPSERT（500件バッチ、stripchat_tx_idで重複排除）
+  let insertedTx = 0;
+  let batchErrors = 0;
+  const totalBatches = Math.ceil(txRows.length / BATCH_SIZE);
+  console.log('[LS-BG] coin_transactions upsert開始:', txRows.length, '件 /', totalBatches, 'バッチ');
+
+  for (let i = 0; i < txRows.length; i += BATCH_SIZE) {
+    const batch = txRows.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+
+    try {
+      const res = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions?on_conflict=account_id,user_name,cast_name,tokens,date`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=ignore-duplicates,return=minimal',
+          },
+          body: JSON.stringify(batch),
+        }
+      );
+
+      if (res.ok || res.status === 201) {
+        insertedTx += batch.length;
+        console.log('[LS-BG] coin_transactions upsert バッチ', batchNum, '/', totalBatches, ':', batch.length, '件成功（累計', insertedTx, '件）');
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn('[LS-BG] coin_transactions upsert バッチ', batchNum, '失敗:', res.status, errText.substring(0, 200));
+        batchErrors++;
+      }
+    } catch (err) {
+      console.error('[LS-BG] coin_transactions upsert バッチ', batchNum, '例外:', err.message);
+      batchErrors++;
+    }
+  }
+
+  console.log('[LS-BG] coin_transactions upsert完了:', insertedTx, '件成功 / エラーバッチ:', batchErrors);
+
+  // paid_usersへの書き込みはprocessPayingUsersData()が担当（二重書き込み防止）
+
+  // 2. refresh_paying_users RPC（マテビュー更新）
+  try {
+    const rpcRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/rpc/refresh_paying_users`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: '{}',
+    });
+    if (rpcRes.ok) {
+      console.log('[LS-BG] refresh_paying_users RPC成功');
+    } else {
+      console.warn('[LS-BG] refresh_paying_users RPC: HTTP', rpcRes.status, '(関数が未作成の可能性 — 非致命的)');
+    }
+  } catch (err) {
+    console.warn('[LS-BG] refresh_paying_users RPC失敗（非致命的）:', err.message);
+  }
+
+  // refresh_segments RPC呼び出し（コイン同期後にセグメント自動更新）
+  try {
+    const segRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/rpc/refresh_segments`,
+      {
+        method: 'POST',
+        headers: { ...CONFIG.SUPABASE_HEADERS, Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ p_account_id: accountId }),
+      }
+    );
+    if (segRes.ok) {
+      const count = await segRes.json();
+      console.log('[LS-BG] refresh_segments RPC成功:', count, '件更新');
+    } else {
+      console.warn('[LS-BG] refresh_segments RPC: HTTP', segRes.status, '(関数が未作成の可能性 — 非致命的)');
+    }
+  } catch (err) {
+    console.warn('[LS-BG] refresh_segments RPC失敗（非致命的）:', err.message);
+  }
+
+  // 離脱DM自動トリガー（refresh_segments後 — fire-and-forget）
+  triggerChurnRecoveryDMs().catch(e => {
+    console.warn('[LS-BG] 離脱DMトリガー失敗（非致命的）:', e.message);
+  });
+
+  // 同期ステータス保存
+  await chrome.storage.local.set({
+    last_coin_sync: now,
+    coin_sync_count: insertedTx,
+  });
+
+  console.log('[LS-BG] ========== Coin同期完了 ==========');
+  console.log('[LS-BG] トランザクション:', insertedTx, '件');
+
+  return {
+    ok: true,
+    synced: insertedTx,
+    message: `${insertedTx}件のトランザクションを同期しました`,
+  };
+}
+
+/**
+ * 有料ユーザー一覧データ（/transactions/users API）をpaid_usersにUPSERT
+ * 500件バッチ、on_conflict=account_id,user_name で重複排除
+ */
+async function processPayingUsersData(payingUsers, castName = 'unknown') {
+  await loadAuth();
+  if (!accountId || !accessToken) return;
+
+  const BATCH_SIZE = 500;
+  const rows = payingUsers
+    .filter(u => u.userName)
+    .map(u => ({
+      account_id: accountId,
+      user_name: u.userName,
+      total_coins: u.totalTokens || 0,
+      last_payment_date: u.lastPaid || null,
+      user_id_stripchat: u.userId ? String(u.userId) : null,
+      cast_name: castName,
+    }));
+
+  if (rows.length === 0) return;
+
+  let insertedCount = 0;
+  const totalBatches = Math.ceil(rows.length / BATCH_SIZE);
+  console.log('[LS-BG] paid_users upsert開始（有料ユーザーAPI）:', rows.length, '名 /', totalBatches, 'バッチ');
+
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+
+    try {
+      const res = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/paid_users?on_conflict=account_id,user_name`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates,return=minimal',
+          },
+          body: JSON.stringify(batch),
+        }
+      );
+
+      if (res.ok || res.status === 201) {
+        insertedCount += batch.length;
+        console.log('[LS-BG] paid_users upsert バッチ', batchNum, '/', totalBatches, ':', batch.length, '名成功（累計', insertedCount, '名）');
+      } else {
+        const errText = await res.text().catch(() => '');
+        console.warn('[LS-BG] paid_users upsert バッチ', batchNum, '失敗:', res.status, errText.substring(0, 200));
+      }
+    } catch (err) {
+      console.warn('[LS-BG] paid_users upsert バッチ', batchNum, '例外:', err.message);
+    }
+  }
+
+  console.log('[LS-BG] paid_users upsert完了（有料ユーザーAPI）:', insertedCount, '/', rows.length, '名');
+}
+
+// ============================================================
+// DM Queue — Supabase直接ポーリング + タブ遷移方式
+// ============================================================
+
+/**
+ * Supabase REST APIでDMキューから1件取得
+ */
+async function fetchNextDMTask() {
+  await loadAuth();
+  if (!accountId || !accessToken) return null;
+
+  // API送信に30秒の猶予を与える（created_atが30秒以上前のもののみ取得）
+  const graceThreshold = new Date(Date.now() - 30 * 1000).toISOString();
+  const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+    + `?account_id=eq.${accountId}&status=eq.queued`
+    + `&created_at=lt.${encodeURIComponent(graceThreshold)}`
+    + `&order=created_at.asc&limit=1`
+    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order`;
+
+  const res = await fetch(url, {
+    headers: {
+      'apikey': CONFIG.SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) return null;
+      return fetchNextDMTask();
+    }
+    return null;
+  }
+
+  const data = await res.json();
+  return (Array.isArray(data) && data.length > 0) ? data[0] : null;
+}
+
+/**
+ * Supabase REST APIでDMキューから複数件取得（パイプライン用）
+ */
+async function fetchDMBatch(limit = 50) {
+  await loadAuth();
+  if (!accountId || !accessToken) return [];
+
+  const url = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+    + `?account_id=eq.${accountId}&status=eq.queued`
+    + `&order=created_at.asc&limit=${limit}`
+    + `&select=id,user_name,profile_url,message,campaign,target_user_id,image_url,send_order`;
+
+  const res = await fetch(url, {
+    headers: {
+      'apikey': CONFIG.SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) return [];
+      return fetchDMBatch(limit);
+    }
+    return [];
+  }
+
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * キャンペーン文字列から送信モード設定をパース
+ * Format: "pipe{N}_{batchId}" → pipeline, N tabs
+ *         "seq_{batchId}" → sequential
+ *         other → sequential (旧フォーマット互換)
+ */
+function parseBatchConfig(campaign) {
+  if (!campaign) return { mode: 'sequential', tabCount: 1 };
+  const pipeMatch = campaign.match(/^pipe(\d+)_/);
+  if (pipeMatch) {
+    return { mode: 'pipeline', tabCount: Math.min(parseInt(pipeMatch[1], 10), 5) };
+  }
+  if (campaign.startsWith('seq_')) {
+    return { mode: 'sequential', tabCount: 1 };
+  }
+  // bulk_ → デフォルトpipeline 3tab
+  if (campaign.startsWith('bulk_')) {
+    return { mode: 'pipeline', tabCount: 3 };
+  }
+  return { mode: 'sequential', tabCount: 1 };
+}
+
+/**
+ * DM送信ログのステータスをSupabase直接更新
+ */
+async function updateDMTaskStatus(taskId, status, error, sentVia) {
+  await loadAuth();
+  if (!accessToken) {
+    console.warn('[LS-BG] DMステータス更新スキップ: accessToken未設定 taskId=', taskId);
+    return;
+  }
+
+  const body = { status };
+  if (error) body.error = error;
+  if (status === 'success') body.sent_at = new Date().toISOString();
+  if (sentVia) body.sent_via = sentVia;
+
+  console.log('[LS-BG] DMステータス更新: taskId=', taskId, 'status=', status);
+
+  try {
+    const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?id=eq.${taskId}`, {
+      method: 'PATCH',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.error('[LS-BG] DMステータス更新失敗: HTTP', res.status, errText, 'taskId=', taskId, 'status=', status);
+
+      // 401の場合はトークンリフレッシュしてリトライ
+      if (res.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          console.log('[LS-BG] DMステータス更新リトライ: taskId=', taskId);
+          const retryRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log?id=eq.${taskId}`, {
+            method: 'PATCH',
+            headers: {
+              'apikey': CONFIG.SUPABASE_ANON_KEY,
+              'Authorization': `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'return=minimal',
+            },
+            body: JSON.stringify(body),
+          });
+          if (retryRes.ok) {
+            console.log('[LS-BG] DMステータス更新成功(リトライ): taskId=', taskId, 'status=', status);
+          } else {
+            console.error('[LS-BG] DMステータス更新リトライ失敗:', retryRes.status);
+          }
+        }
+      }
+    } else {
+      console.log('[LS-BG] DMステータス更新成功: taskId=', taskId, 'status=', status);
+    }
+  } catch (err) {
+    console.error('[LS-BG] DMステータス更新例外:', err.message, 'taskId=', taskId);
+  }
+}
+
+/**
+ * Stripchatタブを取得または作成
+ */
+async function getOrCreateStripchatTab() {
+  const tabs = await chrome.tabs.query({
+    url: ['*://stripchat.com/*', '*://*.stripchat.com/*'],
+  });
+  if (tabs.length > 0) return tabs[0];
+
+  // 新しいタブを作成
+  const newTab = await chrome.tabs.create({
+    url: 'https://stripchat.com/',
+    active: false,
+  });
+  // ページロードを待つ
+  await waitForTabComplete(newTab.id, 15000);
+  return newTab;
+}
+
+/**
+ * タブのロード完了を待つ
+ */
+function waitForTabComplete(tabId, timeout = 15000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+
+    function onUpdated(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(true);
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(onUpdated);
+
+    // タイムアウト
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      resolve(false);
+    }, timeout);
+
+    // 既にcompleteの場合
+    chrome.tabs.get(tabId).then(tab => {
+      if (tab.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve(true);
+      }
+    }).catch(() => resolve(false));
+  });
+}
+
+/**
+ * dm_executor.js からの結果を待つ（Map管理、複数タブ同時対応）
+ * タイムアウトはDM_SEND_RESULT受信時にクリアされる
+ */
+function waitForDMResult(taskId, timeout = 15000) {
+  return new Promise((resolve) => {
+    // 既存のエントリがあればクリア
+    const existing = pendingDMResults.get(taskId);
+    if (existing) clearTimeout(existing.timeoutId);
+
+    const timeoutId = setTimeout(() => {
+      if (pendingDMResults.has(taskId)) {
+        // 既に成功済みのtaskIdはerror上書きしない
+        if (successfulTaskIds.has(taskId)) {
+          console.log('[LS-BG] DM結果タイムアウト発火したが既に成功済み → スキップ: taskId=', taskId);
+          pendingDMResults.delete(taskId);
+          successfulTaskIds.delete(taskId);
+          resolve({ success: true, error: null });
+          return;
+        }
+        console.warn('[LS-BG] DM結果タイムアウト: taskId=', taskId, timeout + 'ms経過');
+        pendingDMResults.delete(taskId);
+        resolve({ success: false, error: `タイムアウト (${timeout / 1000}秒)` });
+      }
+    }, timeout);
+
+    pendingDMResults.set(taskId, { resolve, timeoutId });
+  });
+}
+
+function sleep_bg(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** DM送信間隔: 4秒 ± 1.5秒のランダム揺らぎ（最低2秒） */
+function getDMInterval() {
+  const base = 4000;
+  const jitter = (Math.random() - 0.5) * 3000; // -1500 ~ +1500
+  return Math.max(2000, base + jitter);
+}
+
+/**
+ * ページ読み込み＋__logger初期化を待機
+ * stripchat.comのページでCSRFパラメータが利用可能になるまでポーリング
+ */
+async function waitForPageLoad(tabId, maxWait = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: () => !!window.__logger?.kibanaLogger?.api?.csrfParams?.csrfToken,
+      });
+      if (results?.[0]?.result) {
+        console.log('[LS-BG] ページ読み込み完了 (__logger初期化済み)', (Date.now() - start) + 'ms');
+        return true;
+      }
+    } catch (e) { /* tab not ready yet */ }
+    await sleep_bg(500);
+  }
+  console.warn('[LS-BG] ページ読み込みタイムアウト (' + maxWait + 'ms) → それでも送信試行');
+  return false;
+}
+
+/**
+ * API経由でDM送信を試行（chrome.scripting.executeScript + world:'MAIN' で完結）
+ * Content Script通信を使わず、ページのwindowオブジェクトに直接アクセスしてCSRF取得+DM送信
+ * @returns {object|null} 成功時: { success, error, httpStatus }, API不可時: null
+ */
+async function tryDMviaAPI(task, tab) {
+  // クールダウン中はスキップ
+  if (Date.now() < dmApiCooldownUntil) {
+    const remainSec = Math.ceil((dmApiCooldownUntil - Date.now()) / 1000);
+    console.log('[LS-BG] DM API クールダウン中 (残り', remainSec, '秒) → DOMフォールバック');
+    return null;
+  }
+
+  // 連続エラー上限超過時はスキップ
+  if (dmApiConsecutiveErrors >= DM_API_MAX_CONSECUTIVE_ERRORS) {
+    console.log('[LS-BG] DM API 連続エラー', dmApiConsecutiveErrors, '回 → DOMフォールバック');
+    return null;
+  }
+
+  const tabId = typeof tab === 'object' ? tab.id : tab;
+
+  try {
+    // ---- 1. myUserId (AMP cookie decode) ----
+    let myUserId = null;
+    try {
+      const allCookies = await chrome.cookies.getAll({ domain: 'stripchat.com' });
+      for (const c of allCookies) {
+        if (c.name.startsWith('AMP_')) {
+          try {
+            const decoded = decodeURIComponent(atob(c.value));
+            const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
+            if (match) { myUserId = match[1]; break; }
+          } catch (e) { /* skip */ }
+        }
+      }
+      if (!myUserId) {
+        for (const c of allCookies) {
+          if (c.name === 'baseAmpl') {
+            try {
+              const decoded = decodeURIComponent(c.value);
+              const match = decoded.match(/"userId"\s*:\s*"(\d+)"/);
+              if (match) { myUserId = match[1]; break; }
+            } catch (e) { /* skip */ }
+          }
+        }
+      }
+    } catch (e) { /* skip */ }
+
+    if (!myUserId) {
+      console.warn('[LS-BG] DM API: myUserId取得失敗 → DOMフォールバック');
+      return null;
+    }
+    console.log('[LS-BG] DM API myUserId:', myUserId);
+
+    // ---- 2. targetUserId (DB解決) ----
+    let targetUserId = task.target_user_id ? String(task.target_user_id) : null;
+
+    if (!targetUserId && accountId && accessToken) {
+      const headers = {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+      };
+      const enc = encodeURIComponent(task.user_name);
+
+      // spy_viewers.user_id_stripchat (TEXT)
+      try {
+        const r1 = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers?account_id=eq.${accountId}&user_name=eq.${enc}&user_id_stripchat=not.is.null&select=user_id_stripchat&order=last_seen_at.desc&limit=1`,
+          { headers }
+        );
+        if (r1.ok) {
+          const rows = await r1.json();
+          if (rows?.[0]?.user_id_stripchat) targetUserId = rows[0].user_id_stripchat;
+        }
+      } catch (e) { /* fallthrough */ }
+
+      // paid_users.user_id_stripchat (TEXT)
+      if (!targetUserId) {
+        try {
+          const r2 = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/paid_users?account_id=eq.${accountId}&user_name=eq.${enc}&user_id_stripchat=not.is.null&select=user_id_stripchat&limit=1`,
+            { headers }
+          );
+          if (r2.ok) {
+            const rows = await r2.json();
+            if (rows?.[0]?.user_id_stripchat) targetUserId = rows[0].user_id_stripchat;
+          }
+        } catch (e) { /* fallthrough */ }
+      }
+
+      // coin_transactions.user_id (BIGINT)
+      if (!targetUserId) {
+        try {
+          const r3 = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/coin_transactions?account_id=eq.${accountId}&user_name=eq.${enc}&user_id=not.is.null&select=user_id&limit=1`,
+            { headers }
+          );
+          if (r3.ok) {
+            const rows = await r3.json();
+            if (rows?.[0]?.user_id) targetUserId = String(rows[0].user_id);
+          }
+        } catch (e) { /* fallthrough */ }
+      }
+    }
+
+    if (!targetUserId) {
+      console.warn('[LS-BG] DM API: targetUserId解決失敗:', task.user_name, '→ DOMフォールバック');
+      return null;
+    }
+    console.log('[LS-BG] DM API targetUserId:', task.user_name, '→', targetUserId);
+
+    // ---- 3. executeScript (MAIN world) でCSRF取得 + DM送信 ----
+    const messageBody = (task.message || '').replace(/\{username\}/g, task.user_name || '');
+    const imageUrl = task.image_url || null;
+    const sendOrder = task.send_order || 'text_only';
+
+    // 画像ありの場合: Service Worker側で先にBlob取得 → base64化してexecuteScriptに渡す
+    // （MAINワールドのfetchはStripchatオリジンになりCORSで失敗するため）
+    // text_onlyの場合は画像取得をスキップ
+    let imageBase64 = null;
+    if (imageUrl && sendOrder !== 'text_only') {
+      try {
+        console.log('[LS-BG] DM画像取得中 (sendOrder=' + sendOrder + '):', imageUrl.substring(0, 80) + '...');
+        const imgRes = await fetch(imageUrl);
+        if (!imgRes.ok) throw new Error('HTTP ' + imgRes.status);
+        const imgBlob = await imgRes.blob();
+        const arrayBuf = await imgBlob.arrayBuffer();
+        const bytes = new Uint8Array(arrayBuf);
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) {
+          binary += String.fromCharCode(bytes[i]);
+        }
+        imageBase64 = btoa(binary);
+        console.log('[LS-BG] DM画像取得成功:', (imageBase64.length / 1024).toFixed(1), 'KB (base64)');
+      } catch (e) {
+        console.error('[LS-BG] DM画像取得失敗:', e.message, '→ テキストのみ送信にフォールバック');
+        imageBase64 = null;
+      }
+    }
+
+    // 画像が必要なのに取得失敗 → text_onlyにフォールバック
+    const effectiveSendOrder = (sendOrder !== 'text_only' && !imageBase64) ? 'text_only' : sendOrder;
+
+    console.log('[LS-BG] DM API executeScript:', { tabId, myUserId, targetUserId, messageLen: messageBody.length, hasImage: !!imageBase64, sendOrder: effectiveSendOrder });
+
+    const execDmSend = async () => {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: (myUid, targetUid, msgBody, imgB64, sendOrd) => {
+          // ページコンテキストで実行（window.__loggerにアクセス可能）
+          var csrf = window.__logger && window.__logger.kibanaLogger
+            && window.__logger.kibanaLogger.api && window.__logger.kibanaLogger.api.csrfParams;
+          if (!csrf || !csrf.csrfToken) {
+            return {
+              success: false,
+              error: 'CSRF未初期化',
+              hasLogger: !!window.__logger,
+              hasKibana: !!(window.__logger && window.__logger.kibanaLogger),
+              hasApi: !!(window.__logger && window.__logger.kibanaLogger && window.__logger.kibanaLogger.api),
+            };
+          }
+
+          // レスポンス解析の共通処理
+          function parseResponse(r) {
+            return r.text().then(function (text) {
+              var data = null;
+              try { data = JSON.parse(text); } catch (e) { /* skip */ }
+              return { status: r.status, data: data, text: text.substring(0, 300) };
+            });
+          }
+          function handleMessageResponse(resp) {
+            if (resp.status >= 200 && resp.status < 300 && resp.data && resp.data.message) {
+              return { success: true, messageId: resp.data.message.id, httpStatus: resp.status };
+            }
+            return { success: false, error: 'HTTP ' + resp.status + ': ' + resp.text, httpStatus: resp.status };
+          }
+
+          // ---- ヘルパー関数 ----
+
+          // テキストメッセージ送信
+          function sendTextMessage(uniqId) {
+            return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+              credentials: 'include',
+              body: JSON.stringify({
+                body: msgBody,
+                csrfToken: csrf.csrfToken,
+                csrfTimestamp: csrf.csrfTimestamp,
+                csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
+                uniq: uniqId,
+              }),
+            })
+            .then(parseResponse)
+            .then(handleMessageResponse);
+          }
+
+          // 写真アップロード → mediaId返却
+          function uploadPhoto() {
+            var binaryStr = atob(imgB64);
+            var bytes = new Uint8Array(binaryStr.length);
+            for (var i = 0; i < binaryStr.length; i++) {
+              bytes[i] = binaryStr.charCodeAt(i);
+            }
+            var blob = new Blob([bytes], { type: 'image/jpeg' });
+
+            var fd = new FormData();
+            fd.append('photo', blob, 'image.jpg');
+            fd.append('source', 'upload');
+            fd.append('messenger', '1');
+            fd.append('csrfToken', csrf.csrfToken);
+            fd.append('csrfTimestamp', csrf.csrfTimestamp);
+            fd.append('csrfNotifyTimestamp', csrf.csrfNotifyTimestamp);
+
+            return fetch('/api/front/users/' + myUid + '/albums/0/photos', {
+              method: 'POST',
+              headers: { 'X-Requested-With': 'XMLHttpRequest' },
+              credentials: 'include',
+              body: fd,
+            })
+            .then(function (r) { return r.json(); })
+            .then(function (photoData) {
+              if (!photoData.photo || !photoData.photo.id) {
+                throw new Error('写真アップロード失敗: ' + JSON.stringify(photoData).substring(0, 200));
+              }
+              return photoData.photo.id;
+            });
+          }
+
+          // mediaId付きメッセージ送信（bodyは空文字可）
+          function sendMessageWithMedia(mediaId, body, uniqId) {
+            return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+              credentials: 'include',
+              body: JSON.stringify({
+                body: body || '',
+                mediaId: mediaId,
+                mediaSource: 'upload',
+                platform: 'Web',
+                csrfToken: csrf.csrfToken,
+                csrfTimestamp: csrf.csrfTimestamp,
+                csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
+                uniq: uniqId,
+              }),
+            })
+            .then(parseResponse)
+            .then(handleMessageResponse);
+          }
+
+          // ---- send_order 4パターン分岐 ----
+          try {
+            var uniq1 = Math.random().toString(36).substring(2, 18);
+            var uniq2 = Math.random().toString(36).substring(2, 18);
+
+            if (sendOrd === 'image_only') {
+              // 画像のみ: アップロード → mediaId付き送信（body空）
+              return uploadPhoto().then(function (mediaId) {
+                return sendMessageWithMedia(mediaId, '', uniq1);
+              }).catch(function (e) {
+                return { success: false, error: '画像DM送信エラー: ' + e.message };
+              });
+            }
+
+            if (sendOrd === 'text_then_image') {
+              // テキスト先 → 画像後（2通）
+              return sendTextMessage(uniq1).then(function (textResult) {
+                if (!textResult.success) return textResult;
+                return uploadPhoto().then(function (mediaId) {
+                  return sendMessageWithMedia(mediaId, '', uniq2);
+                }).then(function (imgResult) {
+                  return {
+                    success: imgResult.success,
+                    messageId: imgResult.messageId,
+                    httpStatus: imgResult.httpStatus,
+                    sentMessages: 2,
+                    textMessageId: textResult.messageId,
+                  };
+                });
+              }).catch(function (e) {
+                return { success: false, error: 'text_then_image エラー: ' + e.message };
+              });
+            }
+
+            if (sendOrd === 'image_then_text') {
+              // 画像先 → テキスト後（2通）
+              return uploadPhoto().then(function (mediaId) {
+                return sendMessageWithMedia(mediaId, '', uniq1);
+              }).then(function (imgResult) {
+                if (!imgResult.success) return imgResult;
+                return sendTextMessage(uniq2).then(function (textResult) {
+                  return {
+                    success: textResult.success,
+                    messageId: textResult.messageId,
+                    httpStatus: textResult.httpStatus,
+                    sentMessages: 2,
+                    imageMessageId: imgResult.messageId,
+                  };
+                });
+              }).catch(function (e) {
+                return { success: false, error: 'image_then_text エラー: ' + e.message };
+              });
+            }
+
+            // text_only（デフォルト）: テキストのみ
+            return sendTextMessage(uniq1).catch(function (e) {
+              return { success: false, error: e.message };
+            });
+
+          } catch (e) {
+            return Promise.resolve({ success: false, error: 'send_order処理エラー: ' + e.message });
+          }
+        },
+        args: [myUserId, targetUserId, messageBody, imageBase64, effectiveSendOrder],
+      });
+
+      return results?.[0]?.result || null;
+    };
+
+    let result = await execDmSend();
+
+    // CSRF未初期化 → 3秒待って1回リトライ
+    if (result && !result.success && result.error === 'CSRF未初期化') {
+      console.log('[LS-BG] DM API CSRF未初期化 → 3秒待機してリトライ...',
+        'hasLogger=' + result.hasLogger, 'hasKibana=' + result.hasKibana, 'hasApi=' + result.hasApi);
+      await sleep_bg(3000);
+      result = await execDmSend();
+
+      // まだ未初期化 → もう3秒
+      if (result && !result.success && result.error === 'CSRF未初期化') {
+        console.log('[LS-BG] DM API CSRF未初期化(2回目) → さらに3秒待機...');
+        await sleep_bg(3000);
+        result = await execDmSend();
+      }
+    }
+
+    if (!result) {
+      console.warn('[LS-BG] DM API executeScript結果なし → DOMフォールバック');
+      dmApiConsecutiveErrors++;
+      return null;
+    }
+
+    if (result.success) {
+      dmApiConsecutiveErrors = 0;
+      const sentCount = result.sentMessages || 1;
+      console.log('[LS-BG] DM API送信成功!', task.user_name, 'messageId:', result.messageId, 'sendOrder:', effectiveSendOrder, 'sentMessages:', sentCount);
+      return { success: true, error: null, httpStatus: result.httpStatus, via: 'api', sentMessages: sentCount };
+    }
+
+    // 失敗処理
+    dmApiConsecutiveErrors++;
+    const httpStatus = result.httpStatus;
+
+    if (httpStatus === 403) {
+      console.warn('[LS-BG] DM API 403 → 5分クールダウン');
+      dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_403;
+      return null;
+    }
+    if (httpStatus === 429) {
+      console.warn('[LS-BG] DM API 429 → 10分クールダウン');
+      dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_429;
+      return null;
+    }
+
+    console.warn('[LS-BG] DM API失敗:', result.error, '→ DOMフォールバック');
+    return null;
+
+  } catch (err) {
+    dmApiConsecutiveErrors++;
+    console.warn('[LS-BG] DM API例外:', err.message, '→ DOMフォールバック');
+    return null;
+  }
+}
+
+/**
+ * DOM経由でDM送信（従来方式: dm_executor.js）
+ * v6.0: 画像DM対応 — imageBase64 + sendOrder を dm_executor に渡す
+ */
+async function sendDMviaDOM(task, tab) {
+  const sendOrder = task.send_order || 'text_only';
+  const imageUrl = task.image_url || null;
+
+  // プロフィールURLに遷移
+  const profileUrl = task.profile_url
+    || `https://stripchat.com/user/${task.user_name}`;
+  console.log('[LS-BG] [DOM] タブ遷移:', profileUrl, 'sendOrder:', sendOrder);
+
+  await chrome.tabs.update(tab.id, { url: profileUrl });
+
+  // ページロード完了を待つ
+  const loaded = await waitForTabComplete(tab.id, 15000);
+  if (!loaded) {
+    throw new Error('ページロードタイムアウト');
+  }
+
+  // 描画安定待ち
+  await sleep_bg(1500);
+
+  // 画像が必要な場合: Service Worker側でfetch → base64化
+  let imageBase64 = null;
+  if (imageUrl && sendOrder !== 'text_only') {
+    try {
+      console.log('[LS-BG] [DOM] 画像取得中 (sendOrder=' + sendOrder + '):', imageUrl.substring(0, 80) + '...');
+      const imgRes = await fetch(imageUrl);
+      if (!imgRes.ok) throw new Error('HTTP ' + imgRes.status);
+      const imgBlob = await imgRes.blob();
+      const arrayBuf = await imgBlob.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      imageBase64 = btoa(binary);
+      console.log('[LS-BG] [DOM] 画像取得成功:', (imageBase64.length / 1024).toFixed(1), 'KB (base64)');
+    } catch (e) {
+      console.error('[LS-BG] [DOM] 画像取得失敗:', e.message, '→ テキストのみ送信にフォールバック');
+      imageBase64 = null;
+    }
+  }
+
+  const effectiveSendOrder = (sendOrder !== 'text_only' && !imageBase64) ? 'text_only' : sendOrder;
+
+  // content script に DM送信を指示（画像データ含む）
+  try {
+    await chrome.tabs.sendMessage(tab.id, {
+      type: 'SEND_DM',
+      taskId: task.id,
+      username: task.user_name,
+      message: task.message,
+      imageBase64: imageBase64,
+      sendOrder: effectiveSendOrder,
+    });
+  } catch (err) {
+    throw new Error('DM executor通信失敗: ' + err.message);
+  }
+
+  // 結果を待つ
+  return await waitForDMResult(task.id, CONFIG.DM_SEND_TIMEOUT);
+}
+
+// ============================================================
+// Serial DM Mode — API直列送信（ボット検知回避）
+//
+// タブ1つだけ使い、1通ずつ直列で送信。
+// 各送信後に4秒±1.5秒のランダム間隔。
+// API失敗時は個別にDOMフォールバック。
+// ============================================================
+
+/**
+ * DM API直列送信 — タブ1つで全タスクを順番に処理
+ * @param {Array} tasks - DMタスク配列（fetchDMBatch/fetchNextDMTask由来）
+ * @returns {Array} DOMフォールバックが必要なタスク配列
+ */
+async function processDMQueueSerial(tasks) {
+  console.log('[LS-BG] ========== DM API直列送信開始 ==========');
+  console.log('[LS-BG] タスク数:', tasks.length);
+
+  const domFallbackTasks = [];
+
+  // タブ1つだけ作成
+  let tabId;
+  try {
+    const tab = await chrome.tabs.create({
+      url: 'https://ja.stripchat.com/',
+      active: false,
+    });
+    tabId = tab.id;
+    console.log('[LS-BG] DM直列送信タブ作成: tabId=', tabId);
+  } catch (e) {
+    console.error('[LS-BG] DM直列送信タブ作成失敗:', e.message);
+    return tasks; // 全タスクをDOMフォールバックへ
+  }
+
+  // ページ読み込み待機（__loggerが初期化されるまで）
+  const tabLoaded = await waitForTabComplete(tabId, 12000);
+  if (tabLoaded) {
+    await waitForPageLoad(tabId, 8000);
+  } else {
+    console.warn('[LS-BG] タブ読み込みタイムアウト → それでも送信試行');
+  }
+
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    console.log(`[LS-BG] DM API直列送信 ${i + 1}/${tasks.length}: ${task.user_name}`);
+
+    await updateDMTaskStatus(task.id, 'sending', null);
+
+    // API送信試行
+    let apiResult = null;
+    try {
+      apiResult = await tryDMviaAPI(task, { id: tabId });
+    } catch (e) {
+      console.warn('[LS-BG] DM API例外:', e.message);
+    }
+
+    if (apiResult) {
+      if (apiResult.success) {
+        await updateDMTaskStatus(task.id, 'success', null, 'api');
+        console.log(`[LS-BG] DM API送信成功! ${task.user_name} (${i + 1}/${tasks.length})`);
+      } else {
+        await updateDMTaskStatus(task.id, 'error', apiResult.error, 'api');
+        console.warn(`[LS-BG] DM API送信失敗: ${task.user_name} → ${apiResult.error}`);
+      }
+    } else {
+      // API不可（userId解決失敗、クールダウン中等）→ DOMフォールバック対象
+      console.log(`[LS-BG] DM API不可 → DOMフォールバック対象: ${task.user_name}`);
+      await updateDMTaskStatus(task.id, 'queued', null); // sendingからqueuedに戻す
+      domFallbackTasks.push(task);
+    }
+
+    // 次のタスクがあれば間隔を空ける
+    if (i < tasks.length - 1) {
+      const interval = getDMInterval();
+      console.log(`[LS-BG] 次送信まで ${(interval / 1000).toFixed(1)}秒待機`);
+      await sleep_bg(interval);
+    }
+  }
+
+  // タブを閉じる
+  try {
+    await chrome.tabs.remove(tabId);
+  } catch (e) { /* already closed */ }
+
+  const apiCount = tasks.length - domFallbackTasks.length;
+  console.log(`[LS-BG] ========== DM直列送信完了 (API: ${apiCount}件, DOMフォールバック: ${domFallbackTasks.length}件) ==========`);
+
+  return domFallbackTasks;
+}
+
+// ============================================================
+// Pipeline DM Mode — DOMフォールバック用（ステージずらし方式）
+//
+// API送信に失敗したタスクのみ、従来のDOM方式で処理。
+// 同時にStripchatにリクエストを送るのは最大1タブ。
+// ページ遷移（URLの変更）は1タブずつ、最低2秒間隔。
+// DM操作（PMボタン→入力→送信）は並行OK。
+//
+// 時間 →
+// タブ1: [ページ読込] → [PM→入力→送信] → [次ページ読込] → ...
+// タブ2:              → [ページ読込]     → [PM→入力→送信] → ...
+// タブ3:                                → [ページ読込]     → ...
+// ============================================================
+
+// --- Navigation Lock: ページ遷移を1タブずつ制御 ---
+let navLockBusy = false;
+let lastNavTime = 0;
+const NAV_MIN_INTERVAL = 2000; // ページ遷移の最低間隔（Bot検知回避）
+
+async function acquireNavLock() {
+  // 他のタブが遷移中なら待つ
+  while (navLockBusy) {
+    await sleep_bg(300);
+  }
+  navLockBusy = true;
+
+  // 前回の遷移から最低2秒空ける
+  const elapsed = Date.now() - lastNavTime;
+  if (elapsed < NAV_MIN_INTERVAL) {
+    await sleep_bg(NAV_MIN_INTERVAL - elapsed);
+  }
+}
+
+function releaseNavLock() {
+  lastNavTime = Date.now();
+  navLockBusy = false;
+}
+
+/**
+ * パイプライン タブワーカー（DOM送信専用）:
+ * API送信失敗タスクをDOM方式で処理。ページ遷移はロックで1つずつ制御。
+ */
+async function pipelineTabWorker(tabId, queue, workerIdx) {
+  console.log('[LS-BG] DOM Pipeline Worker', workerIdx, '開始 tab=', tabId);
+
+  // 最初にStripchatページへ遷移（content script injection用）
+  try {
+    await chrome.tabs.update(tabId, { url: 'https://stripchat.com/' });
+    const tabReady = await waitForTabComplete(tabId, 10000);
+    if (tabReady) await sleep_bg(1500);
+  } catch (e) {
+    console.warn('[LS-BG] DOM Pipeline W', workerIdx, '初期ナビ失敗:', e.message);
+  }
+
+  while (queue.length > 0) {
+    const task = queue.shift();
+    if (!task) break;
+
+    console.log('[LS-BG] DOM Pipeline W', workerIdx, ': id=', task.id, 'user=', task.user_name);
+    await updateDMTaskStatus(task.id, 'sending', null);
+
+    // DOM送信（ページ遷移必要）
+    let navOk = false;
+    await acquireNavLock();
+    try {
+      const profileUrl = task.profile_url
+        || `https://stripchat.com/user/${task.user_name}`;
+      console.log('[LS-BG] DOM Pipeline W', workerIdx, 'ナビ開始:', task.user_name);
+
+      await chrome.tabs.update(tabId, { url: profileUrl });
+
+      const loaded = await waitForTabComplete(tabId, 15000);
+      if (!loaded) throw new Error('ページロードタイムアウト');
+
+      await sleep_bg(1500);
+      navOk = true;
+    } catch (err) {
+      console.error('[LS-BG] DOM Pipeline W', workerIdx, 'ナビ失敗:', err.message);
+      await updateDMTaskStatus(task.id, 'error', err.message);
+    } finally {
+      releaseNavLock();
+    }
+
+    if (!navOk) continue;
+
+    try {
+      // 画像が必要な場合: Service Workerで取得 → base64化
+      const pSendOrder = task.send_order || 'text_only';
+      const pImageUrl = task.image_url || null;
+      let pImageBase64 = null;
+
+      if (pImageUrl && pSendOrder !== 'text_only') {
+        try {
+          const imgRes = await fetch(pImageUrl);
+          if (imgRes.ok) {
+            const imgBlob = await imgRes.blob();
+            const arrayBuf = await imgBlob.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuf);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+              binary += String.fromCharCode(bytes[i]);
+            }
+            pImageBase64 = btoa(binary);
+            console.log('[LS-BG] DOM Pipeline W', workerIdx, '画像取得成功:', (pImageBase64.length / 1024).toFixed(1), 'KB');
+          }
+        } catch (e) {
+          console.warn('[LS-BG] DOM Pipeline W', workerIdx, '画像取得失敗:', e.message);
+        }
+      }
+
+      const pEffectiveSendOrder = (pSendOrder !== 'text_only' && !pImageBase64) ? 'text_only' : pSendOrder;
+
+      await chrome.tabs.sendMessage(tabId, {
+        type: 'SEND_DM',
+        taskId: task.id,
+        username: task.user_name,
+        message: task.message,
+        imageBase64: pImageBase64,
+        sendOrder: pEffectiveSendOrder,
+      });
+      const result = await waitForDMResult(task.id, CONFIG.DM_SEND_TIMEOUT);
+
+      if (result.success) {
+        await updateDMTaskStatus(task.id, 'success', null, 'extension');
+        console.log('[LS-BG] DOM Pipeline W', workerIdx, 'DM成功:', task.user_name, 'sendOrder:', pEffectiveSendOrder);
+      } else {
+        await updateDMTaskStatus(task.id, 'error', result.error, 'extension');
+        console.warn('[LS-BG] DOM Pipeline W', workerIdx, 'DM失敗:', task.user_name, result.error);
+      }
+    } catch (err) {
+      console.error('[LS-BG] DOM Pipeline W', workerIdx, 'DM例外:', err.message);
+      await updateDMTaskStatus(task.id, 'error', err.message);
+    }
+
+    // 次のタスク前にランダム待機
+    if (queue.length > 0) {
+      const interval = getDMInterval();
+      console.log('[LS-BG] DOM Pipeline W', workerIdx, '次送信まで', (interval / 1000).toFixed(1) + '秒待機');
+      await sleep_bg(interval);
+    }
+  }
+
+  console.log('[LS-BG] DOM Pipeline Worker', workerIdx, '完了');
+}
+
+/**
+ * パイプラインDM処理メイン
+ * Phase 1: API直列送信（タブ1つ、4秒±1.5秒間隔）
+ * Phase 2: API失敗分をDOM並列パイプラインでフォールバック
+ */
+async function processDMPipeline(tabCount) {
+  const allTasks = await fetchDMBatch(50);
+  if (allTasks.length === 0) return;
+
+  console.log('[LS-BG] ========== DM処理開始 ==========');
+  console.log('[LS-BG] タスク数:', allTasks.length);
+
+  // Phase 1: API直列送信（タブ1つ、4秒±1.5秒間隔）
+  const domFallbackTasks = await processDMQueueSerial(allTasks);
+
+  // Phase 2: API失敗分があればDOMパイプラインでフォールバック
+  if (domFallbackTasks.length > 0) {
+    console.log('[LS-BG] DOMフォールバック開始:', domFallbackTasks.length, '件');
+    const actualTabCount = Math.min(tabCount, domFallbackTasks.length, 3);
+
+    const tabIds = [];
+    for (let i = 0; i < actualTabCount; i++) {
+      try {
+        const tab = await chrome.tabs.create({ url: 'about:blank', active: false });
+        tabIds.push(tab.id);
+      } catch (err) {
+        console.warn('[LS-BG] DOMフォールバック タブ作成失敗:', err.message);
+      }
+    }
+
+    if (tabIds.length > 0) {
+      navLockBusy = false;
+      lastNavTime = 0;
+      const queue = [...domFallbackTasks];
+      await Promise.all(
+        tabIds.map((tabId, idx) => pipelineTabWorker(tabId, queue, idx))
+      );
+      for (const tabId of tabIds) {
+        try { await chrome.tabs.remove(tabId); } catch (e) { /* already closed */ }
+      }
+    }
+  }
+
+  console.log('[LS-BG] ========== DM処理完了 ==========');
+}
+
+/**
+ * DMスケジュールポーリング — pending + scheduled_at <= now のレコードを検出して実行
+ * keepaliveアラーム（30秒ごと）から呼ばれる
+ */
+async function checkDmSchedules() {
+  if (!accountId || !accessToken) return;
+
+  const now = new Date().toISOString();
+  const res = await fetch(
+    `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?account_id=eq.${accountId}&status=eq.pending&scheduled_at=lte.${encodeURIComponent(now)}&order=scheduled_at.asc&limit=3`,
+    {
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    }
+  );
+  if (!res.ok) return;
+  const schedules = await res.json();
+  if (!Array.isArray(schedules) || schedules.length === 0) return;
+
+  for (const sched of schedules) {
+    console.log('[LS-BG] DMスケジュール検出（ポーリング）: id=', sched.id, 'at=', sched.scheduled_at);
+    await executeDmSchedule(sched.id);
+  }
+}
+
+/**
+ * DMスケジュール実行
+ * dm_schedulesからスケジュール情報を取得し、dm_send_logにキュー登録して既存パイプラインに委譲
+ */
+async function executeDmSchedule(scheduleId) {
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    console.error('[LS-BG] DMスケジュール実行失敗: 認証情報なし');
+    return;
+  }
+
+  console.log('[LS-BG] DMスケジュール実行開始:', scheduleId);
+
+  try {
+    // 1. スケジュール情報を取得
+    const schedRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}&select=*`,
+      {
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!schedRes.ok) throw new Error(`スケジュール取得失敗: HTTP ${schedRes.status}`);
+    const schedArr = await schedRes.json();
+    if (!Array.isArray(schedArr) || schedArr.length === 0) {
+      console.warn('[LS-BG] DMスケジュール未検出:', scheduleId);
+      return;
+    }
+    const schedule = schedArr[0];
+
+    // pending以外は処理しない
+    if (schedule.status !== 'pending') {
+      console.log('[LS-BG] DMスケジュールスキップ: status=', schedule.status);
+      return;
+    }
+
+    // 2. ステータスを 'sending' に更新
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ status: 'sending' }),
+      }
+    );
+
+    // 3. 送信先ユーザーリストを組み立て
+    let usernames = schedule.target_usernames || [];
+
+    if (usernames.length === 0 && schedule.target_segment) {
+      // セグメント指定の場合: get_user_segments RPCからユーザー名を抽出
+      const segRes = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/rpc/get_user_segments`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            p_account_id: schedule.account_id,
+            p_cast_name: schedule.cast_name,
+          }),
+        }
+      );
+      if (segRes.ok) {
+        const segData = await segRes.json();
+        const targetSegs = schedule.target_segment === 'all'
+          ? null
+          : schedule.target_segment.split(',').map(s => s.trim());
+
+        const segments = Array.isArray(segData) ? segData : [];
+        for (const seg of segments) {
+          if (targetSegs && !targetSegs.includes(seg.segment_id)) continue;
+          if (Array.isArray(seg.users)) {
+            for (const u of seg.users) {
+              if (u.user_name && !usernames.includes(u.user_name)) {
+                usernames.push(u.user_name);
+              }
+            }
+          }
+        }
+      } else {
+        console.error('[LS-BG] セグメントRPC失敗:', segRes.status);
+      }
+    }
+
+    if (usernames.length === 0) {
+      console.warn('[LS-BG] DMスケジュール: 送信先なし');
+      await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({ status: 'failed', error_message: '送信先ユーザーが見つかりません' }),
+        }
+      );
+      return;
+    }
+
+    // 4. total_count更新
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({ total_count: usernames.length }),
+      }
+    );
+
+    // 5. dm_send_logにキュー登録（既存パイプラインが処理する）
+    const sendMode = schedule.send_mode || 'pipeline';
+    const tabCount = schedule.tab_count || 3;
+    const modePrefix = sendMode === 'pipeline' ? `pipe${tabCount}` : 'seq';
+    const campaignTag = schedule.campaign ? `${schedule.campaign}_` : '';
+    const batchCampaign = `${modePrefix}_${campaignTag}sched_${scheduleId.substring(0, 8)}`;
+
+    const rows = usernames.map(un => ({
+      account_id: schedule.account_id,
+      user_name: un,
+      profile_url: `https://stripchat.com/${un}`,
+      message: schedule.message,
+      status: 'queued',
+      campaign: batchCampaign,
+      cast_name: schedule.cast_name,
+    }));
+
+    // バッチINSERT（50件ずつ）
+    for (let i = 0; i < rows.length; i += 50) {
+      const batch = rows.slice(i, i + 50);
+      console.log('[LS-BG] DMスケジュール: dm_send_log INSERTリクエスト:', JSON.stringify(batch[0], null, 2), `(${batch.length}件)`);
+      const insertRes = await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`,
+        {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify(batch),
+        }
+      );
+      if (!insertRes.ok) {
+        const errBody = await insertRes.text().catch(() => '(レスポンス読取失敗)');
+        console.error('[LS-BG] DMスケジュール: dm_send_log INSERT失敗:', insertRes.status, errBody);
+      }
+    }
+
+    console.log('[LS-BG] DMスケジュール: dm_send_logに', usernames.length, '件キュー登録完了 campaign=', batchCampaign);
+
+    // 6. DMポーリングが動いていなければ開始（既存パイプラインが自動的に処理）
+    startDMPolling();
+
+    // 7. dm_schedulesのステータスを完了に（送信自体は既存パイプラインに委譲）
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          status: 'completed',
+          sent_count: usernames.length,
+          completed_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    console.log('[LS-BG] DMスケジュール完了:', scheduleId, usernames.length, '件');
+  } catch (e) {
+    console.error('[LS-BG] DMスケジュール実行例外:', e.message);
+    // エラーステータス更新
+    try {
+      await fetch(
+        `${CONFIG.SUPABASE_URL}/rest/v1/dm_schedules?id=eq.${scheduleId}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({ status: 'failed', error_message: e.message }),
+        }
+      );
+    } catch (patchErr) {
+      console.error('[LS-BG] DMスケジュールエラー更新失敗:', patchErr.message);
+    }
+  }
+}
+
+/**
+ * DMキュー処理メイン — API直列送信 + DOMフォールバック
+ * 全モードでAPI直列送信を先に試行し、失敗分のみDOMフォールバック
+ */
+async function processDMQueue() {
+  if (dmProcessing) return;
+  dmProcessing = true;
+
+  try {
+    // 最初の1件を見てキューに何かあるか確認
+    const peekTask = await fetchNextDMTask();
+    if (!peekTask) return;
+
+    // Safety: userInitiatedチェック — campaign接頭辞が正規UIフロー経由であることを確認
+    // 許可パターン: pipe{N}_, seq_, bulk_, sched_
+    const c = peekTask.campaign || '';
+    if (!c || !(c.startsWith('pipe') || c.startsWith('seq') || c.startsWith('bulk') || c.includes('_sched_'))) {
+      console.warn('[LS-BG] DM安全ブロック: 不正なcampaign形式 — UI経由でない可能性 campaign=', peekTask.campaign, 'id=', peekTask.id);
+      await updateDMTaskStatus(peekTask.id, 'error', 'DM安全ブロック: 正規UIフロー以外からのDM送信は拒否されました');
+      return;
+    }
+
+    // peekTaskをqueuedに戻す（fetchDMBatchで再取得するため）
+    await updateDMTaskStatus(peekTask.id, 'queued', null);
+
+    // DOMフォールバック時のタブ数を取得
+    const config = parseBatchConfig(peekTask.campaign);
+    const domTabCount = Math.max(config.tabCount, 1);
+
+    // API直列送信 → DOMフォールバックの2段構成
+    await processDMPipeline(domTabCount);
+  } catch (e) {
+    console.warn('[LS-BG] DMキュー処理エラー:', e.message);
+  } finally {
+    dmProcessing = false;
+  }
+}
+
+function startDMPolling() {
+  if (dmPollingTimer) return;
+  console.log('[LS-BG] DMポーリング開始 (Supabase直接, 10秒間隔)');
+
+  // 即時1回実行
+  processDMQueue();
+
+  dmPollingTimer = setInterval(() => {
+    processDMQueue();
+  }, 10000);
+}
+
+function stopDMPolling() {
+  if (dmPollingTimer) {
+    clearInterval(dmPollingTimer);
+    dmPollingTimer = null;
+    console.log('[LS-BG] DMポーリング停止');
+  }
+}
+
+// ============================================================
+// SPY自動巡回 — 自社キャストの配信開始を自動検出してSPY監視を起動
+// registered_castsのis_active=trueキャストを3分間隔でポーリング
+// ============================================================
+
+/**
+ * Stripchat公開APIでキャストのオンライン状態を確認
+ * @param {string} castName - キャスト名
+ * @returns {Promise<string>} 'public'|'private'|'offline'|'unknown'
+ */
+async function checkCastOnlineStatus(castName) {
+  try {
+    const res = await fetch(
+      `https://ja.stripchat.com/api/front/v2/models/username/${encodeURIComponent(castName)}/cam`,
+      { headers: { 'Accept': 'application/json' } }
+    );
+    if (!res.ok) {
+      console.warn('[LS-BG] AutoPatrol: API応答エラー cast=', castName, 'status=', res.status);
+      return 'unknown';
+    }
+    const data = await res.json();
+    // レスポンス構造: { user: { status: 'public'|'private'|'off'|... } }
+    const status = data?.user?.status || 'unknown';
+    return status;
+  } catch (err) {
+    console.warn('[LS-BG] AutoPatrol: APIエラー cast=', castName, err.message);
+    return 'unknown';
+  }
+}
+
+/**
+ * キャストがオンライン（配信中）かどうか判定
+ */
+function isStreamingStatus(status) {
+  return status === 'public' || status === 'private' || status === 'p2p';
+}
+
+/**
+ * 自動巡回メインロジック
+ * 1. registered_castsキャッシュから自社キャスト一覧を取得
+ * 2. 各キャストのStripchat APIでオンライン状態チェック
+ * 3. offline→online変化時: タブ自動オープン + SPY有効化
+ */
+async function runAutoPatrol() {
+  if (!autoPatrolEnabled) return;
+
+  await loadAuth();
+  if (!accessToken || !accountId) {
+    return;
+  }
+
+  // キャッシュが空ならロード
+  if (registeredCastNames.size === 0) {
+    await loadRegisteredCasts();
+  }
+  if (registeredCastNames.size === 0) {
+    return; // 自社キャスト未登録
+  }
+
+  console.log('[LS-BG] AutoPatrol: 巡回開始 キャスト数=', registeredCastNames.size,
+    [...registeredCastNames].join(', '));
+
+  for (const castName of registeredCastNames) {
+    const status = await checkCastOnlineStatus(castName);
+    const prevStatus = monitoredCastStatus[castName] || 'offline';
+
+    // ステータスが不明の場合は状態変更を判定しない
+    if (status === 'unknown') {
+      continue;
+    }
+
+    const wasStreaming = isStreamingStatus(prevStatus);
+    const nowStreaming = isStreamingStatus(status);
+
+    monitoredCastStatus[castName] = status;
+
+    // Task K: Survival tracking — update last_seen_online when cast is streaming
+    if (nowStreaming) {
+      updateCastLastSeen(castName).catch(e => {
+        console.warn('[LS-BG] last_seen_online更新失敗:', castName, e.message);
+      });
+    }
+
+    // offline → online に変化した場合
+    if (!wasStreaming && nowStreaming) {
+      console.log('[LS-BG] AutoPatrol: 配信開始検出! cast=', castName, 'status=', status);
+
+      // 通知
+      chrome.notifications.create(`patrol-online-${castName}`, {
+        type: 'basic',
+        iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><text y="24" font-size="24">🔴</text></svg>',
+        title: 'Strip Live Spot - 配信開始検出',
+        message: `${castName} が配信を開始しました（${status}）。SPY監視を自動起動します。`,
+        priority: 2,
+      });
+
+      // 既にこのキャストのタブが開いているかチェック
+      const existingTabId = autoPatrolTabs[castName];
+      let tabAlreadyOpen = false;
+      if (existingTabId) {
+        try {
+          await chrome.tabs.get(existingTabId);
+          tabAlreadyOpen = true;
+          console.log('[LS-BG] AutoPatrol: 既存タブあり cast=', castName, 'tab=', existingTabId);
+        } catch (e) {
+          // タブが閉じられている
+          delete autoPatrolTabs[castName];
+        }
+      }
+
+      // Stripchatタブ内で既にこのキャストを開いているかもチェック
+      if (!tabAlreadyOpen) {
+        try {
+          const tabs = await chrome.tabs.query({
+            url: [`*://stripchat.com/${castName}*`, `*://*.stripchat.com/${castName}*`],
+          });
+          if (tabs.length > 0) {
+            tabAlreadyOpen = true;
+            autoPatrolTabs[castName] = tabs[0].id;
+            console.log('[LS-BG] AutoPatrol: 既存Stripchatタブ発見 cast=', castName, 'tab=', tabs[0].id);
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      // タブが開いていなければ新規作成
+      if (!tabAlreadyOpen) {
+        try {
+          const newTab = await chrome.tabs.create({
+            url: `https://stripchat.com/${castName}`,
+            active: false,
+          });
+          autoPatrolTabs[castName] = newTab.id;
+          console.log('[LS-BG] AutoPatrol: タブ自動オープン cast=', castName, 'tab=', newTab.id);
+        } catch (e) {
+          console.error('[LS-BG] AutoPatrol: タブ作成失敗 cast=', castName, e.message);
+          continue;
+        }
+      }
+
+      // SPYがOFFなら自動ONにする（自動巡回有効 = SPY自動監視を望んでいる）
+      if (!spyEnabled) {
+        console.log('[LS-BG] AutoPatrol: SPY自動ON');
+        spyEnabled = true;
+        currentSessionId = crypto.randomUUID();
+        lastHeartbeat = Date.now();
+        heartbeatAlerted = false;
+        chrome.storage.local.set({
+          spy_enabled: true,
+          spy_started_at: new Date().toISOString(),
+          current_session_id: currentSessionId,
+        });
+        updateBadge();
+
+        // sessionsテーブルにセッション開始を記録
+        chrome.storage.local.set({ last_cast_name: castName });
+        insertSession(currentSessionId, accountId).catch(e => {
+          console.error('[LS-BG] AutoPatrol: sessions開始記録失敗:', e.message);
+        });
+
+        // スクリーンショットタイマー開始
+        startScreenshotCapture();
+        // Viewer member list ポーリング開始（1分ごと）
+        chrome.alarms.create('viewerMembers', { periodInMinutes: 1 });
+
+        // 全Stripchatタブにも通知
+        chrome.tabs.query(
+          { url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] },
+          (tabs) => {
+            tabs.forEach((tab) => {
+              chrome.tabs.sendMessage(tab.id, {
+                type: 'SPY_STATE',
+                enabled: true,
+              }).catch(() => {});
+            });
+          }
+        );
+      }
+    }
+
+    // online → offline に変化した場合
+    if (wasStreaming && !nowStreaming) {
+      console.log('[LS-BG] AutoPatrol: 配信終了検出 cast=', castName, 'status=', status);
+
+      chrome.notifications.create(`patrol-offline-${castName}`, {
+        type: 'basic',
+        iconUrl: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><text y="24" font-size="24">⚫</text></svg>',
+        title: 'Strip Live Spot - 配信終了検出',
+        message: `${castName} の配信が終了しました。`,
+        priority: 1,
+      });
+    }
+
+    // API呼び出し間に小さな間隔を入れる（レート制限回避）
+    if (registeredCastNames.size > 1) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+
+/**
+ * 自動巡回の初期化: storageからautoPatrolEnabled状態を復元
+ */
+async function initAutoPatrol() {
+  const data = await chrome.storage.local.get(['auto_patrol_enabled']);
+  autoPatrolEnabled = data.auto_patrol_enabled !== false; // デフォルトON
+  console.log('[LS-BG] AutoPatrol: 初期化 enabled=', autoPatrolEnabled);
+  if (autoPatrolEnabled) {
+    // 初回即時巡回（起動直後）
+    runAutoPatrol().catch(e => {
+      console.warn('[LS-BG] AutoPatrol: 初回巡回エラー:', e.message);
+    });
+  }
+}
+
+// ============================================================
+// Task K: Survival Tracking — last_seen_online + extinct detection
+// ============================================================
+
+/**
+ * updateCastLastSeen(castName)
+ * キャストがオンライン検出された時に registered_casts / spy_casts の
+ * last_seen_online を更新し、is_extinct を false にリセット
+ */
+async function updateCastLastSeen(castName) {
+  if (!accessToken || !accountId) return;
+  const now = new Date().toISOString();
+  const patchBody = JSON.stringify({
+    last_seen_online: now,
+    is_extinct: false,
+    extinct_at: null,
+  });
+  const headers = {
+    'apikey': CONFIG.SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+  };
+
+  // Update registered_casts
+  try {
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(castName)}`,
+      { method: 'PATCH', headers, body: patchBody }
+    );
+  } catch (e) {
+    // ignore — cast may not be in registered_casts
+  }
+
+  // Update spy_casts
+  try {
+    await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/spy_casts?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(castName)}`,
+      { method: 'PATCH', headers, body: patchBody }
+    );
+  } catch (e) {
+    // ignore — cast may not be in spy_casts
+  }
+
+  console.log('[LS-BG] Survival: last_seen_online更新:', castName);
+}
+
+/**
+ * checkExtinctCasts()
+ * last_seen_online が30日以上前のキャストを is_extinct = true にマーク
+ * 24時間ごとに chrome.alarms 'check-extinct-casts' で実行
+ */
+async function checkExtinctCasts() {
+  await loadAuth();
+  if (!accessToken || !accountId) return;
+
+  const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const now = new Date().toISOString();
+  const patchBody = JSON.stringify({
+    is_extinct: true,
+    extinct_at: now,
+  });
+  const headers = {
+    'apikey': CONFIG.SUPABASE_ANON_KEY,
+    'Authorization': `Bearer ${accessToken}`,
+    'Content-Type': 'application/json',
+  };
+
+  // PATCH registered_casts where last_seen_online < 30 days ago AND is_extinct = false
+  try {
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/registered_casts?account_id=eq.${accountId}&is_extinct=eq.false&last_seen_online=lt.${encodeURIComponent(thirtyDaysAgo)}`,
+      { method: 'PATCH', headers, body: patchBody }
+    );
+    if (res.ok) {
+      console.log('[LS-BG] ExtinctCasts: registered_casts PATCH成功');
+    }
+  } catch (e) {
+    console.warn('[LS-BG] ExtinctCasts: registered_casts PATCH失敗:', e.message);
+  }
+
+  // PATCH spy_casts where last_seen_online < 30 days ago AND is_extinct = false
+  try {
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/spy_casts?account_id=eq.${accountId}&is_extinct=eq.false&last_seen_online=lt.${encodeURIComponent(thirtyDaysAgo)}`,
+      { method: 'PATCH', headers, body: patchBody }
+    );
+    if (res.ok) {
+      console.log('[LS-BG] ExtinctCasts: spy_casts PATCH成功');
+    }
+  } catch (e) {
+    console.warn('[LS-BG] ExtinctCasts: spy_casts PATCH失敗:', e.message);
+  }
+
+  console.log('[LS-BG] ExtinctCasts: 消滅チェック完了 (threshold:', thirtyDaysAgo, ')');
+}
+
+// ============================================================
+// SPY他社ローテーション — spy_castsのキャストを自動巡回・タブ管理
+// ============================================================
+
+/**
+ * SPYローテーション初期化: storageから状態を復元
+ */
+async function initSpyRotation() {
+  const data = await chrome.storage.local.get(['spy_rotation_enabled']);
+  spyRotationEnabled = data.spy_rotation_enabled === true; // デフォルトOFF
+  console.log('[LS-BG] SpyRotation: 初期化 enabled=', spyRotationEnabled);
+}
+
+/**
+ * 他社SPYローテーション メインロジック
+ * - spy_castsのキャストのオンライン状態をチェック
+ * - オンラインならタブオープン、オフラインならタブクローズ
+ * - 自社キャスト（registered_casts）のタブは絶対に閉じない
+ * - 同時タブ数上限あり
+ */
+async function handleSpyRotation() {
+  if (!spyRotationEnabled || !spyEnabled) return;
+
+  await loadAuth();
+  if (!accessToken || !accountId) return;
+
+  // キャッシュが空ならロード
+  if (spyCastNamesCache.size === 0) {
+    await loadRegisteredCasts();
+  }
+  if (spyCastNamesCache.size === 0) return;
+
+  const EXCLUDE_PAGES = ['favorites', 'messages', 'settings', 'feed', 'members', 'login', 'signup', 'new', 'search', 'models', 'categories', '404'];
+
+  // 現在開いているStripchatタブを取得
+  const existingTabs = await chrome.tabs.query({ url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] });
+  const openCastTabs = new Map(); // castName → tabId
+  for (const tab of existingTabs) {
+    if (!tab.url || !tab.id) continue;
+    const m = tab.url.match(/stripchat\.com\/([A-Za-z0-9_-]+)/);
+    if (!m) continue;
+    if (EXCLUDE_PAGES.includes(m[1])) continue;
+    openCastTabs.set(m[1], tab.id);
+  }
+
+  let opened = 0;
+  let closed = 0;
+  const onlineCount = { total: 0 };
+
+  // 各spy_castのオンライン状態をチェック
+  for (const castName of spyCastNamesCache) {
+    // 自社キャストはAutoPatrolの管轄なのでスキップ
+    if (ownCastNamesCache.has(castName)) continue;
+
+    const status = await checkCastOnlineStatus(castName);
+    if (status === 'unknown') continue;
+
+    const nowStreaming = isStreamingStatus(status);
+    const prevStatus = monitoredCastStatus[castName] || 'offline';
+    monitoredCastStatus[castName] = status;
+
+    // Survival tracking
+    if (nowStreaming) {
+      onlineCount.total++;
+      updateCastLastSeen(castName).catch(() => {});
+    }
+
+    // オンラインなのにタブが開いていない → オープン
+    if (nowStreaming && !openCastTabs.has(castName)) {
+      // タブ数上限チェック
+      if (openCastTabs.size + opened - closed >= MAX_SPY_ROTATION_TABS) {
+        console.log('[LS-BG] SpyRotation: タブ上限到達 skip=', castName);
+        continue;
+      }
+      try {
+        const newTab = await chrome.tabs.create({
+          url: `https://stripchat.com/${castName}`,
+          active: false,
+        });
+        spyRotationTabs[castName] = newTab.id;
+        opened++;
+        console.log('[LS-BG] SpyRotation: タブオープン cast=', castName, 'tab=', newTab.id);
+        await sleep_bg(500);
+      } catch (e) {
+        console.warn('[LS-BG] SpyRotation: タブ作成失敗 cast=', castName, e.message);
+      }
+    }
+
+    // オフラインでタブが開いている → クローズ（ローテーションで開いたタブのみ）
+    if (!nowStreaming && isStreamingStatus(prevStatus)) {
+      const tabId = spyRotationTabs[castName];
+      if (tabId) {
+        // 自社キャスト保護: 絶対に閉じない
+        if (ownCastNamesCache.has(castName)) continue;
+        try {
+          await chrome.tabs.remove(tabId);
+          delete spyRotationTabs[castName];
+          closed++;
+          console.log('[LS-BG] SpyRotation: タブクローズ cast=', castName, 'tab=', tabId);
+        } catch {
+          delete spyRotationTabs[castName];
+        }
+      }
+    }
+
+    // API レート制限回避
+    await sleep_bg(1000);
+  }
+
+  const totalTabs = openCastTabs.size + opened - closed;
+  console.log(`[LS-BG] SpyRotation: online=${onlineCount.total}, opened=${opened}, closed=${closed}, tabs=${totalTabs}/${MAX_SPY_ROTATION_TABS}`);
+}
+
+// ============================================================
+// Screenshot Capture — SPY監視中の全タブスクリーンショット（5分間隔）
+// ============================================================
+
+/**
+ * CDN方式: Stripchat公開APIからサムネイルURLを取得
+ * captureVisibleTab不要 — タブを開かなくてもOK
+ */
+async function fetchThumbnail(username) {
+  try {
+    const res = await fetch(`https://stripchat.com/api/front/v2/models/username/${username}/cam`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const modelId = data?.user?.id;
+    const snapshotTimestamp = data?.user?.snapshotTimestamp;
+    if (!modelId || !snapshotTimestamp) return null;
+    const thumbUrl = `https://img.doppiocdn.org/thumbs/${snapshotTimestamp}/${modelId}_webp`;
+    return { thumbUrl, modelId, snapshotTimestamp, status: data?.user?.status || 'unknown' };
+  } catch (err) {
+    console.warn('[LS-SPY] fetchThumbnail failed:', username, err.message);
+    return null;
+  }
+}
+
+/**
+ * CDN方式: 全監視キャストのサムネイルをCDN URLで保存
+ * captureVisibleTabの代替 — タブ切り替え不要
+ */
+async function captureAllThumbnailsCDN() {
+  if (!accessToken || !accountId) return;
+
+  // 登録キャスト一覧を収集
+  const castNames = [];
+  if (registeredCastNames && registeredCastNames.size > 0) {
+    for (const name of registeredCastNames) castNames.push(name);
+  } else if (ownCastNamesCache && ownCastNamesCache.size > 0) {
+    for (const name of ownCastNamesCache) castNames.push(name);
+  }
+
+  // SPY監視中のタブからもキャスト名を収集
+  const EXCLUDE_PAGES = ['favorites', 'messages', 'settings', 'feed', 'members', 'login', 'signup', 'new', 'search', 'models', 'categories', '404'];
+  try {
+    const allTabs = await chrome.tabs.query({ url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] });
+    for (const tab of allTabs) {
+      if (!tab.url) continue;
+      const m = tab.url.match(/stripchat\.com\/([A-Za-z0-9_-]+)/);
+      if (!m) continue;
+      const name = m[1];
+      if (!EXCLUDE_PAGES.includes(name) && !castNames.includes(name)) {
+        castNames.push(name);
+      }
+    }
+  } catch { /* tabs API not available */ }
+
+  if (castNames.length === 0) return;
+
+  console.log(`[LS-SPY] CDN Thumbnail: ${castNames.length}キャスト対象: ${castNames.join(', ')}`);
+
+  for (const castName of castNames) {
+    // キャスト別間隔チェック
+    const interval = screenshotIntervalCache[castName];
+    if (interval === undefined || interval === null || interval <= 0) continue;
+    const lastCapture = screenshotLastCapture[castName] || 0;
+    const elapsedMin = (Date.now() - lastCapture) / 60000;
+    if (elapsedMin < interval) continue;
+
+    const result = await fetchThumbnail(castName);
+    if (!result) {
+      console.log(`[LS-SPY] CDN Thumbnail: ${castName} — サムネイル取得失敗（オフライン or API変更）`);
+      continue;
+    }
+
+    // メタデータをscreenshotsテーブルに保存（CDN URLのみ、Storageアップロード不要）
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `${castName}_cdn_${timestamp}.webp`;
+    const sessionId = castSessions.get(castName) || currentSessionId || null;
+
+    try {
+      const metaRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/screenshots`, {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=minimal',
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          cast_name: castName,
+          session_id: sessionId,
+          filename: filename,
+          storage_path: null,
+          thumbnail_url: result.thumbUrl,
+          captured_at: new Date().toISOString(),
+        }),
+      });
+      if (metaRes.ok) {
+        screenshotLastCapture[castName] = Date.now();
+        console.log(`[LS-SPY] CDN Thumbnail saved: ${castName} status=${result.status}`);
+      } else {
+        console.warn(`[LS-SPY] CDN Thumbnail metadata failed: ${castName}`, metaRes.status);
+      }
+    } catch (err) {
+      console.warn(`[LS-SPY] CDN Thumbnail error: ${castName}`, err.message);
+    }
+
+    await sleep_bg(500); // API rate limit
+  }
+}
+
+function startScreenshotCapture() {
+  chrome.alarms.get('spy-screenshot', (existing) => {
+    if (!existing) {
+      chrome.alarms.create('spy-screenshot', { periodInMinutes: 1 });
+    }
+  });
+  // 即時キャプチャ（CDN方式優先）
+  captureAllThumbnailsCDN().catch(e => console.warn('[LS-BG] Screenshot: CDN初回キャプチャ失敗:', e.message));
+  console.log('[LS-SPY] Screenshot alarm registered (1分間隔, CDN方式優先)');
+}
+
+function stopScreenshotCapture() {
+  chrome.alarms.clear('spy-screenshot');
+  console.log('[LS-SPY] Screenshot alarm cleared');
+}
+
+/**
+ * SPY監視中の全Stripchatタブを順番に撮影する
+ * 方式A: タブ切り替え → captureVisibleTab → 元に戻す
+ */
+async function captureAllSpyTabs() {
+  if (!spyEnabled || !accessToken || !accountId) return;
+
+  // 全Stripchatタブを取得 — 配信ページを開いている全タブが対象（競合監視含む）
+  const EXCLUDE_PAGES = ['favorites', 'messages', 'settings', 'feed', 'members', 'login', 'signup', 'new', 'search', 'models', 'categories', '404'];
+  const allTabs = await chrome.tabs.query({ url: ['*://stripchat.com/*', '*://*.stripchat.com/*'] });
+  const spyTabs = [];
+  for (const tab of allTabs) {
+    if (!tab.url || !tab.id) continue;
+    const m = tab.url.match(/stripchat\.com\/([A-Za-z0-9_-]+)/);
+    if (!m) continue;
+    const castName = m[1];
+    if (EXCLUDE_PAGES.includes(castName)) continue;
+    spyTabs.push({ tabId: tab.id, windowId: tab.windowId, castName, active: tab.active });
+  }
+
+  if (spyTabs.length === 0) {
+    console.log('[LS-SPY] Screenshot: 撮影対象タブなし');
+    return;
+  }
+
+  // キャスト別間隔チェック: 撮影対象のタブだけに絞る
+  const now = Date.now();
+  const tabsToCapture = spyTabs.filter(t => {
+    const interval = screenshotIntervalCache[t.castName];
+    if (interval === undefined || interval === null || interval <= 0) return false; // OFF
+    const lastCapture = screenshotLastCapture[t.castName] || 0;
+    const elapsedMin = (now - lastCapture) / 60000;
+    return elapsedMin >= interval;
+  });
+
+  if (tabsToCapture.length === 0) return; // 全キャストまだ撮影不要
+
+  const castNames = tabsToCapture.map(t => `${t.castName}(${screenshotIntervalCache[t.castName]}m)`).join(', ');
+  console.log(`[LS-SPY] Capturing screenshots for ${tabsToCapture.length}/${spyTabs.length} tabs: ${castNames}`);
+
+  // 元のアクティブタブを記憶（ウィンドウごと）
+  const originalActiveTabs = new Map(); // windowId → tabId
+  for (const t of spyTabs) {
+    if (t.active && !originalActiveTabs.has(t.windowId)) {
+      originalActiveTabs.set(t.windowId, t.tabId);
+    }
+  }
+  // アクティブタブが spyTabs 内にない場合も記憶
+  try {
+    const activeTabs = await chrome.tabs.query({ active: true });
+    for (const at of activeTabs) {
+      if (!originalActiveTabs.has(at.windowId)) {
+        originalActiveTabs.set(at.windowId, at.id);
+      }
+    }
+  } catch { /* ignore */ }
+
+  for (const spy of tabsToCapture) {
+    try {
+      // タブがまだ存在するか確認
+      let tabInfo;
+      try {
+        tabInfo = await chrome.tabs.get(spy.tabId);
+      } catch {
+        console.warn('[LS-SPY] Screenshot: タブが閉じられている:', spy.castName);
+        continue;
+      }
+
+      // タブをアクティブにする（captureVisibleTabの前提条件）
+      if (!tabInfo.active) {
+        await chrome.tabs.update(spy.tabId, { active: true });
+        await sleep_bg(400); // レンダリング完了待ち
+      }
+
+      // キャプチャ実行
+      const dataUrl = await chrome.tabs.captureVisibleTab(spy.windowId, {
+        format: 'jpeg',
+        quality: 70,
+      });
+
+      if (!dataUrl) {
+        console.warn('[LS-SPY] Screenshot: captureVisibleTab returned null:', spy.castName);
+        continue;
+      }
+
+      // アップロード + メタデータ保存
+      await uploadScreenshot(spy.castName, dataUrl);
+
+      // 前回撮影時刻を記録
+      screenshotLastCapture[spy.castName] = Date.now();
+
+    } catch (err) {
+      console.warn('[LS-SPY] Screenshot failed for', spy.castName, ':', err.message);
+      // 1タブ失敗しても他タブは継続
+    }
+  }
+
+  // 元のアクティブタブに戻す（ユーザー体験復元）
+  for (const [windowId, tabId] of originalActiveTabs) {
+    try {
+      await chrome.tabs.update(tabId, { active: true });
+    } catch {
+      // タブが閉じられていた場合は無視
+    }
+  }
+}
+
+/**
+ * スクリーンショットをSupabase Storageにアップロードし、メタデータをDBに保存
+ */
+async function uploadScreenshot(castName, dataUrl) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `${castName}_${timestamp}.jpg`;
+
+  // dataURL → Blob変換
+  const base64Data = dataUrl.split(',')[1];
+  const byteChars = atob(base64Data);
+  const byteArrays = [];
+  for (let offset = 0; offset < byteChars.length; offset += 1024) {
+    const slice = byteChars.slice(offset, offset + 1024);
+    const byteNumbers = new Array(slice.length);
+    for (let i = 0; i < slice.length; i++) {
+      byteNumbers[i] = slice.charCodeAt(i);
+    }
+    byteArrays.push(new Uint8Array(byteNumbers));
+  }
+  const blob = new Blob(byteArrays, { type: 'image/jpeg' });
+
+  // Supabase Storage アップロード
+  let storagePath = null;
+  try {
+    const uploadRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/storage/v1/object/screenshots/${castName}/${filename}`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Content-Type': 'image/jpeg',
+        },
+        body: blob,
+      }
+    );
+    if (uploadRes.ok) {
+      const uploadData = await uploadRes.json();
+      storagePath = uploadData.Key || `screenshots/${castName}/${filename}`;
+      console.log('[LS-SPY] Screenshot uploaded:', storagePath);
+    } else {
+      const errText = await uploadRes.text().catch(() => '');
+      console.warn('[LS-SPY] Screenshot upload failed:', uploadRes.status, errText);
+    }
+  } catch (storageErr) {
+    console.warn('[LS-SPY] Screenshot storage error:', storageErr.message);
+  }
+
+  // screenshots テーブルにメタデータ保存
+  const sessionId = castSessions.get(castName) || currentSessionId || null;
+  try {
+    const metaRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/screenshots`, {
+      method: 'POST',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify({
+        account_id: accountId,
+        cast_name: castName,
+        session_id: sessionId,
+        filename: filename,
+        storage_path: storagePath,
+        captured_at: new Date().toISOString(),
+      }),
+    });
+    if (!metaRes.ok) {
+      console.warn('[LS-SPY] Screenshot metadata insert failed:', metaRes.status);
+    }
+  } catch (metaErr) {
+    console.warn('[LS-SPY] Screenshot metadata error:', metaErr.message);
+  }
+
+  console.log(`[LS-SPY] Screenshot saved: ${castName} ${filename} storage=${!!storagePath}`);
+}
+
+// ============================================================
+// JWT Captured Handler — content_jwt_capture.js → content_spy.js → here
+// ============================================================
+
+/**
+ * JWT取得ハンドラ: MAIN world content_jwt_capture.js → content_spy.js → ここ
+ * stripchat_sessions.jwt_token に保存
+ */
+async function handleJwtCaptured(message) {
+  const { jwt } = message;
+  if (!jwt || !accountId || !accessToken) {
+    console.log('[LS-BG] JWT received but no auth context');
+    return;
+  }
+
+  try {
+    // UPSERT: jwt_token カラムを更新
+    const res = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: CONFIG.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`,
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({
+          jwt_token: jwt,
+          updated_at: new Date().toISOString(),
+        }),
+      }
+    );
+
+    if (res.ok) {
+      console.log('[LS-BG] JWT saved to stripchat_sessions');
+    } else {
+      console.warn('[LS-BG] JWT save failed:', res.status);
+    }
+  } catch (err) {
+    console.warn('[LS-BG] JWT save error:', err.message);
+  }
+}
+
+// ============================================================
+// Viewer Member List Polling (spy_viewers)
+// ============================================================
+let viewerMemberLastPoll = 0;
+const VIEWER_MEMBER_INTERVAL = 60000; // 60秒
+
+/**
+ * fetchViewerMembers(castName)
+ * Stripchat viewer member list APIを呼び出し、spy_viewersにUPSERT
+ */
+async function fetchViewerMembers(castName) {
+  if (!accessToken || !accountId) return;
+
+  try {
+    // 1. JWT取得（stripchat_sessions から）
+    const sessRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}&is_valid=eq.true&select=jwt_token,session_cookie,cookies_json`,
+      {
+        headers: {
+          apikey: CONFIG.SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!sessRes.ok) return;
+    const sessions = await sessRes.json();
+    if (!sessions.length) return;
+    const sess = sessions[0];
+
+    // 2. Viewer member list API 呼び出し
+    const headers = {
+      Accept: 'application/json',
+    };
+
+    // JWT認証（あれば）
+    if (sess.jwt_token) {
+      headers['Authorization'] = `Bearer ${sess.jwt_token}`;
+    }
+
+    // Cookie認証（フォールバック）
+    if (sess.cookies_json && Object.keys(sess.cookies_json).length > 0) {
+      headers['Cookie'] = Object.entries(sess.cookies_json)
+        .map(([k, v]) => `${k}=${v}`)
+        .join('; ');
+    } else if (sess.session_cookie) {
+      headers['Cookie'] = `stripchat_com_sessionId=${sess.session_cookie}`;
+    }
+
+    const membersRes = await fetch(
+      `https://stripchat.com/api/front/models/username/${encodeURIComponent(castName)}/groupShow/members`,
+      { headers }
+    );
+
+    if (!membersRes.ok) {
+      if (membersRes.status === 401 || membersRes.status === 403) {
+        console.warn('[LS-BG] Viewer members: JWT expired or unauthorized for', castName);
+        // JWT無効化
+        if (sess.jwt_token) {
+          await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?account_id=eq.${accountId}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: CONFIG.SUPABASE_ANON_KEY,
+                Authorization: `Bearer ${accessToken}`,
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify({ jwt_token: null, updated_at: new Date().toISOString() }),
+            }
+          );
+        }
+      }
+      return;
+    }
+
+    const data = await membersRes.json();
+    const members = data?.members || data || [];
+    if (!Array.isArray(members) || members.length === 0) return;
+
+    // 3. spy_viewers に UPSERT（バッチ）
+    const now = new Date().toISOString();
+    const rows = members.map(m => ({
+      account_id: accountId,
+      cast_name: castName,
+      session_id: castSessions.get(castName) || currentSessionId || null,
+      user_name: m.username || m.userName || m.name || 'unknown',
+      user_id_stripchat: m.id ? String(m.id) : (m.userId ? String(m.userId) : null),
+      league: m.league || m.userLeague || null,
+      level: m.level || m.userLevel || null,
+      is_fan_club: m.isFanClub || m.fanClub || false,
+      first_seen_at: now,
+      last_seen_at: now,
+      visit_count: 1,
+    }));
+
+    // spy_viewers: 個別 UPSERT（session_id NULLのUNIQUE制約問題を回避）
+    let savedCount = 0;
+    for (const r of rows) {
+      try {
+        // 既存レコードを検索（session_id NULL対応）
+        const sessionFilter = r.session_id
+          ? `session_id=eq.${encodeURIComponent(r.session_id)}`
+          : 'session_id=is.null';
+        const checkRes = await fetch(
+          `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers?account_id=eq.${accountId}&cast_name=eq.${encodeURIComponent(r.cast_name)}&user_name=eq.${encodeURIComponent(r.user_name)}&${sessionFilter}&select=id,visit_count&limit=1`,
+          {
+            headers: {
+              apikey: CONFIG.SUPABASE_ANON_KEY,
+              Authorization: `Bearer ${accessToken}`,
+            },
+          }
+        );
+        const existing = checkRes.ok ? await checkRes.json() : [];
+
+        if (existing.length > 0) {
+          // UPDATE: last_seen_at と visit_count を更新
+          await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers?id=eq.${existing[0].id}`,
+            {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: CONFIG.SUPABASE_ANON_KEY,
+                Authorization: `Bearer ${accessToken}`,
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify({
+                last_seen_at: now,
+                visit_count: (existing[0].visit_count || 0) + 1,
+                league: r.league,
+                level: r.level,
+                is_fan_club: r.is_fan_club,
+                user_id_stripchat: r.user_id_stripchat || undefined,
+              }),
+            }
+          );
+        } else {
+          // INSERT
+          await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/spy_viewers`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                apikey: CONFIG.SUPABASE_ANON_KEY,
+                Authorization: `Bearer ${accessToken}`,
+                Prefer: 'return=minimal',
+              },
+              body: JSON.stringify(r),
+            }
+          );
+        }
+        savedCount++;
+      } catch (e) {
+        console.warn('[LS-BG] spy_viewers row error:', r.user_name, e.message);
+      }
+    }
+    console.log(`[LS-BG] spy_viewers: ${savedCount}/${rows.length} members saved for ${castName}`);
+  } catch (err) {
+    console.warn('[LS-BG] fetchViewerMembers error:', err.message);
+  }
+}
+
+// ============================================================
+// Session Cookie Export — Stripchatセッション情報をSupabaseに同期
+// ============================================================
+
+/**
+ * Stripchatセッションクッキーと認証情報をSupabaseにエクスポート
+ * DM API送信で使用するセッション情報を保存
+ */
+async function exportSessionCookie() {
+  if (!accessToken || !accountId) {
+    console.log('[LS-BG] SessionExport: accessToken or accountId missing, skipping');
+    return;
+  }
+
+  try {
+    // 1. Stripchat sessionId クッキー取得
+    const sessionCookie = await chrome.cookies.get({
+      url: 'https://stripchat.com',
+      name: 'stripchat_com_sessionId'
+    });
+    if (!sessionCookie || !sessionCookie.value) {
+      console.warn('[LS-BG] SessionExport: sessionId cookie not found');
+      return;
+    }
+
+    // 2. userId クッキー取得
+    const userIdCookie = await chrome.cookies.get({
+      url: 'https://stripchat.com',
+      name: 'stripchat_com_userId'
+    });
+    const stripchatUserId = userIdCookie?.value || null;
+
+    // 3. 全Stripchatクッキーを取得してJSON化
+    const allCookies = await chrome.cookies.getAll({ domain: '.stripchat.com' });
+    const cookiesJson = {};
+    for (const c of allCookies) {
+      cookiesJson[c.name] = c.value;
+    }
+
+    // 4. csrfToken取得を試行（/api/front/v2/config から）
+    let csrfToken = null;
+    let csrfTimestamp = null;
+    let frontVersion = '11.5.57';
+    try {
+      const configRes = await fetch('https://ja.stripchat.com/api/front/v2/config', {
+        headers: {
+          'Accept': 'application/json',
+          'Cookie': `stripchat_com_sessionId=${sessionCookie.value}`,
+        },
+      });
+      if (configRes.ok) {
+        const configData = await configRes.json();
+        csrfToken = configData?.csrfToken || configData?.config?.csrfToken || null;
+        csrfTimestamp = configData?.csrfTimestamp || configData?.config?.csrfTimestamp || null;
+        frontVersion = configData?.frontVersion || configData?.config?.frontVersion || frontVersion;
+        console.log('[LS-BG] SessionExport: config取得成功, csrf:', !!csrfToken, 'frontVersion:', frontVersion);
+      }
+    } catch (e) {
+      console.warn('[LS-BG] SessionExport: config取得失敗:', e.message);
+    }
+
+    // 5. Supabaseにupsert
+    const expiresAt = sessionCookie.expirationDate
+      ? new Date(sessionCookie.expirationDate * 1000).toISOString()
+      : null;
+
+    const body = {
+      account_id: accountId,
+      session_cookie: sessionCookie.value,
+      csrf_token: csrfToken,
+      csrf_timestamp: csrfTimestamp,
+      stripchat_user_id: stripchatUserId,
+      front_version: frontVersion,
+      cookies_json: cookiesJson,
+      is_valid: true,
+      last_validated_at: new Date().toISOString(),
+      exported_at: new Date().toISOString(),
+      expires_at: expiresAt,
+      updated_at: new Date().toISOString(),
+    };
+
+    const upsertRes = await fetch(
+      `${CONFIG.SUPABASE_URL}/rest/v1/stripchat_sessions?on_conflict=account_id`,
+      {
+        method: 'POST',
+        headers: {
+          'apikey': CONFIG.SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'resolution=merge-duplicates,return=minimal',
+        },
+        body: JSON.stringify(body),
+      }
+    );
+
+    if (upsertRes.ok) {
+      console.log('[LS-BG] SessionExport: セッション同期完了',
+        `userId=${stripchatUserId}, csrf=${!!csrfToken}, expires=${expiresAt || 'unknown'}`);
+    } else {
+      const errText = await upsertRes.text().catch(() => '');
+      console.warn('[LS-BG] SessionExport: upsert失敗:', upsertRes.status, errText);
+    }
+
+    // ── 方式B: Backend API に cookies.json 書き出し ──
+    // collector/auth.py が Chrome DBロックなしで読める
+    try {
+      const cookieSyncRes = await fetch(`${CONFIG.API_BASE_URL}/api/sync/cookies`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          cookies: cookiesJson,
+        }),
+      });
+      if (cookieSyncRes.ok) {
+        const result = await cookieSyncRes.json();
+        console.log(`[LS-BG] CookieSync: cookies.json 書き出し完了 (${result.cookie_count}件)`);
+      } else {
+        console.warn('[LS-BG] CookieSync: 書き出し失敗:', cookieSyncRes.status);
+      }
+    } catch (cookieErr) {
+      // Backend未起動時は静かに失敗（Supabase同期は成功済み）
+      console.debug('[LS-BG] CookieSync: Backend未到達:', cookieErr.message);
+    }
+  } catch (err) {
+    console.error('[LS-BG] SessionExport: エラー:', err.message);
+  }
+}
+
+// ============================================================
+// Lifecycle
+// ============================================================
+console.log('[LS-BG] === Service Worker起動 ===');
+
+restoreBuffers().then(() => {
+  // 起動時にバッジ更新
+  updateBadge();
+  // SW再起動対策: per-castセッション状態を復元
+  restoreSessionState();
+  loadAuth().then(async () => {
+    console.log('[LS-BG] 認証状態: token=', !!accessToken, 'account=', accountId, 'spy=', spyEnabled);
+    if (accessToken && accountId) {
+      startDMPolling();
+      startWhisperPolling();
+      loadRegisteredCasts();
+      initAutoPatrol(); // SPY自動巡回の初期化
+      initSpyRotation(); // 他社SPYローテーション初期化
+      if (spyEnabled) {
+        startScreenshotCapture(); // SW再起動時にSPY有効ならスクショ再開
+        chrome.alarms.create('viewerMembers', { periodInMinutes: 1 }); // Viewer memberポーリング再開
+      }
+      // セッション同期 + Cookie書き出し: 30分ごと + 即時1回
+      chrome.alarms.create('sessionSync', { periodInMinutes: 30 });
+      exportSessionCookie().catch(e => console.warn('[LS-BG] SessionSync初回:', e.message));
+      console.log('[LS-BG] 初期化完了 DM/Whisperポーリング開始');
+      // SW再起動時: currentSessionIdが復元されていたらsessionsレコード存在チェック
+      if (currentSessionId) {
+        try {
+          const checkRes = await fetch(
+            `${CONFIG.SUPABASE_URL}/rest/v1/sessions?session_id=eq.${encodeURIComponent(currentSessionId)}&select=session_id`,
+            {
+              headers: {
+                'apikey': CONFIG.SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${accessToken}`,
+              },
+            }
+          );
+          if (checkRes.ok) {
+            const existing = await checkRes.json();
+            if (existing.length === 0) {
+              await insertSession(currentSessionId, accountId);
+              console.log('[LS-BG] sessions復元INSERT:', currentSessionId);
+            } else {
+              console.log('[LS-BG] sessions既存確認OK:', currentSessionId);
+            }
+          }
+        } catch (e) {
+          console.warn('[LS-BG] sessions復元チェック失敗:', e.message);
+        }
+      }
+    } else if (accessToken && !accountId) {
+      console.log('[LS-BG] 初期化完了 accountId未設定 → Supabase REST APIでアカウント自動取得');
+      try {
+        const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/accounts?select=id,account_name`, {
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+          },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data) && data.length > 0) {
+            accountId = data[0].id;
+            chrome.storage.local.set({ account_id: accountId });
+            console.log('[LS-BG] アカウント自動設定:', accountId, data[0].account_name);
+            startDMPolling();
+            startWhisperPolling();
+            loadRegisteredCasts();
+            initAutoPatrol(); // SPY自動巡回の初期化
+            initSpyRotation(); // 他社SPYローテーション初期化
+            if (messageBuffer.length > 0) flushMessageBuffer();
+          }
+        } else {
+          console.warn('[LS-BG] Supabase accounts取得失敗:', res.status);
+        }
+      } catch (err) {
+        console.warn('[LS-BG] アカウント自動取得失敗:', err.message);
+      }
+    } else {
+      console.log('[LS-BG] 初期化完了 認証待ち');
+    }
+  });
+});
+
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.access_token || changes.account_id) {
+    console.log('[LS-BG] Storage変更検出: access_token変更=', !!changes.access_token, 'account_id変更=', !!changes.account_id);
+    loadAuth().then(() => {
+      console.log('[LS-BG] Storage変更後の状態: token=', !!accessToken, 'account=', accountId);
+      if (accessToken && accountId) {
+        startDMPolling();
+        startWhisperPolling();
+        loadRegisteredCasts();
+        // バッファflush試行
+        if (messageBuffer.length > 0) {
+          console.log('[LS-BG] Storage変更でaccountId取得 → バッファflush試行:', messageBuffer.length, '件');
+          flushMessageBuffer();
+        }
+      } else {
+        stopDMPolling();
+        stopWhisperPolling();
+      }
+    });
+  }
+  if (changes.spy_enabled) {
+    spyEnabled = changes.spy_enabled.newValue === true;
+    updateBadge();
+    console.log('[LS-BG] spy_enabled変更:', spyEnabled);
+  }
+  if (changes.stt_enabled) {
+    sttEnabled = changes.stt_enabled.newValue === true;
+    console.log('[LS-BG] stt_enabled変更:', sttEnabled);
+  }
+  if (changes.auto_patrol_enabled) {
+    autoPatrolEnabled = changes.auto_patrol_enabled.newValue !== false;
+    console.log('[LS-BG] auto_patrol_enabled変更:', autoPatrolEnabled);
+  }
+  if (changes.spy_rotation_enabled) {
+    spyRotationEnabled = changes.spy_rotation_enabled.newValue === true;
+    console.log('[LS-BG] spy_rotation_enabled変更:', spyRotationEnabled);
+  }
+});
+
+// ============================================================
+// AutoCoinSync — 自動コイン同期トリガー
+// ============================================================
+
+/**
+ * 自動コイン同期の統合エントリポイント
+ * - 二重実行防止（isSyncing フラグ）
+ * - 最終同期からの経過時間チェック
+ * - 失敗時リトライ（30分後、最大3回）
+ * @param {string} trigger - 発火元 ('periodic'|'after_stream'|'earnings_visit'|'retry')
+ */
+async function triggerAutoCoinSync(trigger = 'unknown') {
+  // 二重実行防止
+  if (isCoinSyncing) {
+    console.log('[LS-BG] AutoCoinSync: 同期中 — スキップ (trigger:', trigger, ')');
+    return;
+  }
+
+  // 認証チェック
+  await loadAuth();
+  if (!accountId || !accessToken) {
+    console.log('[LS-BG] AutoCoinSync: 未認証 — スキップ (trigger:', trigger, ')');
+    return;
+  }
+
+  // 最終同期からの経過時間チェック（1時間未満ならスキップ）
+  const MIN_INTERVAL_MS = 60 * 60 * 1000; // 1時間
+  const syncStorageKey = `coin_sync_last_${accountId}`;
+  const stored = await chrome.storage.local.get([syncStorageKey, 'last_coin_sync']);
+  const lastSync = stored[syncStorageKey] || stored.last_coin_sync || null;
+  if (lastSync) {
+    const elapsed = Date.now() - new Date(lastSync).getTime();
+    if (elapsed < MIN_INTERVAL_MS) {
+      const minutesAgo = Math.round(elapsed / 60000);
+      console.log(`[LS-BG] AutoCoinSync: 最終同期 ${minutesAgo}分前 — スキップ (trigger: ${trigger})`);
+      return;
+    }
+  }
+
+  console.log(`[LS-BG] AutoCoinSync: 実行開始 (trigger: ${trigger})`);
+  isCoinSyncing = true;
+
+  try {
+    const result = await handleCoinSync();
+    isCoinSyncing = false;
+    coinSyncRetryCount = 0; // 成功 → リトライカウンタリセット
+
+    if (result.ok) {
+      console.log(`[LS-BG] AutoCoinSync: 成功 (trigger: ${trigger})`, result.message || `${result.synced}件`);
+    } else {
+      console.warn(`[LS-BG] AutoCoinSync: 失敗 (trigger: ${trigger})`, result.error);
+      scheduleRetry();
+    }
+  } catch (err) {
+    isCoinSyncing = false;
+    console.error(`[LS-BG] AutoCoinSync: 例外 (trigger: ${trigger})`, err.message);
+    scheduleRetry();
+  }
+}
+
+function scheduleRetry() {
+  coinSyncRetryCount++;
+  if (coinSyncRetryCount <= COIN_SYNC_MAX_RETRIES) {
+    const delayMin = COIN_SYNC_RETRY_DELAY_MS / 60000;
+    console.log(`[LS-BG] AutoCoinSync: ${delayMin}分後にリトライ予約 (${coinSyncRetryCount}/${COIN_SYNC_MAX_RETRIES})`);
+    chrome.alarms.create('coinSyncRetry', { delayInMinutes: delayMin });
+  } else {
+    console.warn(`[LS-BG] AutoCoinSync: リトライ上限到達 (${COIN_SYNC_MAX_RETRIES}回) — 次の定期同期まで待機`);
+    coinSyncRetryCount = 0;
+  }
+}
+
+// earningsページ訪問検出 → 最終同期から1時間以上なら自動実行
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== 'complete') return;
+  if (!tab.url) return;
+  try {
+    const url = new URL(tab.url);
+    if (url.hostname.endsWith('stripchat.com') && url.pathname.startsWith('/earnings')) {
+      console.log('[LS-BG] AutoCoinSync: earningsページ検出 tab=', tabId);
+      triggerAutoCoinSync('earnings_visit').catch(e => {
+        console.warn('[LS-BG] AutoCoinSync: earnings訪問トリガー失敗:', e.message);
+      });
+    }
+  } catch (_) {
+    // invalid URL — ignore
+  }
+});

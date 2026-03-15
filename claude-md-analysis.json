@@ -1,0 +1,412 @@
+{
+  "analysis_date": "2026-03-10",
+  "files_analyzed": [
+    "C:/dev/livespot/CLAUDE.md",
+    "C:/dev/wisteria-face/CLAUDE.md",
+    "C:/dev/kitakanto-os/CLAUDE.md",
+    "C:/dev/kitakanto-os/claude-code-monitor/CLAUDE.md",
+    "C:/dev/kitakanto-os/sns-pipeline/CLAUDE.md"
+  ],
+  "note": ".claude/ directories in livespot and kitakanto-os contain no agent/skill files (defined in CLAUDE.md only)",
+
+  "projects": {
+    "livespot": {
+      "file": "C:/dev/livespot/CLAUDE.md",
+      "project_name": "LiveSpot - Premium Agency OS (SLS)",
+      "description": "ライブ配信エージェンシー向けSaaS管理プラットフォーム",
+
+      "agents": {
+        "defined_in_this_file": [
+          {
+            "name": "Product Manager",
+            "role": "理念に沿っているかチェック。技術要件だけを追って理念からずれていないか常に確認"
+          },
+          {
+            "name": "Backend Architect",
+            "role": "Supabase/API設計・データモデル・認証フロー"
+          },
+          {
+            "name": "Frontend Developer",
+            "role": "Next.js UI実装・UX設計"
+          }
+        ],
+        "referenced_from_kitakanto_os": [
+          { "name": "リサーチャー", "role": "技術調査・市場調査・新機能提案" },
+          { "name": "Twitter Engager（カワbot）", "role": "SOUL.md準拠のX投稿生成" },
+          { "name": "Growth Hacker", "role": "フックをずらした採用動線設計" },
+          { "name": "Content Creator", "role": "開発実況コンテンツ生成" },
+          { "name": "Product Manager", "role": "要件定義管理・理念チェック" },
+          { "name": "DevOps", "role": "自動化パイプライン・監視" }
+        ],
+        "agent_hub": "C:\\dev\\kitakanto-os\\.claude\\agents\\"
+      },
+
+      "skills": [
+        { "name": "notion-update", "trigger": "/notion-update", "function": "タスク完了→Notion更新" },
+        { "name": "session-handoff", "trigger": "/session-handoff", "function": "セッション引き継ぎ" },
+        { "name": "context-sync", "trigger": "/context-sync", "function": "統合コンテキスト同期" },
+        { "name": "x-post", "trigger": "/x-post", "function": "カワbotX投稿生成" },
+        { "name": "quality-check", "trigger": "/quality-check", "function": "品質チェック" }
+      ],
+
+      "external_services": [
+        { "service": "Supabase", "usage": "PostgreSQL DB, Auth, Realtime, RLS", "project_id": "ujgbhkllfeacbgpdbjto", "region": "ap-northeast-1" },
+        { "service": "Vercel", "usage": "フロントエンドデプロイ (Root Directory=frontend)" },
+        { "service": "Stripchat API", "usage": "モデル情報/視聴者/DM送信/サムネイル取得" },
+        { "service": "Claude API (Sonnet 4)", "usage": "ライブアシスト・AIレポート生成" },
+        { "service": "OpenAI Whisper API", "usage": "音声文字起こし" },
+        { "service": "Telegram Bot API", "usage": "通知 (@wisteria_COO_bot, Chat ID: 8050153948)" },
+        { "service": "Notion API", "usage": "タスクボード管理 (collection://48e5a7f8-642b-476b-98b2-2f0f0baba967)" }
+      ],
+
+      "cross_project_dependencies": [
+        {
+          "target": "kitakanto-os",
+          "type": "agent_hub",
+          "detail": "エージェント定義は北関東OS (.claude/agents/) に集約。SLSからも参照可能"
+        },
+        {
+          "target": "kitakanto-os",
+          "type": "multi_poller",
+          "detail": "北関東OS Multi-Pollerの自律実行対象チーム (チーム名: 💻 SLS)"
+        },
+        {
+          "target": "kitakanto-os/collector",
+          "type": "data_pipeline",
+          "detail": "Collector (Node.js) がSPYメッセージ・CoinSyncデータをSupabaseに書き込み、SLSフロントエンドが表示"
+        },
+        {
+          "target": "wisteria-face",
+          "type": "coordination",
+          "detail": "連携ポイントがあれば明示するルール"
+        }
+      ],
+
+      "command_chain": {
+        "ceo": "YUUTA（思想・企画・最終判断）",
+        "coo": "Claude ブラウザ版（要件定義・統合コンテキスト管理）",
+        "this_tab": "SLSチーム（Product Manager + Backend Architect + Frontend Developer）",
+        "org_chart_ref": "https://www.notion.so/31ea72d9e03b815c94d6f4cae29da5e0"
+      },
+
+      "tech_stack": {
+        "frontend": "Next.js 14 (App Router) + Tailwind CSS 3",
+        "backend": "FastAPI + Uvicorn",
+        "db": "PostgreSQL (Supabase)",
+        "chrome_extension": "Manifest V3",
+        "design": "Ultra-Dark Glassmorphism"
+      }
+    },
+
+    "wisteria-face": {
+      "file": "C:/dev/wisteria-face/CLAUDE.md",
+      "project_name": "WisteriaFace（リアルタイムFaceSwap配信パイプライン）",
+      "description": "顔を出したくないがスタイルが良い子向けのリアルタイムFaceSwapツール",
+
+      "agents": {
+        "defined_in_this_file": [],
+        "referenced_from_kitakanto_os": [
+          { "name": "AI Engineer", "role": "WisteriaFaceのML最適化・TensorRT" },
+          { "name": "Rapid Prototyper", "role": "高速検証・MVP" },
+          { "name": "Performance Tester", "role": "fps計測・パフォーマンス検証" },
+          { "name": "QA Tester", "role": "品質テスト" },
+          { "name": "Senior Developer", "role": "複雑な実装・アーキテクチャ判断" },
+          { "name": "Security Engineer", "role": "データ保護・セキュリティ" },
+          { "name": "リサーチャー", "role": "技術調査・市場調査・新機能提案" },
+          { "name": "Product Manager", "role": "要件定義管理・理念チェック" },
+          { "name": "DevOps", "role": "自動化パイプライン・監視" },
+          { "name": "Sprint Planner", "role": "スプリント計画・タスク優先度" },
+          { "name": "Project Shepherd", "role": "プロジェクト管理・進捗監視" },
+          { "name": "Content Creator", "role": "開発実況コンテンツ生成" },
+          { "name": "Twitter Engager（カワbot）", "role": "SOUL.md準拠のX投稿生成" },
+          { "name": "Growth Hacker", "role": "フックをずらした採用動線設計" },
+          { "name": "Reality Checker", "role": "品質ゲートキーパー" }
+        ],
+        "total_agents_referenced": 41,
+        "agent_hub": "C:\\dev\\kitakanto-os\\.claude\\agents\\"
+      },
+
+      "skills": [
+        { "name": "notion-update", "trigger": "/notion-update", "function": "タスク完了→Notion更新" },
+        { "name": "session-handoff", "trigger": "/session-handoff", "function": "セッション引き継ぎ" },
+        { "name": "context-sync", "trigger": "/context-sync", "function": "統合コンテキスト同期" },
+        { "name": "x-post", "trigger": "/x-post", "function": "カワbotX投稿生成" },
+        { "name": "quality-check", "trigger": "/quality-check", "function": "品質チェック" }
+      ],
+
+      "external_services": [
+        { "service": "Notion API", "usage": "タスクボード (collection://48e5a7f8-642b-476b-98b2-2f0f0baba967)" },
+        { "service": "Telegram Bot API", "usage": "通知 (@wisteria_COO_bot, Chat ID: 8050153948)" }
+      ],
+
+      "cross_project_dependencies": [
+        {
+          "target": "kitakanto-os",
+          "type": "agent_hub",
+          "detail": "全41体のエージェントが北関東OS (.claude/agents/) に集約配置"
+        }
+      ],
+
+      "command_chain": {
+        "ceo": "YUUTA",
+        "reference": "組織体制図 (Notion)",
+        "design_principle": "安藤式 + YUUTA式"
+      },
+
+      "tech_stack": {
+        "language": "Python",
+        "ml": "TensorRT FP16, ONNX",
+        "gpu": "RTX 3060 (VRAM 12GB)",
+        "target": "30fps以上リアルタイム処理"
+      },
+
+      "achievements": [
+        "inswapper TRT FP16 23ms/43fps（ローカル）、15.1ms/66fps（RunPod）",
+        "CodeFormer CPU非同期30fps達成"
+      ]
+    },
+
+    "kitakanto-os": {
+      "file": "C:/dev/kitakanto-os/CLAUDE.md",
+      "project_name": "北関東完全自動化OS",
+      "description": "全プロジェクトの自律実行ハブ。オペレーションフロー確立、プロジェクト間連動、コンテキストズレ防止",
+
+      "agents": {
+        "defined_in_this_file": [
+          { "name": "DevOps", "role": "自動化パイプライン・クローラー・ポーラー・監視基盤", "file": "devops.md" },
+          { "name": "リサーチャー", "role": "技術調査・市場調査・新機能提案", "file": "researcher.md" },
+          { "name": "Twitter Engager（カワbot）", "role": "SOUL.md準拠のX投稿生成", "file": "twitter-engager.md" },
+          { "name": "Growth Hacker", "role": "フックをずらした採用動線設計", "file": "growth-hacker.md" },
+          { "name": "Content Creator", "role": "モザイク編集・開発実況コンテンツ", "file": "content-creator.md" },
+          { "name": "Product Manager", "role": "要件定義管理・理念チェック", "file": "product-manager.md" }
+        ],
+        "agent_location": "C:\\dev\\kitakanto-os\\.claude\\agents\\",
+        "note": "全プロジェクトのハブとして北関東OSに集約。SLS・WisteriaFaceからも参照"
+      },
+
+      "skills": [
+        { "name": "notion-update", "trigger": "/notion-update", "function": "タスク完了→Notion更新" },
+        { "name": "session-handoff", "trigger": "/session-handoff", "function": "セッション引き継ぎ" },
+        { "name": "context-sync", "trigger": "/context-sync", "function": "統合コンテキスト同期" },
+        { "name": "x-post", "trigger": "/x-post", "function": "カワbotX投稿生成" },
+        { "name": "quality-check", "trigger": "/quality-check", "function": "品質チェック" }
+      ],
+
+      "external_services": [
+        { "service": "Supabase", "usage": "task_queue テーブル, データレイヤー", "project_id": "ujgbhkllfeacbgpdbjto" },
+        { "service": "Notion API (2022-06-28)", "usage": "タスクボード・統合コンテキスト・ナレッジベース" },
+        { "service": "Telegram Bot API", "usage": "通知・承認 (@wisteria_COO_bot, Chat ID: 8050153948)" },
+        { "service": "Claude API (Sonnet 4)", "usage": "AI分析 (Context Crawler)" },
+        { "service": "GitHub", "usage": "onry83333-glitch/kitakanto-os" }
+      ],
+
+      "cross_project_dependencies": [
+        {
+          "target": "livespot",
+          "type": "multi_poller_target",
+          "detail": "SLSチームのタスクを自律実行 (チーム名: 💻 SLS)"
+        },
+        {
+          "target": "wisteria-face",
+          "type": "agent_provider",
+          "detail": "WisteriaFace用エージェント41体を集約配置"
+        },
+        {
+          "target": "livespot/collector",
+          "type": "hosting",
+          "detail": "Collector (Node.js常駐) を北関東OS配下で稼働"
+        },
+        {
+          "target": "sns-pipeline",
+          "type": "sub_project",
+          "detail": "SNS自動投稿パイプライン (サブディレクトリ)"
+        },
+        {
+          "target": "DMCA_Shield",
+          "type": "monitoring",
+          "detail": "Context Crawlerが進捗を横断分析"
+        }
+      ],
+
+      "command_chain": {
+        "ceo": "YUUTA（思想・企画・最終判断）",
+        "coo": "Claude ブラウザ版（要件定義・統合コンテキスト管理）",
+        "this_tab": "北関東OSチーム（DevOps + Researcher + Twitter Engager）",
+        "org_chart_ref": "https://www.notion.so/31ea72d9e03b815c94d6f4cae29da5e0"
+      },
+
+      "autonomous_execution": {
+        "task_queue_protocol": {
+          "source_table": "task_queue (Supabase)",
+          "poller_path": "C:\\dev\\kitakanto-os\\task-poller\\poller.py",
+          "polling_interval": { "notion": "60s", "task_queue": "30s" },
+          "execution_mode": "claude.cmd --print --dangerously-skip-permissions",
+          "lifecycle": "pending → running → done | failed"
+        },
+        "watchdog": {
+          "heartbeat": "heartbeat.json",
+          "stale_threshold": "5分",
+          "max_retries": 3,
+          "escalation": "Telegram to YUUTA"
+        },
+        "windows_tasks": ["WisteriaPoller", "WisteriaWatchdog"]
+      },
+
+      "tech_stack": {
+        "languages": ["Python 3.x", "TypeScript (Collector)"],
+        "data_layer": ["Notion API", "Supabase"],
+        "scraping": "requests + BeautifulSoup4",
+        "ai": "Claude API (Sonnet 4)",
+        "collector": "Node.js + tsx + @supabase/supabase-js"
+      },
+
+      "hardware_constraints": {
+        "cpu": "i5-12th gen (12 threads)",
+        "ram": "16GB (bottleneck)",
+        "gpu": "RTX 3060",
+        "ssd": "1TB",
+        "tailscale_ip": "100.79.19.95",
+        "max_claude_code_tabs": 3
+      },
+
+      "tab_configuration": {
+        "tab1": "💻 SLS (C:\\dev\\livespot) [常駐]",
+        "tab2": "🖥️ 北関東OS (C:\\dev\\kitakanto-os) [常駐]",
+        "tab3": "🔄 日替わり (月:DMCA / 火:採用 / 水:SNS / 木:リサーチ / 金:LINE / 土日:P1消化)"
+      }
+    },
+
+    "kitakanto-os/claude-code-monitor": {
+      "file": "C:/dev/kitakanto-os/claude-code-monitor/CLAUDE.md",
+      "project_name": "Claude Code Monitor",
+      "description": "Claude Codeの複数セッションをリアルタイム監視するmacOS専用CLIツール (Ink TUI)",
+
+      "agents": { "defined_in_this_file": [] },
+      "skills": [],
+
+      "external_services": [
+        { "service": "Claude Code Hooks", "usage": "PreToolUse, PostToolUse, Notification, Stop, UserPromptSubmit イベント受信" }
+      ],
+
+      "cross_project_dependencies": [],
+
+      "command_chain": {
+        "note": "独立ツール。指示系統の定義なし"
+      },
+
+      "tech_stack": {
+        "ui": "Ink v5 + React 18",
+        "cli": "Commander",
+        "file_watch": "chokidar",
+        "websocket": "ws",
+        "test": "Vitest",
+        "lint": "Biome"
+      }
+    },
+
+    "kitakanto-os/sns-pipeline": {
+      "file": "C:/dev/kitakanto-os/sns-pipeline/CLAUDE.md",
+      "project_name": "SNS Pipeline — SNS自動投稿パイプライン",
+      "description": "Notion素材DB→AI生成→品質チェック→Telegram承認→X投稿",
+
+      "agents": { "defined_in_this_file": [] },
+      "skills": [],
+
+      "external_services": [
+        { "service": "Notion API (2022-06-28)", "usage": "SNS素材DB (d55bc808), ソウルMD, バズテンプレート" },
+        { "service": "Gemini 2.5 Flash", "usage": "ドラフト生成 (google-genai)" },
+        { "service": "Claude API (Sonnet 4)", "usage": "品質チェック (anthropic)" },
+        { "service": "Telegram Bot API", "usage": "承認通知" }
+      ],
+
+      "cross_project_dependencies": [
+        {
+          "target": "kitakanto-os",
+          "type": "multi_poller_target",
+          "detail": "北関東OS Multi-Pollerの自律実行対象 (チーム名: 📣 SNS)"
+        },
+        {
+          "target": "kitakanto-os/.env",
+          "type": "env_dependency",
+          "detail": "親ディレクトリの.envから環境変数を読み込み"
+        }
+      ],
+
+      "command_chain": {
+        "note": "北関東OS Multi-Pollerが自律実行。YUUTA→Claude Code"
+      },
+
+      "tech_stack": {
+        "language": "Python 3.x",
+        "ai_draft": "Gemini 2.5 Flash",
+        "ai_quality": "Claude Sonnet 4 (Gemini fallback)",
+        "data": "Notion API",
+        "notification": "Telegram Bot API"
+      }
+    }
+  },
+
+  "global_summary": {
+    "total_claude_md_files": 5,
+    "total_agents_defined": 6,
+    "total_agents_referenced": 41,
+    "agent_hub_location": "C:\\dev\\kitakanto-os\\.claude\\agents\\",
+
+    "shared_skills": [
+      "/notion-update",
+      "/session-handoff",
+      "/context-sync",
+      "/x-post",
+      "/quality-check"
+    ],
+
+    "shared_services": {
+      "supabase": { "project_id": "ujgbhkllfeacbgpdbjto", "shared_by": ["livespot", "kitakanto-os", "sns-pipeline"] },
+      "notion": { "task_board": "collection://48e5a7f8-642b-476b-98b2-2f0f0baba967", "shared_by": ["livespot", "wisteria-face", "kitakanto-os", "sns-pipeline"] },
+      "telegram": { "bot": "@wisteria_COO_bot", "chat_id": "8050153948", "shared_by": ["livespot", "wisteria-face", "kitakanto-os", "sns-pipeline"] }
+    },
+
+    "command_hierarchy": {
+      "level_1_ceo": "YUUTA（思想・企画・最終判断）",
+      "level_2_coo": "Claude ブラウザ版（要件定義・統合コンテキスト管理）",
+      "level_3_teams": [
+        {
+          "team": "SLSチーム (Tab 1)",
+          "cwd": "C:\\dev\\livespot",
+          "roles": ["Product Manager", "Backend Architect", "Frontend Developer"],
+          "executor": "Claude Code"
+        },
+        {
+          "team": "北関東OSチーム (Tab 2)",
+          "cwd": "C:\\dev\\kitakanto-os",
+          "roles": ["DevOps", "Researcher", "Twitter Engager"],
+          "executor": "Claude Code"
+        },
+        {
+          "team": "日替わりプロジェクト (Tab 3)",
+          "cwd": "varies",
+          "roles": ["rotation"],
+          "executor": "Claude Code"
+        }
+      ],
+      "autonomous_loop": "北関東OS task-poller → Notion監視 → Claude Code自律実行 → Notion/Telegram報告"
+    },
+
+    "dependency_graph": {
+      "kitakanto-os": {
+        "controls": ["livespot (Multi-Poller)", "sns-pipeline (Multi-Poller)", "wisteria-face (agent provider)"],
+        "monitors": ["livespot", "wisteria-face", "DMCA_Shield (Context Crawler)"]
+      },
+      "livespot": {
+        "depends_on": ["kitakanto-os (agents, poller, collector)"],
+        "coordinates_with": ["wisteria-face"]
+      },
+      "wisteria-face": {
+        "depends_on": ["kitakanto-os (agents)"]
+      },
+      "sns-pipeline": {
+        "depends_on": ["kitakanto-os (.env, poller)"]
+      }
+    }
+  }
+}

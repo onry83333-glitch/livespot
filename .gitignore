@@ -53,3 +53,5 @@ supabase/.temp/
 
 # Windows artifacts
 nul
+*.bak.*
+*.bak

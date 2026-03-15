@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Strip Live Spot - Stripchat Manager",
+  "version": "2.13.0",
+  "description": "Stripchat配信管理ツール - チャット監視・DM送信・売上分析",
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "alarms",
+    "notifications",
+    "scripting",
+    "cookies"
+  ],
+  "host_permissions": [
+    "*://stripchat.com/*",
+    "*://*.stripchat.com/*",
+    "https://ujgbhkllfeacbgpdbjto.supabase.co/*",
+    "https://livespot-rouge.vercel.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://stripchat.com/*", "*://*.stripchat.com/*"],
+      "js": ["content_spy.js", "content_whisper.js", "dm_executor.js", "dm_api_sender.js", "content_stt_relay.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://stripchat.com/*", "*://*.stripchat.com/*"],
+      "js": ["content_stt.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://stripchat.com/*", "*://*.stripchat.com/*"],
+      "js": ["content_jwt_capture.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

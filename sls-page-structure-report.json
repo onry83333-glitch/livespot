@@ -1,0 +1,434 @@
+{
+  "generated_at": "2026-03-10T18:50:00+09:00",
+  "total_pages": 23,
+  "total_api_endpoints": 22,
+  "pages": [
+    {
+      "url": "/",
+      "file": "frontend/src/app/page.tsx",
+      "description": "ルートページ（/castsへリダイレクト）",
+      "tabs": [],
+      "components": [],
+      "data_sources": [],
+      "actions": [{"label": "自動リダイレクト", "target": "/casts"}]
+    },
+    {
+      "url": "/casts",
+      "file": "frontend/src/app/casts/page.tsx",
+      "description": "自社キャスト管理一覧",
+      "tabs": [],
+      "components": [
+        {"name": "Header+AccountSelector", "description": "アカウント切替+キャスト追加ボタン", "data_sources": ["accounts"]},
+        {"name": "RegistrationForm", "description": "新規キャスト登録フォーム", "data_sources": ["registered_casts INSERT"]},
+        {"name": "SummaryKPICards", "description": "30日売上/今週売上/前週比/登録数/配信中/VIPアラート/DM数", "data_sources": ["RPC:get_weekly_coin_stats", "coin_transactions", "chat_logs", "dm_send_log"]},
+        {"name": "LiveCastsBar", "description": "配信中キャストのリアルタイム表示", "data_sources": ["chat_logs"]},
+        {"name": "CastListTable", "description": "キャスト一覧テーブル（ランク/名前/タグ/売上/操作）", "data_sources": ["registered_casts", "RPC:get_cast_stats"]}
+      ],
+      "data_sources": ["accounts", "registered_casts", "RPC:get_weekly_coin_stats", "RPC:get_cast_stats", "coin_transactions", "chat_logs", "dm_send_log"],
+      "actions": [
+        {"label": "キャスト追加", "target": "registered_casts INSERT"},
+        {"label": "キャスト編集（インライン）", "target": "registered_casts UPDATE"},
+        {"label": "キャスト無効化", "target": "registered_casts UPDATE is_active=false"},
+        {"label": "アカウント切替", "target": "state変更"}
+      ]
+    },
+    {
+      "url": "/casts/[castName]",
+      "file": "frontend/src/app/casts/[castName]/page.tsx",
+      "description": "キャスト詳細ページ（7タブ構成）",
+      "tabs": ["overview", "sessions", "dm", "analytics", "reports", "settings", "competitors"],
+      "components": [
+        {"tab": "overview", "name": "WeeklyRevenueKPIs", "description": "今週/先週の売上・前週比", "data_sources": ["coin_transactions"]},
+        {"tab": "overview", "name": "StatsCards", "description": "総メッセージ/ユニークユーザー", "data_sources": ["RPC:get_cast_stats"]},
+        {"tab": "sessions", "name": "SessionListAccordion", "description": "セッション一覧（展開でチャットログ表示）", "data_sources": ["sessions", "chat_logs"]},
+        {"tab": "sessions", "name": "BroadcastAnalysis", "description": "配信日選択+セッション詳細分析", "data_sources": ["RPC:get_session_list_v2"]},
+        {"tab": "dm", "name": "DMQueueStatus", "description": "DM送信キューの状態表示", "data_sources": ["dm_send_log"]},
+        {"tab": "dm", "name": "DMSectionTabs", "description": "ユーザー別/DM送信/セグメント別/キャンペーン/シナリオ/効果測定", "data_sources": ["dm_send_log", "dm_scenarios", "dm_scenario_enrollments", "paid_users"]},
+        {"tab": "analytics", "name": "UserSegmentAnalysis", "description": "ユーザーセグメント分布（S1-S10+churned）", "data_sources": ["RPC:get_cast_segments"]},
+        {"tab": "analytics", "name": "HourlyPerformance", "description": "時間帯別パフォーマンス", "data_sources": ["RPC:get_hourly_perf_stats"]},
+        {"tab": "analytics", "name": "SalesRevenue", "description": "売上一覧・課金ユーザー", "data_sources": ["coin_transactions", "RPC:get_cast_paid_users", "RPC:get_dm_campaign_cvr"]},
+        {"tab": "analytics", "name": "AcquisitionAnalysis", "description": "新規ユーザー獲得分析", "data_sources": ["RPC:get_cast_acquisition_users"]},
+        {"tab": "reports", "name": "CastReportsTab", "description": "AIレポート表示（外部コンポーネント）", "data_sources": ["cast_knowledge"]},
+        {"tab": "settings", "name": "BasicInfoEditor", "description": "表示名/プラットフォーム/モデルID/アバター編集", "data_sources": ["registered_casts"]},
+        {"tab": "settings", "name": "HealthScore", "description": "キャスト健全度スコア（5軸レーダー）", "data_sources": ["RPC:get_cast_health_score"]},
+        {"tab": "settings", "name": "CoinRateSettings", "description": "コインレート・手数料設定", "data_sources": ["cast_cost_settings"]},
+        {"tab": "competitors", "name": "CompetitorList", "description": "競合キャスト一覧+分析ボタン", "data_sources": ["competitor_benchmarks"]},
+        {"tab": "competitors", "name": "CompetitorDiffReport", "description": "Claude AIによる競合差分分析結果", "data_sources": ["API:/api/analysis/run-competitor-diff"]}
+      ],
+      "actions": [
+        {"label": "セッション展開/閉じる", "target": "chat_logs SELECT"},
+        {"label": "DM送信", "target": "dm_send_log INSERT + Stripchat API"},
+        {"label": "DMスケジュール", "target": "dm_schedules INSERT"},
+        {"label": "セグメント更新", "target": "RPC:get_cast_segments"},
+        {"label": "競合分析実行", "target": "API:/api/analysis/run-competitor-diff"},
+        {"label": "基本情報保存", "target": "registered_casts UPDATE"},
+        {"label": "ヘルススコア更新", "target": "RPC:get_cast_health_score"}
+      ]
+    },
+    {
+      "url": "/casts/[castName]/sessions",
+      "file": "frontend/src/app/casts/[castName]/sessions/page.tsx",
+      "description": "セッション一覧ページ（期間フィルタ+チャート）",
+      "tabs": [],
+      "components": [
+        {"name": "PeriodFilter", "description": "今週/先週/今月/先月/全期間/カスタム切替", "data_sources": []},
+        {"name": "SummaryKPICards", "description": "セッション数/平均配信時間/総売上/平均売上/総MSG数", "data_sources": ["RPC:get_session_list_v2"]},
+        {"name": "TrendChart", "description": "売上棒グラフ+ユーザー数/DM送信数折れ線", "data_sources": ["RPC:get_session_list_v2", "dm_send_log"]},
+        {"name": "SessionList", "description": "セッションカード一覧（コイン内訳ミニバー付き）", "data_sources": ["RPC:get_session_list_v2"]},
+        {"name": "Pagination", "description": "ページネーション", "data_sources": []}
+      ],
+      "data_sources": ["RPC:get_session_list_v2", "chat_logs(fallback)", "dm_send_log"],
+      "actions": [
+        {"label": "期間フィルタ変更", "target": "state変更→再取得"},
+        {"label": "CSV出力", "target": "CSVダウンロード"},
+        {"label": "配信準備", "target": "/casts/[castName]/sessions/[sessionId]?mode=pre"},
+        {"label": "セッション詳細", "target": "/casts/[castName]/sessions/[sessionId]"}
+      ]
+    },
+    {
+      "url": "/casts/[castName]/sessions/[sessionId]",
+      "file": "frontend/src/app/casts/[castName]/sessions/[sessionId]/page.tsx",
+      "description": "セッション詳細（配信前/中/後の3モード）",
+      "tabs": [],
+      "components": [
+        {"name": "SessionSummaryHeader", "description": "配信グループ情報/タイトル/売上/コイン内訳", "data_sources": ["RPC:get_session_summary"]},
+        {"name": "TopUsers", "description": "トップチッパー一覧", "data_sources": ["RPC:get_session_actions"]},
+        {"name": "FirstTimePayers", "description": "初回応援ユーザー（DM送信状態付き）", "data_sources": ["RPC:get_session_actions"]},
+        {"name": "HighSpenders", "description": "高額応援ユーザー", "data_sources": ["RPC:get_session_actions"]},
+        {"name": "VisitedNoAction", "description": "訪問のみユーザー", "data_sources": ["RPC:get_session_actions"]},
+        {"name": "DMFollowupQueue", "description": "DMフォローアップキュー", "data_sources": ["dm_send_log"]},
+        {"name": "SegmentBreakdown", "description": "セグメント別DM送信/訪問/課金分布", "data_sources": ["user_profiles"]},
+        {"name": "LiveChatTimeline", "description": "リアルタイムチャットタイムライン（liveモード）", "data_sources": ["Realtime:chat_logs"]},
+        {"name": "TranscriptTimeline", "description": "配信文字起こし+イベントタイムライン", "data_sources": ["cast_transcripts"]}
+      ],
+      "data_sources": ["RPC:get_session_summary", "RPC:get_session_actions", "chat_logs", "coin_transactions", "user_profiles", "cast_transcripts", "Realtime:chat_logs"],
+      "actions": [
+        {"label": "初応援ユーザーへお礼DM", "target": "dm_send_log INSERT"},
+        {"label": "高額応援ユーザーへ特別DM", "target": "dm_send_log INSERT"},
+        {"label": "フォローDM一括送信", "target": "RPC:queueDmBatch"},
+        {"label": "テンプレートで一括送信", "target": "dm_send_log INSERT"},
+        {"label": "シナリオ登録", "target": "dm_scenario_enrollments INSERT"}
+      ]
+    },
+    {
+      "url": "/spy",
+      "file": "frontend/src/app/spy/page.tsx",
+      "description": "SPYリアルタイム監視ダッシュボード",
+      "tabs": ["自社キャスト", "競合分析"],
+      "sub_tabs": {
+        "自社キャスト": ["リアルタイム", "キャスト一覧", "レポート"],
+        "競合分析": ["リアルタイム", "キャスト一覧", "型カタログ", "マーケット"]
+      },
+      "components": [
+        {"tab": "自社キャスト/リアルタイム", "name": "RealtimeTab", "description": "リアルタイムチャット監視+メッセージフィルタ+CVR計算", "data_sources": ["Realtime:chat_logs", "use_realtime_spy hook"]},
+        {"tab": "自社キャスト/キャスト一覧", "name": "OwnCastListTab", "description": "自社キャスト管理一覧+型割り当て", "data_sources": ["RPC:get_registered_casts"]},
+        {"tab": "自社キャスト/レポート", "name": "FBReportsTab", "description": "AIフィードバックレポート一覧", "data_sources": ["ai_reports"]},
+        {"tab": "競合分析/キャスト一覧", "name": "SpyListTab", "description": "競合キャスト監視リスト+インライン編集", "data_sources": ["spy_casts", "RPC:get_spy_cast_stats"]},
+        {"tab": "競合分析/リアルタイム", "name": "SpyRealtimeTab", "description": "競合キャストのリアルタイムチャット", "data_sources": ["Realtime:chat_logs"]}
+      ],
+      "data_sources": ["chat_logs", "accounts", "spy_casts", "registered_casts", "ai_reports", "user_profiles", "Realtime:chat_logs"],
+      "actions": [
+        {"label": "新規キャスト追加", "target": "registered_casts/spy_casts INSERT"},
+        {"label": "Chrome拡張で全タブ開く", "target": "外部リンク"},
+        {"label": "キャスト編集（インライン）", "target": "spy_casts UPDATE"},
+        {"label": "消滅判定トグル", "target": "spy_casts UPDATE is_extinct"},
+        {"label": "メッセージタイプフィルタ", "target": "state変更"}
+      ]
+    },
+    {
+      "url": "/spy/[castName]",
+      "file": "frontend/src/app/spy/[castName]/page.tsx",
+      "description": "SPYキャスト別詳細",
+      "tabs": ["概要", "配信ログ", "ユーザー分析", "フォーマット"],
+      "components": [
+        {"tab": "概要", "name": "OverviewCards", "description": "メッセージ/チップ/コイン/ユニークユーザー+型情報", "data_sources": ["RPC:get_spy_cast_stats", "cast_types"]},
+        {"tab": "配信ログ", "name": "SessionsTab", "description": "配信セッション一覧（アコーディオン展開）", "data_sources": ["RPC:get_session_list_v2", "chat_logs"]},
+        {"tab": "ユーザー分析", "name": "UsersTab", "description": "応援ユーザーランキング+ステータスバッジ", "data_sources": ["RPC:get_user_retention_status"]},
+        {"tab": "フォーマット", "name": "FormatTab", "description": "フォーマット分析（プレースホルダー）", "data_sources": []}
+      ],
+      "data_sources": ["spy_casts", "chat_logs", "cast_types", "sessions", "RPC:get_spy_cast_stats", "RPC:get_session_list_v2", "RPC:get_user_retention_status"],
+      "actions": [
+        {"label": "型割り当て変更", "target": "spy_casts UPDATE"},
+        {"label": "ユーザー詳細へ遷移", "target": "/spy/users/[username]"},
+        {"label": "セッション展開", "target": "chat_logs SELECT"}
+      ]
+    },
+    {
+      "url": "/spy/users/[username]",
+      "file": "frontend/src/app/spy/users/[username]/page.tsx",
+      "description": "SPYユーザー横断分析",
+      "tabs": [],
+      "components": [
+        {"name": "UserSummaryCards", "description": "合計コイン/合計メッセージ/訪問日数/最終確認", "data_sources": ["RPC:get_user_activity"]},
+        {"name": "CastActivityTable", "description": "キャスト別活動テーブル", "data_sources": ["RPC:get_user_activity"]},
+        {"name": "RecentMessages", "description": "最近のメッセージ（全キャスト横断、50件）", "data_sources": ["chat_logs"]}
+      ],
+      "data_sources": ["accounts", "chat_logs", "RPC:get_user_activity"],
+      "actions": [
+        {"label": "キャスト名クリックで遷移", "target": "/spy/[castName]"}
+      ]
+    },
+    {
+      "url": "/spy/analysis",
+      "file": "frontend/src/app/spy/analysis/page.tsx",
+      "description": "競合分析ダッシュボード（プレースホルダー）",
+      "tabs": [],
+      "components": [
+        {"name": "PlaceholderCard", "description": "データ蓄積中メッセージ", "data_sources": []}
+      ],
+      "data_sources": [],
+      "actions": []
+    },
+    {
+      "url": "/alerts",
+      "file": "frontend/src/app/alerts/page.tsx",
+      "description": "VIP入室アラート（リアルタイム）",
+      "tabs": [],
+      "components": [
+        {"name": "LeftPanel:TriggerSettings", "description": "CRITICAL/WARNING閾値+休眠判定日数スライダー", "data_sources": []},
+        {"name": "CenterPanel:AlertList", "description": "入室アラートカード一覧（VIPアイコン/レベル/コイン）", "data_sources": ["Realtime:chat_logs(enter)", "chat_logs"]},
+        {"name": "RightPanel:UserDetails", "description": "選択ユーザーの詳細（累計コイン/Lv/最終応援日/DM履歴）", "data_sources": ["user_profiles", "dm_send_log"]}
+      ],
+      "data_sources": ["accounts", "chat_logs", "user_profiles", "dm_send_log", "Realtime:chat_logs"],
+      "actions": [
+        {"label": "閾値変更", "target": "state変更"},
+        {"label": "ユーザー選択", "target": "state変更→詳細表示"},
+        {"label": "DM送信", "target": "/dm遷移"},
+        {"label": "デモデータ挿入", "target": "chat_logs INSERT"}
+      ]
+    },
+    {
+      "url": "/alerts/system",
+      "file": "frontend/src/app/alerts/system/page.tsx",
+      "description": "システム通知一覧（売上急落/連続赤字/競合変動等）",
+      "tabs": [],
+      "components": [
+        {"name": "StatsCards", "description": "未読/重大/合計/種類カウント", "data_sources": ["alerts"]},
+        {"name": "FilterControls", "description": "重要度/種類/既読フィルタ", "data_sources": []},
+        {"name": "AlertListCards", "description": "アラートカード一覧（タイプアイコン/メタデータタグ）", "data_sources": ["alerts"]},
+        {"name": "Pagination", "description": "ページネーション", "data_sources": []}
+      ],
+      "data_sources": ["alerts", "Realtime:alerts"],
+      "actions": [
+        {"label": "重要度フィルタ", "target": "state変更"},
+        {"label": "既読にする", "target": "alerts UPDATE"},
+        {"label": "全て既読", "target": "alerts UPDATE(bulk)"},
+        {"label": "ページ送り", "target": "state変更"}
+      ]
+    },
+    {
+      "url": "/feed",
+      "file": "frontend/src/app/feed/page.tsx",
+      "description": "SNS投稿管理+分析",
+      "tabs": ["投稿一覧", "分析"],
+      "components": [
+        {"tab": "投稿一覧", "name": "PostCards", "description": "投稿カード一覧（タイプ/キャスト名/内容/いいね/コメント）", "data_sources": ["feed_posts"]},
+        {"tab": "分析", "name": "PeriodSelector", "description": "7日/14日/30日切替", "data_sources": []},
+        {"tab": "分析", "name": "AnalyticsCards", "description": "合計投稿数/今週の投稿/平均いいね数", "data_sources": ["feed_posts"]},
+        {"tab": "分析", "name": "WeeklyBarChart", "description": "週別投稿数棒グラフ", "data_sources": ["feed_posts"]},
+        {"tab": "分析", "name": "PostTypeBreakdown", "description": "投稿タイプ別カード（text/image/video）", "data_sources": ["feed_posts"]},
+        {"tab": "分析", "name": "CorrelationTable", "description": "投稿→次セッション相関テーブル", "data_sources": ["feed_posts"]},
+        {"name": "CreatePostModal", "description": "新規投稿記録モーダル", "data_sources": ["feed_posts INSERT"]}
+      ],
+      "data_sources": ["accounts", "feed_posts"],
+      "actions": [
+        {"label": "投稿を記録", "target": "feed_posts INSERT"},
+        {"label": "期間変更", "target": "state変更"}
+      ]
+    },
+    {
+      "url": "/reports",
+      "file": "frontend/src/app/reports/page.tsx",
+      "description": "AIレポート一覧（配信分析）",
+      "tabs": [],
+      "components": [
+        {"name": "AccountSelector", "description": "アカウント切替", "data_sources": ["accounts"]},
+        {"name": "ReportCards", "description": "レポートカード（展開式、Markdown表示）", "data_sources": ["ai_reports", "sessions"]}
+      ],
+      "data_sources": ["accounts", "ai_reports", "sessions"],
+      "actions": [
+        {"label": "レポート展開/閉じる", "target": "state変更"}
+      ]
+    },
+    {
+      "url": "/admin/command-center",
+      "file": "frontend/src/app/admin/command-center/page.tsx",
+      "description": "Wisteriaコマンドセンター（無効化済み）",
+      "tabs": [],
+      "components": [],
+      "data_sources": [],
+      "actions": [],
+      "status": "disabled_notFound"
+    },
+    {
+      "url": "/admin/health",
+      "file": "frontend/src/app/admin/health/page.tsx",
+      "description": "品質チェック+Collector同期ヘルス",
+      "tabs": [],
+      "components": [
+        {"name": "SummaryBadges", "description": "OK/warn/errorカウントバッジ", "data_sources": ["coin_transactions", "chat_logs", "dm_send_log", "spy_viewers", "user_profiles"]},
+        {"name": "QualityChecks", "description": "品質チェック結果一覧（アコーディオン）", "data_sources": ["coin_transactions", "chat_logs", "dm_send_log", "spy_viewers", "user_profiles"]},
+        {"name": "SyncHealthTable", "description": "Collector同期ヘルステーブル", "data_sources": ["RPC:get_sync_health"]}
+      ],
+      "data_sources": ["accounts", "coin_transactions", "chat_logs", "dm_send_log", "spy_viewers", "user_profiles", "RPC:get_sync_health"],
+      "actions": [
+        {"label": "リフレッシュ", "target": "runChecks()+fetchSyncHealth()"}
+      ]
+    },
+    {
+      "url": "/admin/casts",
+      "file": "frontend/src/app/admin/casts/page.tsx",
+      "description": "キャスト管理（自社+他社）",
+      "tabs": ["自社キャスト", "他社キャスト"],
+      "components": [
+        {"tab": "自社キャスト", "name": "StatsCards", "description": "アクティブ/非アクティブ/合計カウント", "data_sources": ["registered_casts"]},
+        {"tab": "自社キャスト", "name": "ActiveCastsTable", "description": "自社キャスト詳細テーブル（インライン編集）", "data_sources": ["registered_casts", "cast_cost_settings"]},
+        {"tab": "他社キャスト", "name": "QuickAddInput", "description": "SPYキャスト追加入力", "data_sources": []},
+        {"tab": "他社キャスト", "name": "SpyCastsTable", "description": "他社キャストテーブル（インライン編集）", "data_sources": ["spy_casts"]}
+      ],
+      "data_sources": ["accounts", "registered_casts", "cast_cost_settings", "spy_casts"],
+      "actions": [
+        {"label": "自社キャスト登録", "target": "/admin/casts/new"},
+        {"label": "編集（インライン）", "target": "registered_casts/spy_casts UPDATE"},
+        {"label": "無効化/有効化", "target": "registered_casts/spy_casts UPDATE is_active"},
+        {"label": "削除", "target": "registered_casts/spy_casts DELETE"},
+        {"label": "SPYキャスト追加", "target": "spy_casts INSERT"}
+      ]
+    },
+    {
+      "url": "/admin/casts/new",
+      "file": "frontend/src/app/admin/casts/new/page.tsx",
+      "description": "新規キャスト登録フォーム",
+      "tabs": [],
+      "components": [
+        {"name": "RegistrationForm", "description": "キャスト名/表示名/プラットフォーム/モデルID/ジャンル/ベンチマーク/カテゴリ/SS間隔/GCレート/収益シェア/メモ", "data_sources": ["accounts", "registered_casts"]}
+      ],
+      "data_sources": ["accounts", "registered_casts", "cast_cost_settings"],
+      "actions": [
+        {"label": "キャストを登録", "target": "registered_casts INSERT + cast_cost_settings UPSERT"},
+        {"label": "キャンセル", "target": "/admin/casts遷移"}
+      ]
+    },
+    {
+      "url": "/admin/scenarios",
+      "file": "frontend/src/app/admin/scenarios/page.tsx",
+      "description": "DMシナリオ管理+エンロールメント監視",
+      "tabs": ["シナリオ一覧", "エンロールメント監視"],
+      "components": [
+        {"tab": "シナリオ一覧", "name": "ScenarioGrid", "description": "シナリオカード一覧（トリガータイプ/ステップ/登録数）", "data_sources": ["dm_scenarios", "dm_scenario_enrollments"]},
+        {"tab": "エンロールメント監視", "name": "EnrollmentTable", "description": "ユーザーエンロールメント進捗テーブル", "data_sources": ["dm_scenario_enrollments"]},
+        {"name": "ScenarioEditModal", "description": "シナリオ作成/編集モーダル（ステップ配列）", "data_sources": []}
+      ],
+      "data_sources": ["accounts", "dm_scenarios", "dm_scenario_enrollments", "registered_casts"],
+      "actions": [
+        {"label": "キュー処理実行", "target": "API:POST /api/scenario/process"},
+        {"label": "新規シナリオ作成", "target": "dm_scenarios INSERT"},
+        {"label": "有効化/無効化", "target": "dm_scenarios UPDATE"},
+        {"label": "AI文面プレビュー", "target": "API:POST /api/persona"},
+        {"label": "削除", "target": "dm_scenarios+dm_scenario_enrollments DELETE"}
+      ]
+    },
+    {
+      "url": "/admin/test-data",
+      "file": "frontend/src/app/admin/test-data/page.tsx",
+      "description": "テストデータ管理（件数確認+削除）",
+      "tabs": [],
+      "components": [
+        {"name": "TableCards", "description": "対象テーブル別カード（dm_send_log/chat_logs/dm_trigger_logs）", "data_sources": ["RPC:count_test_data"]}
+      ],
+      "data_sources": ["accounts", "RPC:count_test_data", "RPC:delete_test_data"],
+      "actions": [
+        {"label": "全テーブルスキャン", "target": "RPC:count_test_data"},
+        {"label": "テストデータ削除", "target": "RPC:delete_test_data"}
+      ]
+    },
+    {
+      "url": "/admin/data-quality",
+      "file": "frontend/src/app/admin/data-quality/page.tsx",
+      "description": "データ品質チェック（RPC+クライアントフォールバック）",
+      "tabs": [],
+      "components": [
+        {"name": "SummaryBadges", "description": "OK/warn/errorカウント", "data_sources": ["RPC:check_spy_data_quality"]},
+        {"name": "CheckResults", "description": "品質チェック結果アコーディオン", "data_sources": ["RPC:check_spy_data_quality", "chat_logs(fallback)", "spy_casts(fallback)", "registered_casts(fallback)", "coin_transactions(fallback)"]}
+      ],
+      "data_sources": ["accounts", "RPC:check_spy_data_quality", "chat_logs", "spy_casts", "registered_casts", "coin_transactions"],
+      "actions": [
+        {"label": "リフレッシュ", "target": "runChecks()"}
+      ]
+    },
+    {
+      "url": "/admin/revenue",
+      "file": "frontend/src/app/admin/revenue/page.tsx",
+      "description": "収益シェア計算（週次分解）",
+      "tabs": [],
+      "components": [
+        {"name": "FilterBar", "description": "キャスト選択/期間指定/計算ボタン/CSV出力", "data_sources": ["registered_casts"]},
+        {"name": "ResultsTable", "description": "週次分解テーブル（TX数/トークン/Gross/手数料/Net/支払い）", "data_sources": ["RPC:calculate_revenue_share"]},
+        {"name": "SummaryCards", "description": "4ステップ計算サマリー（Gross/PF手数料/Net/Cast支払い）", "data_sources": ["RPC:calculate_revenue_share"]}
+      ],
+      "data_sources": ["accounts", "registered_casts", "RPC:calculate_revenue_share"],
+      "actions": [
+        {"label": "計算する", "target": "RPC:calculate_revenue_share"},
+        {"label": "CSV出力", "target": "CSVダウンロード"},
+        {"label": "計算式展開", "target": "state変更"}
+      ]
+    },
+    {
+      "url": "/login",
+      "file": "frontend/src/app/login/page.tsx",
+      "description": "ログインページ",
+      "tabs": [],
+      "components": [
+        {"name": "LoginForm", "description": "メール+パスワード入力", "data_sources": ["Supabase Auth"]}
+      ],
+      "data_sources": ["Supabase Auth:signInWithPassword"],
+      "actions": [
+        {"label": "ログイン", "target": "Supabase Auth:signInWithPassword"},
+        {"label": "新規登録へ", "target": "/signup遷移"}
+      ]
+    },
+    {
+      "url": "/signup",
+      "file": "frontend/src/app/signup/page.tsx",
+      "description": "新規登録ページ",
+      "tabs": [],
+      "components": [
+        {"name": "SignupForm", "description": "メール+パスワード+確認入力", "data_sources": ["Supabase Auth"]},
+        {"name": "ConfirmationMessage", "description": "確認メール送信完了画面", "data_sources": []}
+      ],
+      "data_sources": ["Supabase Auth:signUp"],
+      "actions": [
+        {"label": "アカウント作成", "target": "Supabase Auth:signUp"},
+        {"label": "ログインへ", "target": "/login遷移"}
+      ]
+    }
+  ],
+  "api_endpoints": [
+    {"url": "/api/ai-report", "method": "POST", "description": "Claude APIで配信データの分析レポート生成", "tables": ["sessions", "chat_logs", "user_profiles"], "auth": "Bearer JWT"},
+    {"url": "/api/analyze-session", "method": "POST", "description": "タイムラインデータ統合・配信構成分類・応援トリガー特定（ルールベース）", "tables": ["chat_logs", "cast_transcripts", "coin_transactions"], "auth": "service_role"},
+    {"url": "/api/dm/send", "method": "POST", "description": "Stripchat APIで単発DM送信（安全ゲート付き）", "tables": ["accounts", "stripchat_sessions", "registered_casts", "dm_send_log", "user_profiles", "coin_transactions"], "auth": "Cookie session"},
+    {"url": "/api/dm/batch", "method": "POST", "description": "キューからのバッチDM送信（キャスト身元検証・レート制限）", "tables": ["accounts", "stripchat_sessions", "registered_casts", "dm_send_log"], "auth": "Cookie session"},
+    {"url": "/api/persona", "method": "GET", "description": "キャストペルソナデータ取得", "tables": ["cast_personas"], "auth": "Bearer JWT"},
+    {"url": "/api/persona", "method": "PUT", "description": "キャストペルソナのアップサート", "tables": ["cast_personas"], "auth": "Bearer JWT"},
+    {"url": "/api/persona", "method": "POST", "description": "DM生成・FBレポート・採用コピー等の複数タスク対応（Phase 1/2/3後方互換）", "tables": ["cast_personas", "cast_persona", "chat_logs", "spy_messages", "coin_transactions", "user_profiles", "dm_send_log"], "auth": "Bearer JWT"},
+    {"url": "/api/persona/engine", "method": "POST", "description": "統一クリエイティブエンジン（DM/X投稿/採用/コンテンツ生成）", "tables": ["cast_personas", "cast_persona", "persona_feedback"], "auth": "Bearer JWT"},
+    {"url": "/api/persona/feedback", "method": "POST", "description": "生成結果+実績データをpersona_feedbackに記録", "tables": ["persona_feedback"], "auth": "Bearer JWT"},
+    {"url": "/api/persona/feedback", "method": "GET", "description": "フィードバック一覧取得（スコアフィルタ対応）", "tables": ["persona_feedback"], "auth": "Bearer JWT"},
+    {"url": "/api/scenario/goal", "method": "POST", "description": "ユーザーイベント受信→ゴール到達チェック", "tables": ["dm_scenario_enrollments"], "auth": "Bearer JWT"},
+    {"url": "/api/scenario/process", "method": "POST", "description": "シナリオキュー処理・期日到来のエンロールメントDM登録", "tables": ["dm_scenario_enrollments", "dm_send_log"], "auth": "Bearer JWT"},
+    {"url": "/api/screenshot", "method": "GET", "description": "Stripchat CDNサムネイル画像プロキシ", "tables": [], "auth": "不要"},
+    {"url": "/api/screenshot", "method": "POST", "description": "サムネイル取得してcast_screenshotsに保存", "tables": ["cast_screenshots"], "auth": "Bearer JWT"},
+    {"url": "/api/stripchat/test", "method": "GET", "description": "Stripchat公開API/セッション接続テスト", "tables": ["accounts", "stripchat_sessions"], "auth": "optional"},
+    {"url": "/api/transcribe", "method": "POST", "description": "OpenAI Whisper APIで音声文字起こし→cast_transcripts保存", "tables": ["accounts", "cast_transcripts"], "auth": "Cookie session"},
+    {"url": "/api/data/sessions", "method": "GET", "description": "AIペルソナエージェント用セッション一覧取得", "tables": ["sessions"], "auth": "service_role"},
+    {"url": "/api/data/chat-logs", "method": "GET", "description": "AIペルソナエージェント用チャットログ取得", "tables": ["chat_logs"], "auth": "service_role"},
+    {"url": "/api/data/cast-profile", "method": "GET", "description": "キャストプロフィール取得（cast_profiles/spy_castsフォールバック）", "tables": ["cast_profiles", "spy_casts"], "auth": "service_role"},
+    {"url": "/api/data/snapshots", "method": "GET", "description": "キャストスナップショット取得", "tables": ["cast_snapshots"], "auth": "service_role"},
+    {"url": "/api/data/spy-summary", "method": "GET", "description": "キャスト集計サマリー（セッション/収益の期間別集計）", "tables": ["sessions", "coin_transactions"], "auth": "service_role"},
+    {"url": "/api/data/competitors", "method": "GET", "description": "競合キャスト一覧取得", "tables": ["competitor_benchmarks"], "auth": "不要(anon/service)"},
+    {"url": "/api/analysis/session-report", "method": "POST", "description": "Claude APIで配信終了時の自動分析レポート生成", "tables": ["sessions", "chat_logs", "coin_transactions", "cast_knowledge"], "auth": "service_role"},
+    {"url": "/api/analysis/competitor-diff", "method": "POST", "description": "Claude APIで競合差分分析レポート生成", "tables": ["competitor_benchmarks", "sessions", "cast_knowledge"], "auth": "service_role"},
+    {"url": "/api/analysis/run-competitor-diff", "method": "POST", "description": "クライアント向け競合差分分析プロキシ（内部でservice_role使用）", "tables": [], "auth": "不要(内部proxy)"},
+    {"url": "/api/analysis/run-session-report", "method": "POST", "description": "クライアント向け総合分析レポートプロキシ（内部でservice_role使用）", "tables": [], "auth": "不要(内部proxy)"}
+  ]
+}

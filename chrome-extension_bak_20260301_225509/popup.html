@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=380">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 380px;
+      min-height: 280px;
+      font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif;
+      background: #030712;
+      color: #f1f5f9;
+      padding: 16px;
+    }
+    .card {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(56, 189, 248, 0.08);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 12px;
+      backdrop-filter: blur(20px);
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header-title {
+      font-weight: 700;
+      font-size: 16px;
+      background: linear-gradient(135deg, #38bdf8, #a78bfa);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: #94a3b8;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+    .status-dot.connected {
+      background: #22c55e;
+      box-shadow: 0 0 6px #22c55e;
+    }
+    .status-dot.disconnected {
+      background: #f43f5e;
+    }
+    .section-title {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-bottom: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .label {
+      font-size: 11px;
+      color: #64748b;
+      margin-bottom: 4px;
+    }
+    input, select {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.4);
+      border: 1px solid rgba(56, 189, 248, 0.12);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: #f1f5f9;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus, select:focus {
+      border-color: rgba(56, 189, 248, 0.4);
+    }
+    input::placeholder {
+      color: #475569;
+    }
+    select {
+      cursor: pointer;
+    }
+    select option {
+      background: #0f172a;
+      color: #f1f5f9;
+    }
+    .input-group {
+      margin-bottom: 12px;
+    }
+    .btn {
+      width: 100%;
+      padding: 10px 20px;
+      border: none;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      color: white;
+    }
+    .btn:hover { opacity: 0.9; }
+    .btn:active { transform: scale(0.98); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary {
+      background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+    }
+    .btn-sync {
+      background: linear-gradient(135deg, #f59e0b, #d97706);
+      padding: 8px 16px;
+      width: auto;
+      font-size: 12px;
+      border-radius: 8px;
+    }
+    .error {
+      color: #f43f5e;
+      font-size: 12px;
+      margin-top: 8px;
+      display: none;
+    }
+    .error.show { display: block; }
+    .spy-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .spy-info h3 {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .spy-info p {
+      font-size: 11px;
+      color: #475569;
+      margin-top: 2px;
+    }
+    .hidden { display: none; }
+    .success-msg {
+      color: #22c55e;
+      font-size: 12px;
+      margin-top: 8px;
+      display: none;
+    }
+    .success-msg.show { display: block; }
+    .cast-identity {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+    .cast-identity.ok {
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      color: #22c55e;
+    }
+    .cast-identity.warning {
+      background: rgba(244, 63, 94, 0.1);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      color: #f43f5e;
+    }
+    .cast-identity.unknown {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid rgba(245, 158, 11, 0.2);
+      color: #f59e0b;
+    }
+    .cast-identity-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1;
+      min-width: 0;
+    }
+    .cast-identity-name {
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .btn-clear-cookies {
+      background: rgba(244, 63, 94, 0.2);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      color: #f43f5e;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .btn-clear-cookies:hover {
+      background: rgba(244, 63, 94, 0.3);
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <span style="font-size: 18px;">&#9670;</span>
+      <span class="header-title">Strip Live Spot</span>
+    </div>
+    <div class="status-badge">
+      <span class="status-dot disconnected" id="statusDot"></span>
+      <span id="statusText">未接続</span>
+    </div>
+  </div>
+
+  <!-- ============ Login Section ============ -->
+  <div id="loginSection">
+    <div class="card">
+      <div class="section-title">ログイン</div>
+      <div class="input-group">
+        <div class="label">メールアドレス</div>
+        <input type="email" id="emailInput" placeholder="admin@livespot.jp">
+      </div>
+      <div class="input-group">
+        <div class="label">パスワード</div>
+        <input type="password" id="passwordInput" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;">
+      </div>
+      <button class="btn btn-primary" id="loginBtn">ログイン</button>
+      <div class="error" id="loginError"></div>
+    </div>
+  </div>
+
+  <!-- ============ Dashboard Section ============ -->
+  <div id="dashboardSection" class="hidden">
+    <!-- Account -->
+    <div class="card">
+      <div class="section-title">アカウント</div>
+      <select id="accountSelect">
+        <option value="">読み込み中...</option>
+      </select>
+    </div>
+
+    <!-- Cast Identity -->
+    <div id="castIdentitySection" class="cast-identity unknown" style="display:none;">
+      <div class="cast-identity-left">
+        <span id="castIdentityIcon">&#9679;</span>
+        <span id="castIdentityText">検出中...</span>
+      </div>
+      <button class="btn-clear-cookies" id="clearCookiesBtn" style="display:none;" title="AMP cookieを削除してキャスト切り替え">リセット</button>
+    </div>
+
+    <!-- Coin Sync -->
+    <div class="card">
+      <div class="spy-row">
+        <div class="spy-info">
+          <h3>名簿同期</h3>
+          <p>Stripchatのコイン履歴を取得</p>
+        </div>
+        <button class="btn btn-sync" id="coinSyncBtn">同期</button>
+      </div>
+      <div style="margin-top: 8px;">
+        <div class="label">同期先キャスト</div>
+        <select id="coinSyncCastSelect">
+          <option value="">読み込み中...</option>
+        </select>
+      </div>
+      <div id="coinSyncStatus" class="hidden" style="margin-top:8px; font-size:12px; line-height:1.6; color:#94a3b8;"></div>
+    </div>
+
+    <!-- Logout -->
+    <div style="text-align:center; margin-top:8px;">
+      <a href="#" id="logoutLink" style="color:#64748b; font-size:11px; text-decoration:none;">ログアウト</a>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,497 @@
+{
+  "generated_at": "2026-03-10",
+  "target": "C:/dev/livespot",
+  "summary": {
+    "total_read_calls": 34,
+    "total_write_calls": 4,
+    "with_verification_gate": 10,
+    "without_verification_gate": 28,
+    "critical_risk_write_no_gate": 2,
+    "high_risk_db_insert_no_gate": 5
+  },
+  "read_calls": [
+    {
+      "id": "R-01",
+      "file": "collector/src/coin-sync.ts",
+      "line": 507,
+      "endpoint": "POST https://stripchat.com/api/front/auth/login",
+      "auth": "Username+Password",
+      "cast_name_source": "registered_casts reverse lookup",
+      "insert_table": "stripchat_sessions",
+      "verification_gate": false,
+      "risk": "medium"
+    },
+    {
+      "id": "R-02",
+      "file": "collector/src/coin-sync.ts",
+      "line": 834,
+      "endpoint": "GET https://stripchat.com/api/front/v2/user/me",
+      "auth": "Cookie",
+      "cast_name_source": "cookies_json → registered_casts",
+      "insert_table": "stripchat_sessions",
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-03",
+      "file": "collector/src/coin-sync.ts",
+      "line": 863,
+      "endpoint": "GET https://stripchat.com/api/front/v2/initial-dynamic?requestType=initial",
+      "auth": "Cookie",
+      "cast_name_source": "registered_casts fallback",
+      "insert_table": "stripchat_sessions",
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-04",
+      "file": "collector/src/coin-sync.ts",
+      "line": 1026,
+      "endpoint": "GET https://stripchat.com/api/front/users/{userId}/transactions?offset={n}&limit=100",
+      "auth": "Cookie",
+      "cast_name_source": "syncCastCoins parameter (registered_casts.cast_name)",
+      "insert_table": "coin_transactions",
+      "verification_gate": false,
+      "risk": "high"
+    },
+    {
+      "id": "R-05",
+      "file": "collector/src/coin-sync-service.ts",
+      "line": 201,
+      "endpoint": "GET https://stripchat.com/api/front/users/{userId}/transactions?offset={n}&limit=100",
+      "auth": "Cookie",
+      "cast_name_source": "registered_casts.cast_name",
+      "insert_table": "coin_transactions",
+      "verification_gate": false,
+      "risk": "high"
+    },
+    {
+      "id": "R-06",
+      "file": "collector/src/coin-sync-service.ts",
+      "line": 273,
+      "endpoint": "GET https://stripchat.com/api/front/users/{userId}/transactions/users?sort=lastPaid&order=desc",
+      "auth": "Cookie",
+      "cast_name_source": "registered_casts primary cast",
+      "insert_table": "paid_users",
+      "verification_gate": false,
+      "risk": "high"
+    },
+    {
+      "id": "R-07",
+      "file": "collector/src/coin-import.ts",
+      "line": 107,
+      "endpoint": "GET https://stripchat.com/api/front/users/{userId}/transactions?page=1&limit=1",
+      "auth": "Cookie (manual paste)",
+      "cast_name_source": "registered_casts.stripchat_user_id match",
+      "insert_table": "stripchat_sessions",
+      "verification_gate": true,
+      "verification_detail": "HTTP 200 = valid cookie",
+      "risk": "low"
+    },
+    {
+      "id": "R-08",
+      "file": "collector/src/ws-client.ts",
+      "line": null,
+      "endpoint": "GET https://ja.stripchat.com/api/front/v2/models/username/{castName}/cam",
+      "auth": "None (public) / cfClearance optional",
+      "cast_name_source": "parameter (config / registered_casts / spy_casts)",
+      "insert_table": "sessions, spy_messages",
+      "verification_gate": false,
+      "risk": "medium"
+    },
+    {
+      "id": "R-09",
+      "file": "collector/src/ws-client.ts",
+      "line": null,
+      "endpoint": "GET https://stripchat.com/api/front/v2/models/username/{castName}/members",
+      "auth": "JWT Bearer / Cookie",
+      "cast_name_source": "CastTarget.castName parameter",
+      "insert_table": "spy_viewers, spy_profiles",
+      "verification_gate": false,
+      "risk": "medium"
+    },
+    {
+      "id": "R-10",
+      "file": "collector/src/ws-client.ts",
+      "line": 147,
+      "endpoint": "wss://websocket-sp-v6.stripchat.com/connection/websocket",
+      "auth": "Centrifugo JWT",
+      "cast_name_source": "constructor parameter",
+      "insert_table": "spy_messages, sessions",
+      "verification_gate": false,
+      "risk": "medium"
+    },
+    {
+      "id": "R-11",
+      "file": "collector/src/auth/stripchat-auth.ts",
+      "line": 51,
+      "endpoint": "GET https://stripchat.com/{modelName}",
+      "auth": "None",
+      "cast_name_source": "modelName parameter",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "none"
+    },
+    {
+      "id": "R-12",
+      "file": "collector/src/auth/stripchat-auth.ts",
+      "line": 159,
+      "endpoint": "GET https://stripchat.com/api/front/v2/config",
+      "auth": "None",
+      "cast_name_source": "N/A",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "none"
+    },
+    {
+      "id": "R-13",
+      "file": "collector/src/refresh-cookies.ts",
+      "line": 110,
+      "endpoint": "GET https://stripchat.com/api/front/users/{userId}/transactions?page=1&limit=1",
+      "auth": "Refreshed Cookie",
+      "cast_name_source": "N/A",
+      "insert_table": null,
+      "verification_gate": true,
+      "verification_detail": "Cloudflare bypass verification",
+      "risk": "none"
+    },
+    {
+      "id": "R-14",
+      "file": "chrome-extension/content_coin_sync.js",
+      "line": 89,
+      "endpoint": "GET /api/front/v2/initial-dynamic?requestType=initial",
+      "auth": "Cookie (credentials: include)",
+      "cast_name_source": "stripchat_com_userId cookie",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-15",
+      "file": "chrome-extension/content_coin_sync.js",
+      "line": 234,
+      "endpoint": "GET https://ja.stripchat.com/api/front/users/{userId}/transactions?from=...&until=...&offset=...&limit=100",
+      "auth": "Cookie (credentials: include)",
+      "cast_name_source": "userId → registered_casts match (no cross-check)",
+      "insert_table": "coin_transactions",
+      "verification_gate": false,
+      "risk": "high",
+      "rate_limiting": "429 retry x3, 10-page batch sleep 2s"
+    },
+    {
+      "id": "R-16",
+      "file": "chrome-extension/content_coin_sync.js",
+      "line": 538,
+      "endpoint": "GET /api/front/v2/earnings/coins-history?page={n}&limit=100",
+      "auth": "Cookie",
+      "cast_name_source": "same as R-15",
+      "insert_table": "coin_transactions",
+      "verification_gate": false,
+      "risk": "high"
+    },
+    {
+      "id": "R-17",
+      "file": "chrome-extension/content_coin_sync.js",
+      "line": 424,
+      "endpoint": "GET /api/front/users/{userId}/transactions/users?sort=lastPaid&order=desc",
+      "auth": "Cookie",
+      "cast_name_source": "userId parameter",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "medium"
+    },
+    {
+      "id": "R-18",
+      "file": "chrome-extension/background.js",
+      "line": 2160,
+      "endpoint": "GET https://ja.stripchat.com/api/front/v2/models/username/{castName}/cam",
+      "auth": "None (public)",
+      "cast_name_source": "parameter",
+      "insert_table": "registered_casts",
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-19",
+      "file": "chrome-extension/background.js",
+      "line": 2589,
+      "endpoint": "GET https://stripchat.com/api/front/v2/models/username/{username}/cam",
+      "auth": "None (public)",
+      "cast_name_source": "parameter",
+      "insert_table": "screenshots",
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-20",
+      "file": "chrome-extension/background.js",
+      "line": 2985,
+      "endpoint": "GET https://stripchat.com/api/front/models/username/{castName}/groupShow/members",
+      "auth": "JWT Bearer / Cookie",
+      "cast_name_source": "parameter",
+      "insert_table": "viewer_stats",
+      "verification_gate": true,
+      "verification_detail": "401/403 invalidates JWT",
+      "risk": "low"
+    },
+    {
+      "id": "R-21",
+      "file": "chrome-extension/background.js",
+      "line": 3186,
+      "endpoint": "GET https://stripchat.com/api/front/v2/initial-dynamic?requestType=initial",
+      "auth": "Cookie (chrome.cookies.getAll)",
+      "cast_name_source": "response username → registered_casts match",
+      "insert_table": "stripchat_sessions",
+      "verification_gate": true,
+      "verification_detail": "registered_casts.cast_name match",
+      "risk": "low"
+    },
+    {
+      "id": "R-22",
+      "file": "chrome-extension/background.js",
+      "line": 3273,
+      "endpoint": "GET https://ja.stripchat.com/api/front/v2/config",
+      "auth": "Cookie",
+      "cast_name_source": "N/A",
+      "insert_table": "stripchat_sessions",
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-23",
+      "file": "chrome-extension/content_jwt_capture.js",
+      "line": 16,
+      "endpoint": "ALL XMLHttpRequest (Authorization: Bearer intercept)",
+      "auth": "JWT (passive capture)",
+      "cast_name_source": "JWT payload (upstream)",
+      "insert_table": "stripchat_sessions",
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-24",
+      "file": "chrome-extension/content_jwt_capture.js",
+      "line": 37,
+      "endpoint": "ALL fetch() (Authorization: Bearer intercept)",
+      "auth": "JWT (passive capture)",
+      "cast_name_source": "JWT payload",
+      "insert_table": "stripchat_sessions",
+      "verification_gate": true,
+      "verification_detail": "dedup via lastCapturedJwt",
+      "risk": "low"
+    },
+    {
+      "id": "R-25",
+      "file": "frontend/src/app/api/screenshot/route.ts",
+      "line": 17,
+      "endpoint": "GET https://img.strpst.com/thumbs/{unix_ts}/{modelId}_webp",
+      "auth": "None (public CDN)",
+      "cast_name_source": "POST body parameter",
+      "insert_table": "cast_screenshots",
+      "verification_gate": true,
+      "verification_detail": "authenticateAndValidateAccount()",
+      "risk": "none"
+    },
+    {
+      "id": "R-26",
+      "file": "frontend/src/app/api/stripchat/test/route.ts",
+      "line": 24,
+      "endpoint": "GET https://ja.stripchat.com/api/front/v2/models/username/{cast}/cam",
+      "auth": "None",
+      "cast_name_source": "query param (default: Risa_06)",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "none"
+    },
+    {
+      "id": "R-27",
+      "file": "frontend/src/lib/stripchat-api.ts",
+      "line": 113,
+      "endpoint": "GET https://ja.stripchat.com/api/front/v2/config",
+      "auth": "Cookie",
+      "cast_name_source": "N/A",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "none"
+    },
+    {
+      "id": "R-28",
+      "file": "frontend/src/lib/stripchat-api.ts",
+      "line": 177,
+      "endpoint": "GET https://stripchat.com/api/front/v2/models/username/{username}",
+      "auth": "Cookie",
+      "cast_name_source": "method parameter",
+      "insert_table": "user_profiles",
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-29",
+      "file": "frontend/src/lib/stripchat-api.ts",
+      "line": 375,
+      "endpoint": "GET https://stripchat.com/api/front/v2/models/username/{username}/cam",
+      "auth": "None",
+      "cast_name_source": "method parameter",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "none"
+    },
+    {
+      "id": "R-30",
+      "file": "frontend/src/lib/stripchat-api.ts",
+      "line": 417,
+      "endpoint": "GET https://stripchat.com/api/front/models/username/{castName}/groupShow/members",
+      "auth": "Cookie / JWT",
+      "cast_name_source": "method parameter",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-31",
+      "file": "frontend/src/lib/stripchat-api.ts",
+      "line": 445,
+      "endpoint": "GET https://ja.stripchat.com/api/front/v2/config",
+      "auth": "Cookie",
+      "cast_name_source": "N/A",
+      "insert_table": null,
+      "verification_gate": true,
+      "verification_detail": "Cloudflare detection (cf-mitigated)",
+      "risk": "none"
+    },
+    {
+      "id": "R-32",
+      "file": "collector/src/dm-service/stripchat-api.ts",
+      "line": 105,
+      "endpoint": "GET https://ja.stripchat.com/api/front/v2/config",
+      "auth": "Cookie",
+      "cast_name_source": "SessionData.stripchat_user_id",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "none"
+    },
+    {
+      "id": "R-33",
+      "file": "collector/src/dm-service/stripchat-api.ts",
+      "line": 133,
+      "endpoint": "GET https://stripchat.com/api/front/v2/models/username/{username}",
+      "auth": "Cookie",
+      "cast_name_source": "target username",
+      "insert_table": null,
+      "verification_gate": false,
+      "risk": "low"
+    },
+    {
+      "id": "R-34",
+      "file": "collector/src/dm-service/stripchat-api.ts",
+      "line": 262,
+      "endpoint": "GET https://ja.stripchat.com/api/front/users/{stripchat_user_id}",
+      "auth": "Cookie",
+      "cast_name_source": "SessionData.stripchat_user_id",
+      "insert_table": null,
+      "verification_gate": true,
+      "verification_detail": "response.ok + cf-mitigated detection",
+      "risk": "none"
+    }
+  ],
+  "write_calls": [
+    {
+      "id": "W-01",
+      "file": "collector/src/dm-service/stripchat-api.ts",
+      "line": 177,
+      "endpoint": "POST https://ja.stripchat.com/api/front/users/{stripchat_user_id}/conversations/{targetUserId}/messages",
+      "auth": "Cookie + CSRF token",
+      "cast_name_source": "SessionData.stripchat_user_id",
+      "verification_gate": false,
+      "risk": "critical",
+      "risk_detail": "DM送信にcast_name/model_id検証ゲートなし。誤キャストからDM送信のリスク"
+    },
+    {
+      "id": "W-02",
+      "file": "collector/src/dm-service/stripchat-api.ts",
+      "line": 229,
+      "endpoint": "POST https://ja.stripchat.com/api/front/users/{stripchat_user_id}/albums/0/photos",
+      "auth": "Cookie + CSRF token (form data)",
+      "cast_name_source": "SessionData.stripchat_user_id",
+      "verification_gate": false,
+      "risk": "critical",
+      "risk_detail": "写真アップロードに検証ゲートなし"
+    },
+    {
+      "id": "W-03",
+      "file": "frontend/src/lib/stripchat-api.ts",
+      "line": 247,
+      "endpoint": "POST https://ja.stripchat.com/api/front/users/{stripchat_user_id}/conversations/{targetUserId}/messages",
+      "auth": "Cookie + CSRF token + front-version",
+      "cast_name_source": "dm/send route body parameter",
+      "verification_gate": true,
+      "verification_detail": "Identity Check: registered_casts.stripchat_user_id == session.stripchat_user_id + campaign required + cast_name required + test mode whitelist",
+      "risk": "low"
+    },
+    {
+      "id": "W-04",
+      "file": "frontend/src/lib/stripchat-api.ts",
+      "line": 323,
+      "endpoint": "POST https://ja.stripchat.com/api/front/users/{stripchat_user_id}/albums/0/photos",
+      "auth": "Cookie + CSRF token + front-version",
+      "cast_name_source": "DM send flow",
+      "verification_gate": true,
+      "verification_detail": "Session validity required",
+      "risk": "low"
+    }
+  ],
+  "red_flags": {
+    "critical": [
+      {
+        "id": "W-01",
+        "file": "collector/src/dm-service/stripchat-api.ts:177",
+        "issue": "DM送信にIdentity Check（cast_name/model_id照合）がない",
+        "recommendation": "Frontend版W-03と同等のverifyCastIdentityを追加"
+      },
+      {
+        "id": "W-02",
+        "file": "collector/src/dm-service/stripchat-api.ts:229",
+        "issue": "写真アップロードに検証ゲートなし",
+        "recommendation": "セッション所有者とcast_nameの照合を追加"
+      }
+    ],
+    "high": [
+      {
+        "id": "R-04",
+        "file": "collector/src/coin-sync.ts:1026",
+        "issue": "coin_transactionsへの主要投入経路にcast_name照合なし",
+        "recommendation": "userId → registered_casts.stripchat_user_id照合ゲートを追加"
+      },
+      {
+        "id": "R-05",
+        "file": "collector/src/coin-sync-service.ts:201",
+        "issue": "PM2常駐版coin_transactions投入にcast_name照合なし",
+        "recommendation": "R-04と同じ"
+      },
+      {
+        "id": "R-06",
+        "file": "collector/src/coin-sync-service.ts:273",
+        "issue": "paid_users投入にcast_name照合なし",
+        "recommendation": "userId → registered_castsの一致確認を追加"
+      },
+      {
+        "id": "R-15",
+        "file": "chrome-extension/content_coin_sync.js:234",
+        "issue": "Chrome拡張coin_transactions投入にcast_name照合なし",
+        "recommendation": "DB逆引き後にcast_name照合を追加"
+      },
+      {
+        "id": "R-16",
+        "file": "chrome-extension/content_coin_sync.js:538",
+        "issue": "フォールバック経路にcast_name照合なし",
+        "recommendation": "R-15と同じ"
+      }
+    ]
+  },
+  "recommendations": [
+    "W-01/W-02: Collector DM ServiceにFrontend版と同等のIdentity Check（registered_casts.stripchat_user_id照合）を追加",
+    "R-04/R-05/R-06: Collector Coin SyncにuserId → registered_casts.stripchat_user_idの照合ゲートを追加し、不一致時はINSERTを拒否",
+    "R-15/R-16: Chrome拡張Coin SyncにDB逆引き後のcast_name照合を追加",
+    "全取得経路: APIレスポンス内のuserIdとセッションのstripchat_user_idの一致確認を標準パターン化"
+  ]
+}
