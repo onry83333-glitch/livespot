@@ -60,11 +60,19 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
   const [memoContent, setMemoContent] = useState('');
   const [memoSaving, setMemoSaving] = useState(false);
 
+  // Filter state
+  const [showSession, setShowSession] = useState(true);
+  const [showDm, setShowDm] = useState(true);
+  const [showReport, setShowReport] = useState(true);
+  const [showRevenue, setShowRevenue] = useState(true);
+  const [showMemo, setShowMemo] = useState(true);
+
   // Sticky notes state
   const [stickies, setStickies] = useState<StickyNote[]>([]);
   const [editingSticky, setEditingSticky] = useState<string | null>(null);
   const [stickyTitle, setStickyTitle] = useState('');
   const [stickyContent, setStickyContent] = useState('');
+  const [stickyError, setStickyError] = useState<string | null>(null);
 
   // Fetch activity data
   useEffect(() => {
@@ -150,7 +158,7 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
 
   // Sticky notes CRUD
   const fetchStickies = useCallback(async () => {
-    const { data: notes } = await sb
+    const { data: notes, error } = await sb
       .from('cast_sticky_notes')
       .select('id, title, content, color, sort_order')
       .eq('account_id', accountId)
@@ -158,7 +166,13 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
       .order('sort_order', { ascending: true })
       .order('created_at', { ascending: true })
       .limit(5);
-    setStickies((notes || []) as StickyNote[]);
+    if (error) {
+      console.error('[StickyNotes] fetch error:', error.message);
+      setStickyError('付箋の読み込みに失敗しました');
+    } else {
+      setStickies((notes || []) as StickyNote[]);
+      setStickyError(null);
+    }
   }, [sb, accountId, castName]);
 
   useEffect(() => {
@@ -167,8 +181,9 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
 
   const handleAddSticky = async () => {
     if (stickies.length >= 5) return;
+    setStickyError(null);
     const maxOrder = stickies.length > 0 ? Math.max(...stickies.map(s => s.sort_order)) + 1 : 0;
-    await sb.from('cast_sticky_notes').insert({
+    const { error } = await sb.from('cast_sticky_notes').insert({
       account_id: accountId,
       cast_name: castName,
       title: null,
@@ -176,27 +191,43 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
       color: STICKY_COLORS[stickies.length % STICKY_COLORS.length].key,
       sort_order: maxOrder,
     });
+    if (error) {
+      console.error('[StickyNotes] insert error:', error.message, error.details, error.hint);
+      setStickyError(`追加失敗: ${error.message}`);
+      return;
+    }
     await fetchStickies();
   };
 
   const handleDeleteSticky = async (id: string) => {
-    await sb.from('cast_sticky_notes').delete().eq('id', id);
+    const { error } = await sb.from('cast_sticky_notes').delete().eq('id', id);
+    if (error) {
+      console.error('[StickyNotes] delete error:', error.message);
+      setStickyError(`削除失敗: ${error.message}`);
+      return;
+    }
     setEditingSticky(null);
     await fetchStickies();
   };
 
   const handleSaveSticky = async (id: string) => {
-    await sb.from('cast_sticky_notes').update({
+    const { error } = await sb.from('cast_sticky_notes').update({
       title: stickyTitle.trim() || null,
       content: stickyContent.trim().substring(0, 1000) || null,
       updated_at: new Date().toISOString(),
     }).eq('id', id);
+    if (error) {
+      console.error('[StickyNotes] update error:', error.message);
+      setStickyError(`保存失敗: ${error.message}`);
+      return;
+    }
     setEditingSticky(null);
     await fetchStickies();
   };
 
   const handleStickyColorChange = async (id: string, color: string) => {
-    await sb.from('cast_sticky_notes').update({ color, updated_at: new Date().toISOString() }).eq('id', id);
+    const { error } = await sb.from('cast_sticky_notes').update({ color, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) console.error('[StickyNotes] color change error:', error.message);
     await fetchStickies();
   };
 
@@ -262,6 +293,32 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
           style={{ color: 'var(--text-muted)', border: '1px solid var(--border-primary)' }}>▶</button>
       </div>
 
+      {/* Filter checkboxes */}
+      <div className="flex flex-wrap gap-3 px-1">
+        {([
+          { checked: showSession, set: setShowSession, icon: '🎙️', label: '配信' },
+          { checked: showDm, set: setShowDm, icon: '✉️', label: 'DM' },
+          { checked: showReport, set: setShowReport, icon: '📊', label: 'レポート' },
+          { checked: showRevenue, set: setShowRevenue, icon: '💰', label: '売上' },
+          { checked: showMemo, set: setShowMemo, icon: '📝', label: 'メモ' },
+        ] as const).map(f => (
+          <label
+            key={f.label}
+            className="flex items-center gap-1 cursor-pointer select-none text-[11px] transition-opacity"
+            style={{ color: 'var(--text-secondary)', opacity: f.checked ? 1 : 0.4 }}
+          >
+            <input
+              type="checkbox"
+              checked={f.checked}
+              onChange={() => f.set(v => !v)}
+              className="w-3 h-3 rounded accent-sky-400"
+            />
+            <span>{f.icon}</span>
+            <span>{f.label}</span>
+          </label>
+        ))}
+      </div>
+
       {/* Calendar grid */}
       <div className="rounded-xl overflow-hidden" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-primary)' }}>
         {/* Weekday headers */}
@@ -311,31 +368,31 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
                     {cell.dayNum}
                   </div>
                   <div className="space-y-px text-[10px] leading-tight">
-                    {cell.has_session && (
+                    {showSession && cell.has_session && (
                       <div className="flex items-center gap-0.5 truncate" style={{ color: 'var(--text-secondary)' }}>
                         <span className="text-[11px]">🎙️</span>
                         <span>配信 {cell.session_count}回</span>
                       </div>
                     )}
-                    {cell.has_revenue && (
+                    {showRevenue && cell.has_revenue && (
                       <div className="flex items-center gap-0.5 truncate" style={{ color: 'var(--accent-green)' }}>
                         <span className="text-[11px]">💰</span>
                         <span>¥{Math.round(Number(cell.revenue_tokens) * TK_TO_YEN).toLocaleString()}</span>
                       </div>
                     )}
-                    {cell.has_report && (
+                    {showReport && cell.has_report && (
                       <div className="flex items-center gap-0.5 truncate" style={{ color: 'var(--text-muted)' }}>
                         <span className="text-[11px]">📊</span>
                         <span>レポート {cell.report_count}件</span>
                       </div>
                     )}
-                    {cell.has_dm && (
+                    {showDm && cell.has_dm && (
                       <div className="flex items-center gap-0.5 truncate" style={{ color: 'var(--accent-primary)' }}>
                         <span className="text-[11px]">✉️</span>
                         <span>DM {cell.dm_count}件</span>
                       </div>
                     )}
-                    {hasMemo && (
+                    {showMemo && hasMemo && (
                       <div className="flex items-center gap-0.5 truncate" style={{ color: 'var(--accent-amber)' }}>
                         <span className="text-[11px]">📝</span>
                         <span className="truncate">{plan.title || plan.content?.substring(0, 10) || 'メモ'}</span>
@@ -372,6 +429,11 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
             </button>
           )}
         </div>
+        {stickyError && (
+          <div className="text-[11px] px-3 py-1.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444' }}>
+            {stickyError}
+          </div>
+        )}
         {stickies.length === 0 ? (
           <div className="text-[11px] py-4 text-center rounded-xl" style={{ color: 'var(--text-muted)', background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)' }}>
             付箋メモはまだありません
@@ -452,9 +514,6 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
                         ) : (
                           <span style={{ color: 'var(--text-muted)' }}>クリックして編集...</span>
                         )}
-                      </div>
-                      <div className="text-[9px] mt-1.5" style={{ color: 'var(--text-muted)' }}>
-                        {stickyContent.length > 0 && editingSticky === note.id ? `${stickyContent.length}/1000` : ''}
                       </div>
                     </>
                   )}
