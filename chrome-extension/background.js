@@ -4372,6 +4372,9 @@ async function processDMQueueSerial(tasks) {
       // null（クールダウン/連続エラー上限）→ requeueして中断
       await updateDMTaskStatus(task.id, 'queued', null);
       console.warn('[LS-DM] API不可 → 残りタスク中断');
+      for (let k = i + 1; k < tasks.length; k++) {
+        await updateDMTaskStatus(tasks[k].id, 'queued', null);
+      }
       break;
     }
 
@@ -4397,6 +4400,12 @@ async function processDMQueue() {
   dmProcessing = true;
 
   try {
+    // クールダウン中はキューを取得しない（sendingロック孤立を防止）
+    if (dmApiCooldownUntil && Date.now() < dmApiCooldownUntil) {
+      console.log('[LS-DM] クールダウン中 → キュー取得スキップ');
+      return;
+    }
+
     // AMP cookie複数ユーザー検出
     if (await checkAMPMultipleUsers()) {
       console.error('[LS-DM] 複数ユーザー検出 → DM送信停止');
