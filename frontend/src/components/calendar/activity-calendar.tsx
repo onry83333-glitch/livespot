@@ -54,8 +54,8 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
   const [loading, setLoading] = useState(true);
   const [selectedDay, setSelectedDay] = useState<ActivityDay | null>(null);
 
-  // Memo state
-  const [plans, setPlans] = useState<Map<string, CastPlan>>(new Map());
+  // Memo state (multiple per day)
+  const [plans, setPlans] = useState<Map<string, CastPlan[]>>(new Map());
   const [memoTitle, setMemoTitle] = useState('');
   const [memoContent, setMemoContent] = useState('');
   const [memoSaving, setMemoSaving] = useState(false);
@@ -89,7 +89,7 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
     });
   }, [accountId, castName, year, month, sb]);
 
-  // Fetch cast_plans for this month
+  // Fetch cast_plans for this month (multiple per day)
   const fetchPlans = useCallback(async () => {
     const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
     const endDate = `${year}-${String(month).padStart(2, '0')}-${new Date(year, month, 0).getDate()}`;
@@ -99,12 +99,14 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
       .eq('account_id', accountId)
       .eq('cast_name', castName)
       .gte('plan_date', startDate)
-      .lte('plan_date', endDate);
-    const map = new Map<string, CastPlan>();
+      .lte('plan_date', endDate)
+      .order('created_at', { ascending: true });
+    const map = new Map<string, CastPlan[]>();
     for (const p of (planData || []) as CastPlan[]) {
-      // Normalize date to YYYY-MM-DD
       const dateKey = p.plan_date.substring(0, 10);
-      map.set(dateKey, { ...p, plan_date: dateKey });
+      const arr = map.get(dateKey) || [];
+      arr.push({ ...p, plan_date: dateKey });
+      map.set(dateKey, arr);
     }
     setPlans(map);
   }, [sb, accountId, castName, year, month]);
@@ -114,46 +116,43 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
     fetchPlans();
   }, [accountId, castName, fetchPlans]);
 
-  // When selectedDay changes, load memo into edit fields
+  // Reset memo form when selectedDay changes
   useEffect(() => {
-    if (!selectedDay) return;
-    const dateKey = selectedDay.activity_date.substring(0, 10);
-    const plan = plans.get(dateKey);
-    setMemoTitle(plan?.title || '');
-    setMemoContent(plan?.content || '');
-  }, [selectedDay, plans]);
+    setMemoTitle('');
+    setMemoContent('');
+  }, [selectedDay]);
 
-  // Save memo (upsert)
-  const handleSaveMemo = async () => {
+  // Add new memo (insert, not upsert)
+  const handleAddMemo = async () => {
     if (!selectedDay) return;
     const dateKey = selectedDay.activity_date.substring(0, 10);
-    const hasContent = memoTitle.trim() || memoContent.trim();
+    const dayPlans = plans.get(dateKey) || [];
+    if (dayPlans.length >= 5) return;
+    if (!memoTitle.trim() && !memoContent.trim()) return;
 
     setMemoSaving(true);
     try {
-      if (!hasContent) {
-        // Delete if empty
-        const existing = plans.get(dateKey);
-        if (existing) {
-          await sb.from('cast_plans').delete().eq('id', existing.id);
-        }
-      } else {
-        // Upsert
-        await sb.from('cast_plans').upsert({
-          account_id: accountId,
-          cast_name: castName,
-          plan_date: dateKey,
-          title: memoTitle.trim() || null,
-          content: memoContent.trim() || null,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'account_id,cast_name,plan_date' });
-      }
+      await sb.from('cast_plans').insert({
+        account_id: accountId,
+        cast_name: castName,
+        plan_date: dateKey,
+        title: memoTitle.trim() || null,
+        content: memoContent.trim() || null,
+      });
+      setMemoTitle('');
+      setMemoContent('');
       await fetchPlans();
     } catch (e) {
       alert('保存エラー: ' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setMemoSaving(false);
     }
+  };
+
+  // Delete a specific memo
+  const handleDeleteMemo = async (id: string) => {
+    await sb.from('cast_plans').delete().eq('id', id);
+    await fetchPlans();
   };
 
   // Sticky notes CRUD
@@ -343,9 +342,8 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
                 return <div key={`empty-${i}`} className="min-h-[100px] p-1" style={{ borderBottom: '1px solid var(--border-primary)', borderRight: i % 7 !== 6 ? '1px solid var(--border-primary)' : undefined }} />;
               }
               const isToday = cell.activity_date === todayStr;
-              const hasAny = cell.has_session || cell.has_dm || cell.has_report || cell.has_revenue;
-              const plan = plans.get(cell.activity_date);
-              const hasMemo = !!plan;
+              const dayPlans = plans.get(cell.activity_date) || [];
+              const hasMemo = dayPlans.length > 0;
               const dayOfWeek = (new Date(year, month - 1, cell.dayNum).getDay());
               return (
                 <div
@@ -355,11 +353,7 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
                   style={{
                     borderBottom: '1px solid var(--border-primary)',
                     borderRight: i % 7 !== 6 ? '1px solid var(--border-primary)' : undefined,
-                    background: isToday
-                      ? 'rgba(56,189,248,0.15)'
-                      : hasAny || hasMemo
-                        ? 'rgba(255,255,255,0.03)'
-                        : undefined,
+                    background: isToday ? 'rgba(56,189,248,0.08)' : undefined,
                     boxShadow: isToday ? 'inset 0 0 0 2px rgba(56,189,248,0.4)' : undefined,
                   }}
                 >
@@ -395,7 +389,11 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
                     {showMemo && hasMemo && (
                       <div className="flex items-center gap-0.5 truncate" style={{ color: 'var(--accent-amber)' }}>
                         <span className="text-[11px]">📝</span>
-                        <span className="truncate">{plan.title || plan.content?.substring(0, 10) || 'メモ'}</span>
+                        <span className="truncate">
+                          {dayPlans.length === 1
+                            ? (dayPlans[0].title || dayPlans[0].content?.substring(0, 10) || 'メモ')
+                            : `メモ ${dayPlans.length}件`}
+                        </span>
                       </div>
                     )}
                   </div>
@@ -446,7 +444,7 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
               return (
                 <div
                   key={note.id}
-                  className="w-[170px] min-h-[120px] rounded-xl p-3 flex flex-col transition-all duration-150 hover:scale-[1.02]"
+                  className="w-[250px] min-h-[200px] rounded-xl p-3 flex flex-col transition-all duration-150 hover:scale-[1.02]"
                   style={{ background: cs.bg, border: `1px solid ${cs.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}
                 >
                   {isEditing ? (
@@ -465,7 +463,7 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
                         value={stickyContent}
                         onChange={e => setStickyContent(e.target.value)}
                         maxLength={1000}
-                        rows={4}
+                        rows={6}
                         className="w-full text-[10px] flex-1 px-1.5 py-1 rounded resize-none"
                         style={{ background: 'rgba(0,0,0,0.15)', border: 'none', color: 'var(--text-primary)', outline: 'none' }}
                       />
@@ -569,50 +567,83 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
               )}
             </div>
 
-            {/* Memo section */}
-            <div className="space-y-2 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-              <label className="text-[11px] font-bold flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
-                📝 メモ
-              </label>
-              <input
-                type="text"
-                placeholder="タイトル（任意）"
-                value={memoTitle}
-                onChange={e => setMemoTitle(e.target.value)}
-                className="w-full px-3 py-1.5 rounded-lg text-xs"
-                style={{
-                  background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  color: 'var(--text-primary)',
-                  outline: 'none',
-                }}
-              />
-              <textarea
-                placeholder="メモを入力..."
-                value={memoContent}
-                onChange={e => setMemoContent(e.target.value)}
-                rows={3}
-                className="w-full px-3 py-2 rounded-lg text-xs resize-none"
-                style={{
-                  background: 'rgba(255,255,255,0.05)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  color: 'var(--text-primary)',
-                  outline: 'none',
-                }}
-              />
-              <button
-                onClick={handleSaveMemo}
-                disabled={memoSaving}
-                className="w-full py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-40"
-                style={{
-                  background: 'rgba(56,189,248,0.15)',
-                  border: '1px solid rgba(56,189,248,0.3)',
-                  color: 'var(--accent-primary)',
-                }}
-              >
-                {memoSaving ? '保存中...' : '保存'}
-              </button>
-            </div>
+            {/* Memo section (multiple per day, max 5) */}
+            {(() => {
+              const dateKey = selectedDay.activity_date.substring(0, 10);
+              const dayMemos = plans.get(dateKey) || [];
+              return (
+                <div className="space-y-2 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold flex items-center gap-1" style={{ color: 'var(--text-secondary)' }}>
+                      📝 メモ ({dayMemos.length}/5)
+                    </label>
+                  </div>
+
+                  {/* Existing memos */}
+                  {dayMemos.map(memo => (
+                    <div key={memo.id} className="flex items-start gap-2 rounded-lg px-2.5 py-2" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      <div className="flex-1 min-w-0">
+                        {memo.title && <p className="text-[11px] font-bold truncate" style={{ color: 'var(--text-primary)' }}>{memo.title}</p>}
+                        <p className="text-[10px] whitespace-pre-wrap" style={{ color: 'var(--text-secondary)', wordBreak: 'break-word' }}>
+                          {memo.content || '(内容なし)'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteMemo(memo.id)}
+                        className="text-[10px] shrink-0 opacity-40 hover:opacity-100 transition-opacity"
+                        title="削除"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  ))}
+
+                  {/* Add new memo form */}
+                  {dayMemos.length < 5 && (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="タイトル（任意）"
+                        value={memoTitle}
+                        onChange={e => setMemoTitle(e.target.value)}
+                        className="w-full px-3 py-1.5 rounded-lg text-xs"
+                        style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          color: 'var(--text-primary)',
+                          outline: 'none',
+                        }}
+                      />
+                      <textarea
+                        placeholder="メモを入力..."
+                        value={memoContent}
+                        onChange={e => setMemoContent(e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 rounded-lg text-xs resize-none"
+                        style={{
+                          background: 'rgba(255,255,255,0.05)',
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          color: 'var(--text-primary)',
+                          outline: 'none',
+                        }}
+                      />
+                      <button
+                        onClick={handleAddMemo}
+                        disabled={memoSaving || (!memoTitle.trim() && !memoContent.trim())}
+                        className="w-full py-1.5 rounded-lg text-xs font-medium transition-colors disabled:opacity-40"
+                        style={{
+                          background: 'rgba(56,189,248,0.15)',
+                          border: '1px solid rgba(56,189,248,0.3)',
+                          color: 'var(--accent-primary)',
+                        }}
+                      >
+                        {memoSaving ? '保存中...' : '＋ メモ追加'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
