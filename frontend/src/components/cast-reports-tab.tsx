@@ -477,8 +477,20 @@ ${userListText || '(スナップショットなし)'}
             : JSON.stringify(engineData.output, null, 2);
           setAndoMarkdown(andoOutput);
 
-          // cast_knowledge に ai_deep_analysis として保存
+          // cast_knowledge に ai_deep_analysis として保存（同日重複削除）
           const sessionStart = coinSessions.length > 0 ? coinSessions[0].session_start : new Date().toISOString();
+          const today = new Date();
+          const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+          const tomorrowDate = new Date(today);
+          tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+          const tomorrowStr = `${tomorrowDate.getFullYear()}-${String(tomorrowDate.getMonth() + 1).padStart(2, '0')}-${String(tomorrowDate.getDate()).padStart(2, '0')}`;
+          await sb.from('cast_knowledge')
+            .delete()
+            .eq('cast_id', castId)
+            .eq('report_type', 'ai_deep_analysis')
+            .gte('created_at', todayStr)
+            .lt('created_at', tomorrowStr);
+
           await sb.from('cast_knowledge').insert({
             cast_id: castId,
             account_id: accountId,
@@ -1175,53 +1187,67 @@ const AI_SECTION_CONFIG: { key: string; label: string; color: string; bg: string
 ];
 
 function AiAnalysisCard({ report, periodStart }: { report: Record<string, unknown>; periodStart?: string }) {
+  const [expanded, setExpanded] = useState(false);
   const dateLabel = periodStart
     ? new Date(periodStart).toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' })
     : '最新';
 
+  const markdown = typeof report.report_markdown === 'string' ? report.report_markdown : null;
+  const hasStructured = AI_SECTION_CONFIG.some(s => report[s.key]);
+
   return (
-    <div className="glass-card p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <h3 className="text-sm font-bold flex items-center gap-2">
-          🧠 AI総合分析
-        </h3>
+    <div className="glass-card overflow-hidden">
+      <button onClick={() => setExpanded(!expanded)}
+        className="w-full flex items-center gap-2 p-4 text-left hover:bg-white/[0.02] transition-colors">
+        <span className="text-[10px] transition-transform duration-200"
+          style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', color: 'var(--accent-primary)' }}>
+          ▶
+        </span>
+        <h3 className="text-sm font-bold flex-1">🧠 AI総合分析</h3>
         <span className="text-[10px] px-2 py-0.5 rounded-full"
           style={{ background: 'rgba(168,85,247,0.08)', color: 'var(--accent-purple, #a855f7)' }}>
           {dateLabel}
         </span>
-      </div>
-      {AI_SECTION_CONFIG.map(section => {
-        const value = report[section.key];
-        if (!value) return null;
-        return (
-          <div key={section.key} className="p-3 rounded-xl" style={{ background: section.bg, borderLeft: `3px solid ${section.border}` }}>
-            <p className="text-[11px] font-bold mb-1.5" style={{ color: section.color }}>{section.label}</p>
-            <div className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
-              {typeof value === 'string' ? (
-                <p>{value}</p>
-              ) : Array.isArray(value) ? (
-                <ul className="space-y-1">
-                  {value.map((item, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="mt-0.5 shrink-0" style={{ color: section.color }}>•</span>
-                      {typeof item === 'string' ? item : JSON.stringify(item)}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <pre className="text-[10px] whitespace-pre-wrap break-words opacity-80">
-                  {JSON.stringify(value, null, 2)}
-                </pre>
-              )}
+      </button>
+      {expanded && (
+        <div className="px-5 pb-5 space-y-3">
+          {markdown ? (
+            <div className="prose prose-invert prose-xs max-w-none text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+              <ReactMarkdown>{markdown}</ReactMarkdown>
             </div>
-          </div>
-        );
-      })}
-      {typeof report.raw === 'string' && (
-        <div className="p-3 rounded-xl" style={{ background: 'rgba(100,116,139,0.06)' }}>
-          <pre className="text-[10px] whitespace-pre-wrap break-words" style={{ color: 'var(--text-secondary)' }}>
-            {report.raw}
-          </pre>
+          ) : hasStructured ? (
+            AI_SECTION_CONFIG.map(section => {
+              const value = report[section.key];
+              if (!value) return null;
+              return (
+                <div key={section.key} className="p-3 rounded-xl" style={{ background: section.bg, borderLeft: `3px solid ${section.border}` }}>
+                  <p className="text-[11px] font-bold mb-1.5" style={{ color: section.color }}>{section.label}</p>
+                  <div className="text-xs leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+                    {typeof value === 'string' ? (
+                      <p>{value}</p>
+                    ) : Array.isArray(value) ? (
+                      <ul className="space-y-1">
+                        {value.map((item, i) => (
+                          <li key={i} className="flex items-start gap-2">
+                            <span className="mt-0.5 shrink-0" style={{ color: section.color }}>•</span>
+                            {typeof item === 'string' ? item : JSON.stringify(item)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <pre className="text-[10px] whitespace-pre-wrap break-words opacity-80">
+                        {JSON.stringify(value, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <pre className="text-[10px] whitespace-pre-wrap break-words" style={{ color: 'var(--text-secondary)' }}>
+              {JSON.stringify(report, null, 2)}
+            </pre>
+          )}
         </div>
       )}
     </div>

@@ -260,6 +260,19 @@ export async function POST(request: NextRequest) {
         .single();
 
       if (castRow) {
+        // 同日の既存session_reportを削除（重複防止）
+        const today = new Date();
+        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        const tomorrowDate = new Date(today);
+        tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+        const tomorrowStr = `${tomorrowDate.getFullYear()}-${String(tomorrowDate.getMonth() + 1).padStart(2, '0')}-${String(tomorrowDate.getDate()).padStart(2, '0')}`;
+        await sb.from('cast_knowledge')
+          .delete()
+          .eq('cast_id', castRow.id)
+          .eq('report_type', 'session_report')
+          .gte('created_at', todayStr)
+          .lt('created_at', tomorrowStr);
+
         await sb.from('cast_knowledge').insert({
           cast_id: castRow.id,
           account_id,
