@@ -837,7 +837,7 @@ ${userListText || '(スナップショットなし)'}
         <Accordion id="cast-coin-sessions" title="売上履歴（コインベース）" icon="💰" badge={`${coinSessions.length}件`} defaultOpen>
           <div className="space-y-3">
             {coinSessions.map((s, i) => (
-              <CoinSessionCard key={i} session={s} snapshot={snapshots.get(new Date(s.session_start).toISOString())} />
+              <CoinSessionCard key={i} session={s} snapshot={snapshots.get(new Date(s.session_start).toISOString())} castName={castName} />
             ))}
           </div>
         </Accordion>
@@ -1288,8 +1288,20 @@ function NestedSection({ title, count, color, children }: {
 /* ============================================================
    CoinSessionCard（売上ベースセッション）
    ============================================================ */
-function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot?: SessionSnapshot }) {
+interface UserLogEntry {
+  user_name: string;
+  message: string | null;
+  msg_type: string;
+  tokens: number;
+  created_at: string;
+}
+
+function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession; snapshot?: SessionSnapshot; castName: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [showLogs, setShowLogs] = useState(false);
+  const [userLogs, setUserLogs] = useState<UserLogEntry[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logFilter, setLogFilter] = useState<'all' | 'new' | 'repeater' | 'comeback'>('all');
   const startDate = new Date(session.session_start);
   const dateStr = startDate.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', timeZone: 'Asia/Tokyo' });
   const timeStr = startDate.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' });
@@ -1424,6 +1436,22 @@ function CoinSessionCard({ session, snapshot }: { session: CoinSession; snapshot
                     ))}
                   </div>
                 </NestedSection>
+
+                {/* ユーザーログセクション */}
+                <SessionUserLogs
+                  castName={castName}
+                  sessionStart={session.session_start}
+                  sessionEnd={session.session_end}
+                  snapshot={snapshot}
+                  showLogs={showLogs}
+                  setShowLogs={setShowLogs}
+                  userLogs={userLogs}
+                  setUserLogs={setUserLogs}
+                  logsLoading={logsLoading}
+                  setLogsLoading={setLogsLoading}
+                  logFilter={logFilter}
+                  setLogFilter={setLogFilter}
+                />
               </div>
             );
           })() : (
@@ -1540,6 +1568,132 @@ function AiDeepAnalysisCard({ record }: { record: CastKnowledgeRecord }) {
 /* ============================================================
    MetricCard（小型KPIカード）
    ============================================================ */
+/* ============================================================
+   SessionUserLogs（セッション内ユーザーログ表示）
+   ============================================================ */
+function SessionUserLogs({ castName, sessionStart, sessionEnd, snapshot, showLogs, setShowLogs, userLogs, setUserLogs, logsLoading, setLogsLoading, logFilter, setLogFilter }: {
+  castName: string;
+  sessionStart: string;
+  sessionEnd: string;
+  snapshot: SessionSnapshot;
+  showLogs: boolean;
+  setShowLogs: (v: boolean) => void;
+  userLogs: UserLogEntry[];
+  setUserLogs: (v: UserLogEntry[]) => void;
+  logsLoading: boolean;
+  setLogsLoading: (v: boolean) => void;
+  logFilter: 'all' | 'new' | 'repeater' | 'comeback';
+  setLogFilter: (v: 'all' | 'new' | 'repeater' | 'comeback') => void;
+}) {
+  const newSet = new Set(snapshot.newTippers.map(u => u.userName));
+  const repSet = new Set(snapshot.repeaters.map(u => u.userName));
+  const cbSet = new Set(snapshot.comebackUsers.map(u => u.userName));
+  const allNames = Array.from(newSet).concat(Array.from(repSet), Array.from(cbSet));
+
+  const handleLoad = async () => {
+    if (showLogs) { setShowLogs(false); return; }
+    setShowLogs(true);
+    if (userLogs.length > 0) return;
+    setLogsLoading(true);
+    const sb = createClient();
+    const { data } = await sb.rpc('get_session_user_logs', {
+      p_cast_name: castName,
+      p_session_start: sessionStart,
+      p_session_end: sessionEnd || new Date().toISOString(),
+      p_user_names: allNames,
+    });
+    setUserLogs((data || []) as UserLogEntry[]);
+    setLogsLoading(false);
+  };
+
+  const getTag = (name: string): { label: string; color: string; bg: string } | null => {
+    if (newSet.has(name)) return { label: '新規', color: '#38bdf8', bg: 'rgba(56,189,248,0.12)' };
+    if (cbSet.has(name)) return { label: '復帰', color: '#22c55e', bg: 'rgba(34,197,94,0.12)' };
+    if (repSet.has(name)) return { label: 'リピ', color: '#a78bfa', bg: 'rgba(167,139,250,0.12)' };
+    return null;
+  };
+
+  const filtered = userLogs.filter(l => {
+    if (logFilter === 'all') return true;
+    if (logFilter === 'new') return newSet.has(l.user_name);
+    if (logFilter === 'repeater') return repSet.has(l.user_name);
+    if (logFilter === 'comeback') return cbSet.has(l.user_name);
+    return true;
+  });
+
+  const filters: { key: typeof logFilter; label: string; color: string }[] = [
+    { key: 'all', label: '全員', color: 'var(--text-primary)' },
+    { key: 'new', label: '新規', color: '#38bdf8' },
+    { key: 'repeater', label: 'リピ', color: '#a78bfa' },
+    { key: 'comeback', label: '復帰', color: '#22c55e' },
+  ];
+
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ border: '1px solid rgba(56,189,248,0.15)' }}>
+      <button onClick={handleLoad}
+        className="w-full px-3 py-2 text-left flex items-center gap-2 text-[11px] font-semibold transition-colors hover:bg-white/[0.02]"
+        style={{ color: 'var(--accent-primary)' }}>
+        <span className="transition-transform duration-200" style={{ transform: showLogs ? 'rotate(90deg)' : 'rotate(0deg)', fontSize: 9 }}>▶</span>
+        💬 ユーザーログ
+        {userLogs.length > 0 && (
+          <span className="ml-auto text-[10px] font-normal" style={{ color: 'var(--text-muted)' }}>{filtered.length}件</span>
+        )}
+      </button>
+      {showLogs && (
+        <div className="px-3 pb-3 pt-1 space-y-2" style={{ borderTop: '1px solid rgba(56,189,248,0.08)' }}>
+          {/* フィルタボタン */}
+          <div className="flex gap-1">
+            {filters.map(f => (
+              <button key={f.key} onClick={() => setLogFilter(f.key)}
+                className="text-[9px] px-2 py-0.5 rounded-full font-medium transition-all"
+                style={{
+                  background: logFilter === f.key ? `${f.color}22` : 'transparent',
+                  color: logFilter === f.key ? f.color : 'var(--text-muted)',
+                  border: `1px solid ${logFilter === f.key ? `${f.color}44` : 'transparent'}`,
+                }}>
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          {logsLoading ? (
+            <div className="text-center py-4">
+              <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>読み込み中...</span>
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="text-[10px] text-center py-2" style={{ color: 'var(--text-muted)' }}>ログなし</p>
+          ) : (
+            <div className="space-y-0.5 max-h-[400px] overflow-y-auto">
+              {filtered.map((l, i) => {
+                const t = new Date(l.created_at);
+                const time = t.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' });
+                const isTip = l.msg_type === 'tip' || (l.tokens > 0);
+                const tag = getTag(l.user_name);
+                return (
+                  <div key={i} className="flex items-start gap-1.5 text-[10px] py-0.5">
+                    <span className="shrink-0 w-[34px] text-right tabular-nums" style={{ color: 'var(--text-muted)' }}>{time}</span>
+                    <span className="shrink-0 w-1.5 h-1.5 rounded-full mt-1" style={{ background: isTip ? 'var(--accent-amber)' : '#38bdf8' }} />
+                    <span className="shrink-0 font-semibold" style={{ color: isTip ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
+                      {l.user_name}
+                    </span>
+                    {tag && (
+                      <span className="shrink-0 text-[8px] px-1 rounded" style={{ background: tag.bg, color: tag.color }}>{tag.label}</span>
+                    )}
+                    {isTip && l.tokens > 0 && (
+                      <span className="shrink-0 text-[9px] font-bold" style={{ color: 'var(--accent-amber)' }}>{l.tokens}tk</span>
+                    )}
+                    <span className="truncate" style={{ color: 'var(--text-secondary)' }}>{l.message || ''}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MetricCard({ label, value, unit, color }: {
   label: string;
   value: string | number;
