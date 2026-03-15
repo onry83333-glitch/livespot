@@ -409,8 +409,8 @@ export default function CastReportsTab({ accountId, castId, castName }: CastRepo
         }),
       }).catch(e => console.error('[fb-report][save] error:', e));
 
-      // ── Step 3: 安藤の推論（engine API） ──
-      setAiLoadingMessage('安藤の分析を生成中...');
+      // ── Step 3: AI分析（engine API） ──
+      setAiLoadingMessage('AI分析を生成中...');
 
       // スナップショットデータ取得（最新を再fetch）
       const { data: latestSnaps } = await sb
@@ -443,6 +443,48 @@ ${repLines || '  (なし)'}
 ${retLines || '  (なし)'}`;
       }
 
+      // ── ユーザーログ取得（spy_messagesからチャット/チップ行動ログ） ──
+      let userLogText = '';
+      if (latestSnap && coinSessions.length > 0) {
+        const allUserNames = [
+          ...(latestSnap.newTippers || []).map(u => u.userName),
+          ...(latestSnap.repeaters || []).map(u => u.userName),
+          ...(latestSnap.comebackUsers || []).map(u => u.userName),
+        ];
+        if (allUserNames.length > 0) {
+          try {
+            const { data: logData } = await sb.rpc('get_session_user_logs', {
+              p_cast_name: castName,
+              p_session_start: coinSessions[0].session_start,
+              p_session_end: coinSessions[0].session_end || new Date().toISOString(),
+              p_user_names: allUserNames,
+            });
+            const logs = (logData || []) as UserLogEntry[];
+            if (logs.length > 0) {
+              // 要約: ユーザーごとにコメントをまとめる（最大30件）
+              const byUser = new Map<string, string[]>();
+              for (const l of logs.slice(0, 100)) {
+                const lines = byUser.get(l.user_name) || [];
+                const isTip = l.msg_type === 'tip' || l.tokens > 0;
+                const prefix = isTip ? `[${l.tokens}tk]` : '';
+                lines.push(`${prefix} ${l.message || '(メッセージなし)'}`);
+                byUser.set(l.user_name, lines);
+              }
+              const summaryLines: string[] = [];
+              const newSet = new Set((latestSnap.newTippers || []).map(u => u.userName));
+              const cbSet = new Set((latestSnap.comebackUsers || []).map(u => u.userName));
+              for (const [name, msgs] of Array.from(byUser.entries())) {
+                const tag = newSet.has(name) ? '新規' : cbSet.has(name) ? '復帰' : 'リピ';
+                summaryLines.push(`  [${tag}] ${name}: ${msgs.slice(0, 5).join(' / ')}`);
+              }
+              userLogText = `\n## ユーザー行動ログ（配信中のチャット・チップ）\n${summaryLines.join('\n')}`;
+            }
+          } catch (e) {
+            console.warn('[user-logs] non-critical error:', e);
+          }
+        }
+      }
+
       const userPrompt = `以下の配信データを分析し、具体的な改善提案をマークダウンで出力してください。
 
 ## セッション概要
@@ -453,9 +495,10 @@ ${retLines || '  (なし)'}`;
 
 ## ユーザー構成
 ${userListText || '(スナップショットなし)'}
+${userLogText}
 
-チャットログはありません。コイントランザクションのデータのみから推論してください。
-データから読み取れる傾向・パターン・改善点を具体的に述べてください。`;
+データから読み取れる傾向・パターン・改善点を具体的に述べてください。
+ユーザーのチャット内容がある場合は、ファンの反応や雰囲気も踏まえて分析してください。`;
 
       try {
         const engineRes = await fetch('/api/persona/engine', {
@@ -791,11 +834,11 @@ ${userListText || '(スナップショットなし)'}
         </div>
       )}
 
-      {/* 生成直後の安藤分析 */}
+      {/* 生成直後のAI分析 */}
       {andoMarkdown && (
         <div className="glass-card p-5 space-y-2">
           <h3 className="text-sm font-bold flex items-center gap-2">
-            🧠 安藤の分析
+            🧠 AI分析
             <span className="text-[10px] font-normal px-2 py-0.5 rounded-full"
               style={{ background: 'rgba(168,85,247,0.08)', color: 'var(--accent-purple, #a855f7)' }}>最新</span>
           </h3>
@@ -812,7 +855,7 @@ ${userListText || '(スナップショットなし)'}
 
       {/* 過去のAI分析レポート（ai_deep_analysis） */}
       {aiDeepReports.length > 0 && (
-        <Accordion id="cast-ai-deep" title="安藤の分析履歴" icon="🧠" badge={`${aiDeepReports.length}件`}>
+        <Accordion id="cast-ai-deep" title="AI分析" icon="🧠" badge={`${aiDeepReports.length}件`}>
           <div className="space-y-3">
             {aiDeepReports.map(r => (
               <AiDeepAnalysisCard key={r.id} record={r} />
@@ -821,7 +864,7 @@ ${userListText || '(スナップショットなし)'}
         </Accordion>
       )}
 
-      {/* 過去のAI総合分析レポート（session_report - レガシー） */}
+      {/* 過去のAI総合分析レポート（session_report - レガシー） — 重複のため非表示
       {aiAnalysisReports.length > 0 && (
         <Accordion id="cast-ai-analysis" title="AI総合分析レポート" icon="📊" badge={`${aiAnalysisReports.length}件`}>
           <div className="space-y-3">
@@ -831,6 +874,7 @@ ${userListText || '(スナップショットなし)'}
           </div>
         </Accordion>
       )}
+      */}
 
       {/* ========== 売上ベース配信履歴（coin_transactions） ========== */}
       {coinSessions.length > 0 && (
@@ -843,7 +887,7 @@ ${userListText || '(スナップショットなし)'}
         </Accordion>
       )}
 
-      {/* ========== 配信履歴（SPYベース） ========== */}
+      {/* ========== 配信履歴（SPYベース） — 重複のため非表示
       {sessionReports.length > 0 && (
         <Accordion id="cast-reports-sessions" title="配信レポート履歴（SPY）" icon="📺" badge={`${sessionReports.length}件`}>
           <div className="space-y-3">
@@ -853,6 +897,7 @@ ${userListText || '(スナップショットなし)'}
           </div>
         </Accordion>
       )}
+      */}
 
       {/* ========== DM施策ボタン ========== */}
       <div className="glass-card p-4">
@@ -1507,7 +1552,7 @@ function ReportGenerateButton({ aiGenerating, aiLoadingMessage, aiError, already
       )}
       {!alreadyGenerated && (
         <p className="text-[10px] mt-2 text-center" style={{ color: 'var(--text-muted)' }}>
-          データ収集 + 安藤の人格で配信を深層分析します
+          データ収集 + AI分析で配信を深層分析します
         </p>
       )}
       {aiError && (
