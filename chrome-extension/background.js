@@ -809,7 +809,7 @@ async function flushMessageBuffer() {
       user_name: userName,
       message: message,
       tokens: tokens,
-      is_vip: false,
+      is_vip: !!msg.is_vip,
       user_color: msg.user_color || null,
       user_league: msg.user_league || null,
       user_level: msg.user_level != null ? msg.user_level : null,

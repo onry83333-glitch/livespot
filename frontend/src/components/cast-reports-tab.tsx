@@ -1361,6 +1361,24 @@ function NestedSection({ title, count, color, userNames, children }: {
 }
 
 /* ============================================================
+   League Color Map（Stripchatリーグ色）
+   ============================================================ */
+const LEAGUE_COLORS: Record<string, string> = {
+  legend: '#e74c3c',
+  royal: '#e74c3c',
+  diamond: '#9b59b6',
+  gold: '#f1c40f',
+  silver: '#5dade2',
+  bronze: '#cd6133',
+  grey: '#95a5a6',
+};
+
+function getLeagueColor(league: string | null | undefined): string | null {
+  if (!league) return null;
+  return LEAGUE_COLORS[league.toLowerCase()] || null;
+}
+
+/* ============================================================
    CoinSessionCard（売上ベースセッション）
    ============================================================ */
 interface UserLogEntry {
@@ -1377,7 +1395,28 @@ function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession
   const [userLogs, setUserLogs] = useState<UserLogEntry[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logFilter, setLogFilter] = useState<'all' | 'new' | 'repeater' | 'comeback'>('all');
+  const [leagueMap, setLeagueMap] = useState<Map<string, string>>(new Map());
   const startDate = new Date(session.session_start);
+
+  // Fetch league data when accordion expands
+  useEffect(() => {
+    if (!expanded || !snapshot) return;
+    const allNames = [
+      ...(snapshot.newTippers || []).map(u => u.userName),
+      ...(snapshot.repeaters || []).map(u => u.userName),
+      ...(snapshot.comebackUsers || []).map(u => u.userName),
+    ];
+    if (allNames.length === 0) return;
+    const sb = createClient();
+    sb.rpc('get_user_leagues', { p_cast_name: castName, p_user_names: allNames })
+      .then(({ data }) => {
+        const map = new Map<string, string>();
+        for (const r of (data || []) as Array<{ sender: string; user_league: string }>) {
+          if (r.user_league) map.set(r.sender, r.user_league);
+        }
+        setLeagueMap(map);
+      });
+  }, [expanded, snapshot, castName]);
   const dateStr = startDate.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric', weekday: 'short', timeZone: 'Asia/Tokyo' });
   const timeStr = startDate.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Tokyo' });
 
@@ -1467,7 +1506,7 @@ function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession
                     {snapshot.newTippers.map(u => (
                       <div key={u.userName} className="flex items-center justify-between text-[11px]">
                         <Link href={`/spy/users/${encodeURIComponent(u.userName)}`}
-                          className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                          className="hover:underline" style={{ color: getLeagueColor(leagueMap.get(u.userName)) || 'var(--accent-primary)' }}>
                           {u.userName}
                         </Link>
                         <span style={{ color: 'var(--accent-amber)' }}>{(u.currentTk ?? 0).toLocaleString()}tk</span>
@@ -1482,7 +1521,7 @@ function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession
                     {snapshot.repeaters.map(u => (
                       <div key={u.userName} className="flex items-center justify-between text-[11px]">
                         <Link href={`/spy/users/${encodeURIComponent(u.userName)}`}
-                          className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                          className="hover:underline" style={{ color: getLeagueColor(leagueMap.get(u.userName)) || 'var(--accent-primary)' }}>
                           {u.userName}
                         </Link>
                         <span className="text-[10px] text-right" style={{ color: 'var(--text-secondary)' }}>
@@ -1500,7 +1539,7 @@ function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession
                     {snapshot.comebackUsers.map(u => (
                       <div key={u.userName} className="flex items-center justify-between text-[11px]">
                         <Link href={`/spy/users/${encodeURIComponent(u.userName)}`}
-                          className="hover:underline" style={{ color: 'var(--accent-primary)' }}>
+                          className="hover:underline" style={{ color: getLeagueColor(leagueMap.get(u.userName)) || 'var(--accent-primary)' }}>
                           {u.userName}
                         </Link>
                         <span className="text-[10px] text-right" style={{ color: 'var(--text-secondary)' }}>
@@ -1526,6 +1565,7 @@ function CoinSessionCard({ session, snapshot, castName }: { session: CoinSession
                   setLogsLoading={setLogsLoading}
                   logFilter={logFilter}
                   setLogFilter={setLogFilter}
+                  leagueMap={leagueMap}
                 />
               </div>
             );
@@ -1646,7 +1686,7 @@ function AiDeepAnalysisCard({ record }: { record: CastKnowledgeRecord }) {
 /* ============================================================
    SessionUserLogs（セッション内ユーザーログ表示）
    ============================================================ */
-function SessionUserLogs({ castName, sessionStart, sessionEnd, snapshot, showLogs, setShowLogs, userLogs, setUserLogs, logsLoading, setLogsLoading, logFilter, setLogFilter }: {
+function SessionUserLogs({ castName, sessionStart, sessionEnd, snapshot, showLogs, setShowLogs, userLogs, setUserLogs, logsLoading, setLogsLoading, logFilter, setLogFilter, leagueMap }: {
   castName: string;
   sessionStart: string;
   sessionEnd: string;
@@ -1659,6 +1699,7 @@ function SessionUserLogs({ castName, sessionStart, sessionEnd, snapshot, showLog
   setLogsLoading: (v: boolean) => void;
   logFilter: 'all' | 'new' | 'repeater' | 'comeback';
   setLogFilter: (v: 'all' | 'new' | 'repeater' | 'comeback') => void;
+  leagueMap: Map<string, string>;
 }) {
   const newSet = new Set(snapshot.newTippers.map(u => u.userName));
   const repSet = new Set(snapshot.repeaters.map(u => u.userName));
@@ -1748,7 +1789,7 @@ function SessionUserLogs({ castName, sessionStart, sessionEnd, snapshot, showLog
                   <div key={i} className="flex items-start gap-1.5 text-[10px] py-0.5">
                     <span className="shrink-0 w-[34px] text-right tabular-nums" style={{ color: 'var(--text-muted)' }}>{time}</span>
                     <span className="shrink-0 w-1.5 h-1.5 rounded-full mt-1" style={{ background: isTip ? 'var(--accent-amber)' : '#38bdf8' }} />
-                    <span className="shrink-0 font-semibold" style={{ color: isTip ? 'var(--accent-amber)' : 'var(--text-primary)' }}>
+                    <span className="shrink-0 font-semibold" style={{ color: getLeagueColor(leagueMap.get(l.user_name)) || (isTip ? 'var(--accent-amber)' : 'var(--text-primary)') }}>
                       {l.user_name}
                     </span>
                     {tag && (
