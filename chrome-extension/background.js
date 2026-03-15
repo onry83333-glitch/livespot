@@ -3815,7 +3815,39 @@ async function fetchDMBatch(limit = 50) {
   }
 
   const data = await res.json();
-  return Array.isArray(data) ? data : [];
+  const tasks = Array.isArray(data) ? data : [];
+  if (tasks.length === 0) return [];
+
+  // ── アトミックロック: 取得したタスクを即座に 'sending' に更新 ──
+  const ids = tasks.map(t => t.id);
+  const lockUrl = `${CONFIG.SUPABASE_URL}/rest/v1/dm_send_log`
+    + `?id=in.(${ids.join(',')})`
+    + `&status=eq.queued`;
+
+  try {
+    const lockRes = await fetch(lockUrl, {
+      method: 'PATCH',
+      headers: {
+        'apikey': CONFIG.SUPABASE_ANON_KEY,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation',
+      },
+      body: JSON.stringify({ status: 'sending' }),
+    });
+
+    if (!lockRes.ok) {
+      console.error('[LS-DM] ロック更新失敗:', lockRes.status);
+      return [];
+    }
+
+    const locked = await lockRes.json();
+    console.log(`[LS-DM] ${tasks.length}件取得 → ${locked.length}件ロック成功`);
+    return Array.isArray(locked) ? locked : [];
+  } catch (e) {
+    console.error('[LS-DM] ロック例外:', e.message);
+    return [];
+  }
 }
 
 /**
@@ -4318,7 +4350,7 @@ async function processDMQueueSerial(tasks) {
     }
 
     console.log(`[LS-DM] ${i + 1}/${tasks.length}: ${task.user_name} (${task.cast_name})`);
-    await updateDMTaskStatus(task.id, 'sending', null);
+    // ロック済み（fetchDMBatchでsendingに更新済み）
 
     const result = await tryDMviaAPI(task, tabId);
 
