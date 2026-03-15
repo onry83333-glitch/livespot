@@ -23,13 +23,14 @@ import type { DmScheduleItem, DmCvrItem, ScenarioItem, EnrollmentDetail, DmEffIt
 import type { CoinTxItem, PaidUserItem, CampaignEffect, AcquisitionUser, MonthlyPL, RevenueShareRow, HourlyPerfItem } from '@/types/analytics';
 import RevenueTrend from '@/components/analytics/revenue-trend';
 import FanAnalysis from '@/components/analytics/fan-analysis';
+import ActivityCalendar from '@/components/calendar/activity-calendar';
 
 
 /* ============================================================
    Types
    ============================================================ */
 // M-6: screenshots タブはデータ0件のため非表示。SPY基盤安定後に再表示
-type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'reports' | 'settings' | 'competitors' | 'persona';
+type TabKey = 'overview' | 'sessions' | 'dm' | 'analytics' | 'calendar' | 'reports' | 'settings' | 'competitors' | 'persona';
 
 interface CastStatsData {
   total_messages: number;
@@ -174,6 +175,7 @@ const BASE_TABS: { key: TabKey; icon: string; label: string }[] = [
   { key: 'sessions',   icon: '📺', label: 'セッション' },
   { key: 'dm',         icon: '💬', label: 'DM' },
   { key: 'analytics',  icon: '📈', label: 'アナリティクス' },
+  { key: 'calendar',   icon: '📅', label: '運用カレンダー' },
   { key: 'reports',    icon: '📋', label: '配信レポート' },
   { key: 'competitors', icon: '⚔', label: '競合分析' },
   // { key: 'persona',    icon: '🧠', label: 'AIペルソナ' }, // 非表示（コンポーネントは残す）
@@ -2722,6 +2724,11 @@ function CastDetailInner() {
                 </>
               )}
             </div>
+          )}
+
+          {/* ============ CALENDAR (運用カレンダー) ============ */}
+          {activeTab === 'calendar' && accountId && (
+            <ActivityCalendar accountId={accountId} castName={castName} sb={sb} />
           )}
 
           {/* ============ REPORTS (配信レポート) ============ */}
