@@ -1,7 +1,16 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { DMLogItem, ScenarioItem, EnrollmentDetail, SB } from '@/types/dm';
+
+interface RetentionData {
+  total_sent: number;
+  returned_count: number;
+  retention_rate: number;
+  earliest_dm: string;
+  latest_dm: string;
+  period_ended: boolean;
+}
 
 interface DmCampaignProps {
   dmLogs: DMLogItem[];
@@ -15,12 +24,13 @@ interface DmCampaignProps {
   sb: SB;
   /** 'campaigns' or 'scenarios' sub-section */
   section: 'campaigns' | 'scenarios';
+  onRefresh?: () => void;
 }
 
 export default function DmCampaign({
   dmLogs, scenarios, setScenarios, scenariosLoading,
   scenarioEnrollCounts, scenarioEnrollDetails,
-  accountId, castName, sb, section,
+  accountId, castName, sb, section, onRefresh,
 }: DmCampaignProps) {
   // Scenario creation state
   const [scenarioCreating, setScenarioCreating] = useState(false);
@@ -31,6 +41,56 @@ export default function DmCampaign({
   const [scenarioProcessResult, setScenarioProcessResult] = useState<{
     processed: number; errors: number; skipped: number; aiGenerated: number; aiErrors: number;
   } | null>(null);
+
+  // Retention data per campaign
+  const [retentionMap, setRetentionMap] = useState<Map<string, RetentionData>>(new Map());
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  // Fetch retention data for all campaigns
+  const fetchRetention = useCallback(async (campaigns: string[]) => {
+    const results = new Map<string, RetentionData>();
+    for (const campaign of campaigns) {
+      try {
+        const { data } = await sb.rpc('get_campaign_retention', {
+          p_account_id: accountId,
+          p_cast_name: castName,
+          p_campaign_tag: campaign,
+          p_retention_days: 14,
+        });
+        if (data && Array.isArray(data) && data.length > 0) {
+          results.set(campaign, data[0] as RetentionData);
+        } else if (data && !Array.isArray(data)) {
+          results.set(campaign, data as RetentionData);
+        }
+      } catch { /* ignore individual failures */ }
+    }
+    setRetentionMap(results);
+  }, [sb, accountId, castName]);
+
+  // Auto-fetch retention when campaigns section loads
+  useEffect(() => {
+    if (section !== 'campaigns' || dmLogs.length === 0) return;
+    const campaigns = Array.from(new Set(dmLogs.map(l => l.campaign || '(タグなし)').filter(c => c !== '(タグなし)')));
+    if (campaigns.length > 0) fetchRetention(campaigns);
+  }, [section, dmLogs, fetchRetention]);
+
+  // Delete campaign handler
+  const handleDeleteCampaign = async (campaign: string) => {
+    if (!confirm(`キャンペーン '${campaign}' のDM送信ログを削除しますか？\nこの操作は取り消せません。`)) return;
+    setDeleting(campaign);
+    try {
+      await sb.from('dm_send_log')
+        .delete()
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .eq('campaign', campaign);
+      onRefresh?.();
+    } catch (e) {
+      alert('削除エラー: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   if (section === 'campaigns') {
     return (
@@ -56,43 +116,82 @@ export default function DmCampaign({
               }
               return Array.from(campMap.entries())
                 .sort((a, b) => b[1].total - a[1].total)
-                .map(([campaign, stats]) => (
-                  <div key={campaign} className="glass-panel px-4 py-3 rounded-xl">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-[11px] font-bold truncate">{campaign}</span>
-                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                        {stats.lastSent ? new Date(stats.lastSent).toLocaleDateString('ja-JP') : ''}
-                      </span>
+                .map(([campaign, stats]) => {
+                  const ret = retentionMap.get(campaign);
+                  const retColor = ret
+                    ? Number(ret.retention_rate) >= 50 ? '#22c55e'
+                      : Number(ret.retention_rate) >= 30 ? '#f59e0b'
+                      : '#ef4444'
+                    : undefined;
+                  return (
+                    <div key={campaign} className="glass-panel px-4 py-3 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] font-bold truncate flex-1 mr-2">{campaign}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                            {stats.lastSent ? new Date(stats.lastSent).toLocaleDateString('ja-JP') : ''}
+                          </span>
+                          <button
+                            onClick={() => handleDeleteCampaign(campaign)}
+                            disabled={deleting === campaign}
+                            className="text-[12px] px-1.5 py-0.5 rounded transition-colors hover:bg-red-500/20"
+                            style={{ color: deleting === campaign ? 'var(--text-muted)' : '#ef4444' }}
+                            title="キャンペーン削除"
+                          >
+                            {deleting === campaign ? '...' : '🗑️'}
+                          </button>
+                        </div>
+                      </div>
+                      <div className="h-2 rounded-full overflow-hidden flex mb-2" style={{ background: 'rgba(0,0,0,0.2)' }}>
+                        {stats.success > 0 && (
+                          <div style={{ width: `${(stats.success / stats.total) * 100}%`, background: 'var(--accent-green)' }} />
+                        )}
+                        {stats.sending > 0 && (
+                          <div style={{ width: `${(stats.sending / stats.total) * 100}%`, background: 'var(--accent-amber)' }} />
+                        )}
+                        {stats.queued > 0 && (
+                          <div style={{ width: `${(stats.queued / stats.total) * 100}%`, background: 'var(--accent-primary)' }} />
+                        )}
+                        {stats.error > 0 && (
+                          <div style={{ width: `${(stats.error / stats.total) * 100}%`, background: 'var(--accent-pink)' }} />
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-[10px]">
+                        <span style={{ color: 'var(--text-muted)' }}>全{stats.total}件</span>
+                        <span style={{ color: 'var(--accent-green)' }}>成功 {stats.success}</span>
+                        {stats.error > 0 && <span style={{ color: 'var(--accent-pink)' }}>失敗 {stats.error}</span>}
+                        {(stats.queued + stats.sending) > 0 && (
+                          <span style={{ color: 'var(--accent-amber)' }}>処理中 {stats.queued + stats.sending}</span>
+                        )}
+                        {stats.total > 0 && (
+                          <span style={{ color: 'var(--accent-primary)' }}>
+                            成功率 {Math.round((stats.success / stats.total) * 1000) / 10}%
+                          </span>
+                        )}
+                      </div>
+                      {/* Retention */}
+                      {ret && (
+                        <div className="mt-2 pt-2 flex items-center gap-2 text-[10px]" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>リテンション:</span>
+                          {ret.period_ended ? (
+                            <span style={{ color: retColor }}>
+                              {ret.returned_count}/{ret.total_sent}人 ({ret.retention_rate}%)
+                            </span>
+                          ) : (() => {
+                            const latestDm = new Date(ret.latest_dm);
+                            const endDate = new Date(latestDm.getTime() + 14 * 24 * 60 * 60 * 1000);
+                            const remaining = Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
+                            return (
+                              <span style={{ color: 'var(--accent-amber)' }}>
+                                判定中（残り{remaining}日）{ret.returned_count > 0 && ` — 暫定 ${ret.returned_count}/${ret.total_sent}人`}
+                              </span>
+                            );
+                          })()}
+                        </div>
+                      )}
                     </div>
-                    <div className="h-2 rounded-full overflow-hidden flex mb-2" style={{ background: 'rgba(0,0,0,0.2)' }}>
-                      {stats.success > 0 && (
-                        <div style={{ width: `${(stats.success / stats.total) * 100}%`, background: 'var(--accent-green)' }} />
-                      )}
-                      {stats.sending > 0 && (
-                        <div style={{ width: `${(stats.sending / stats.total) * 100}%`, background: 'var(--accent-amber)' }} />
-                      )}
-                      {stats.queued > 0 && (
-                        <div style={{ width: `${(stats.queued / stats.total) * 100}%`, background: 'var(--accent-primary)' }} />
-                      )}
-                      {stats.error > 0 && (
-                        <div style={{ width: `${(stats.error / stats.total) * 100}%`, background: 'var(--accent-pink)' }} />
-                      )}
-                    </div>
-                    <div className="flex gap-3 text-[10px]">
-                      <span style={{ color: 'var(--text-muted)' }}>全{stats.total}件</span>
-                      <span style={{ color: 'var(--accent-green)' }}>成功 {stats.success}</span>
-                      {stats.error > 0 && <span style={{ color: 'var(--accent-pink)' }}>失敗 {stats.error}</span>}
-                      {(stats.queued + stats.sending) > 0 && (
-                        <span style={{ color: 'var(--accent-amber)' }}>処理中 {stats.queued + stats.sending}</span>
-                      )}
-                      {stats.total > 0 && (
-                        <span style={{ color: 'var(--accent-primary)' }}>
-                          成功率 {Math.round((stats.success / stats.total) * 1000) / 10}%
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ));
+                  );
+                });
             })()}
           </div>
         )}
