@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { DMLogItem, ScenarioItem, EnrollmentDetail, SB } from '@/types/dm';
 
 interface RetentionData {
@@ -10,6 +10,21 @@ interface RetentionData {
   earliest_dm: string;
   latest_dm: string;
   period_ended: boolean;
+}
+
+/** C-3: Parse campaign name — strip pipe3_ prefix, parse _bulk_YYYYMMDD_HHMM to Japanese date */
+function parseCampaignName(raw: string): { displayName: string; dateLabel: string | null } {
+  let name = raw;
+  // Strip pipe3_ prefix
+  if (name.startsWith('pipe3_')) name = name.slice(6);
+  // Parse _bulk_YYYYMMDD_HHMM suffix
+  const bulkMatch = name.match(/_bulk_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})$/);
+  if (bulkMatch) {
+    const [, y, m, d, hh, mm] = bulkMatch;
+    name = name.replace(/_bulk_\d{8}_\d{4}$/, '');
+    return { displayName: name, dateLabel: `${Number(m)}/${Number(d)} ${hh}:${mm}` };
+  }
+  return { displayName: name, dateLabel: null };
 }
 
 interface DmCampaignProps {
@@ -45,17 +60,23 @@ export default function DmCampaign({
   // Retention data per campaign
   const [retentionMap, setRetentionMap] = useState<Map<string, RetentionData>>(new Map());
   const [deleting, setDeleting] = useState<string | null>(null);
+  // C-1: Per-campaign expanded state
+  const [campaignExpanded, setCampaignExpanded] = useState<Set<string>>(new Set());
+  // C-2: Per-campaign slider days
+  const [sliderDaysMap, setSliderDaysMap] = useState<Map<string, number>>(new Map());
+  const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
-  // Fetch retention data for all campaigns
-  const fetchRetention = useCallback(async (campaigns: string[]) => {
+  // Fetch retention data for all campaigns (batch)
+  const fetchRetention = useCallback(async (campaigns: string[], daysOverride?: number) => {
     const results = new Map<string, RetentionData>();
     for (const campaign of campaigns) {
       try {
+        const days = daysOverride ?? sliderDaysMap.get(campaign) ?? 14;
         const { data } = await sb.rpc('get_campaign_retention', {
           p_account_id: accountId,
           p_cast_name: castName,
           p_campaign_tag: campaign,
-          p_retention_days: 14,
+          p_retention_days: days,
         });
         if (data && Array.isArray(data) && data.length > 0) {
           results.set(campaign, data[0] as RetentionData);
@@ -64,8 +85,50 @@ export default function DmCampaign({
         }
       } catch { /* ignore individual failures */ }
     }
-    setRetentionMap(results);
+    setRetentionMap(prev => {
+      const merged = new Map(prev);
+      Array.from(results.entries()).forEach(([k, v]) => merged.set(k, v));
+      return merged;
+    });
+  }, [sb, accountId, castName, sliderDaysMap]);
+
+  // C-2: Fetch single campaign retention with specific days (for slider)
+  const fetchSingleRetention = useCallback(async (campaign: string, days: number) => {
+    try {
+      const { data } = await sb.rpc('get_campaign_retention', {
+        p_account_id: accountId,
+        p_cast_name: castName,
+        p_campaign_tag: campaign,
+        p_retention_days: days,
+      });
+      if (data) {
+        const row = Array.isArray(data) && data.length > 0 ? data[0] : (!Array.isArray(data) ? data : null);
+        if (row) {
+          setRetentionMap(prev => {
+            const next = new Map(prev);
+            next.set(campaign, row as RetentionData);
+            return next;
+          });
+        }
+      }
+    } catch { /* ignore */ }
   }, [sb, accountId, castName]);
+
+  // C-2: Handle slider change with 300ms debounce
+  const handleSliderChange = useCallback((campaign: string, days: number) => {
+    setSliderDaysMap(prev => {
+      const next = new Map(prev);
+      next.set(campaign, days);
+      return next;
+    });
+    // Debounce RPC call
+    const existing = debounceTimers.current.get(campaign);
+    if (existing) clearTimeout(existing);
+    debounceTimers.current.set(campaign, setTimeout(() => {
+      fetchSingleRetention(campaign, days);
+      debounceTimers.current.delete(campaign);
+    }, 300));
+  }, [fetchSingleRetention]);
 
   // Auto-fetch retention when campaigns section loads
   useEffect(() => {
@@ -93,6 +156,22 @@ export default function DmCampaign({
   };
 
   if (section === 'campaigns') {
+    // Build campaign stats map
+    const campMap = new Map<string, { total: number; success: number; error: number; sending: number; queued: number; lastSent: string | null }>();
+    for (const log of dmLogs) {
+      const c = log.campaign || '(タグなし)';
+      if (!campMap.has(c)) {
+        campMap.set(c, { total: 0, success: 0, error: 0, sending: 0, queued: 0, lastSent: null });
+      }
+      const entry = campMap.get(c)!;
+      entry.total++;
+      if (log.status === 'success') { entry.success++; if (!entry.lastSent || (log.sent_at && log.sent_at > entry.lastSent)) entry.lastSent = log.sent_at; }
+      else if (log.status === 'error') entry.error++;
+      else if (log.status === 'sending') entry.sending++;
+      else if (log.status === 'queued') entry.queued++;
+    }
+    const sortedCampaigns = Array.from(campMap.entries()).sort((a, b) => b[1].total - a[1].total);
+
     return (
       <div className="glass-card p-4">
         <h3 className="text-sm font-bold mb-3">📊 キャンペーン別集計</h3>
@@ -100,99 +179,139 @@ export default function DmCampaign({
           <p className="text-xs py-4 text-center" style={{ color: 'var(--text-muted)' }}>DM送信履歴なし</p>
         ) : (
           <div className="space-y-2">
-            {(() => {
-              const campMap = new Map<string, { total: number; success: number; error: number; sending: number; queued: number; lastSent: string | null }>();
-              for (const log of dmLogs) {
-                const c = log.campaign || '(タグなし)';
-                if (!campMap.has(c)) {
-                  campMap.set(c, { total: 0, success: 0, error: 0, sending: 0, queued: 0, lastSent: null });
-                }
-                const entry = campMap.get(c)!;
-                entry.total++;
-                if (log.status === 'success') { entry.success++; if (!entry.lastSent || (log.sent_at && log.sent_at > entry.lastSent)) entry.lastSent = log.sent_at; }
-                else if (log.status === 'error') entry.error++;
-                else if (log.status === 'sending') entry.sending++;
-                else if (log.status === 'queued') entry.queued++;
-              }
-              return Array.from(campMap.entries())
-                .sort((a, b) => b[1].total - a[1].total)
-                .map(([campaign, stats]) => {
-                  const ret = retentionMap.get(campaign);
-                  const retColor = ret
-                    ? Number(ret.retention_rate) >= 50 ? '#22c55e'
-                      : Number(ret.retention_rate) >= 30 ? '#f59e0b'
-                      : '#ef4444'
-                    : undefined;
-                  return (
-                    <div key={campaign} className="glass-panel px-4 py-3 rounded-xl">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[11px] font-bold truncate flex-1 mr-2">{campaign}</span>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-                            {stats.lastSent ? new Date(stats.lastSent).toLocaleDateString('ja-JP') : ''}
-                          </span>
-                          <button
-                            onClick={() => handleDeleteCampaign(campaign)}
-                            disabled={deleting === campaign}
-                            className="text-[12px] px-1.5 py-0.5 rounded transition-colors hover:bg-red-500/20"
-                            style={{ color: deleting === campaign ? 'var(--text-muted)' : '#ef4444' }}
-                            title="キャンペーン削除"
-                          >
-                            {deleting === campaign ? '...' : '🗑️'}
-                          </button>
-                        </div>
+            {sortedCampaigns.map(([campaign, stats]) => {
+              const ret = retentionMap.get(campaign);
+              const retColor = ret
+                ? Number(ret.retention_rate) >= 50 ? '#22c55e'
+                  : Number(ret.retention_rate) >= 30 ? '#f59e0b'
+                  : '#ef4444'
+                : undefined;
+              const isOpen = campaignExpanded.has(campaign);
+              const successRate = stats.total > 0 ? Math.round((stats.success / stats.total) * 1000) / 10 : 0;
+              const { displayName, dateLabel } = parseCampaignName(campaign);
+              const days = sliderDaysMap.get(campaign) ?? 14;
+
+              return (
+                <div key={campaign} className="glass-panel rounded-xl overflow-hidden">
+                  {/* C-1: Collapsed header — clickable accordion */}
+                  <div
+                    className="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-colors"
+                    onClick={() => setCampaignExpanded(prev => {
+                      const next = new Set(prev);
+                      if (next.has(campaign)) next.delete(campaign); else next.add(campaign);
+                      return next;
+                    })}
+                  >
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <span className="text-[11px] font-bold truncate">{displayName}</span>
+                      {dateLabel && (
+                        <span className="text-[10px] shrink-0 px-1.5 py-0.5 rounded" style={{ background: 'rgba(56,189,248,0.1)', color: 'var(--accent-primary)' }}>
+                          {dateLabel}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-[10px] shrink-0">
+                      <span style={{ color: 'var(--accent-green)' }}>成功率 {successRate}%</span>
+                      {ret && (
+                        <span style={{ color: retColor }}>
+                          CVR {ret.retention_rate ?? 0}%
+                        </span>
+                      )}
+                      <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{isOpen ? '▲' : '▼'}</span>
+                    </div>
+                  </div>
+
+                  {/* C-1: Expanded detail */}
+                  {isOpen && (
+                    <div className="px-4 pb-3 space-y-3" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                      {/* Progress bar */}
+                      <div className="h-2 rounded-full overflow-hidden flex mt-3" style={{ background: 'rgba(0,0,0,0.2)' }}>
+                        {stats.success > 0 && <div style={{ width: `${(stats.success / stats.total) * 100}%`, background: 'var(--accent-green)' }} />}
+                        {stats.sending > 0 && <div style={{ width: `${(stats.sending / stats.total) * 100}%`, background: 'var(--accent-amber)' }} />}
+                        {stats.queued > 0 && <div style={{ width: `${(stats.queued / stats.total) * 100}%`, background: 'var(--accent-primary)' }} />}
+                        {stats.error > 0 && <div style={{ width: `${(stats.error / stats.total) * 100}%`, background: 'var(--accent-pink)' }} />}
                       </div>
-                      <div className="h-2 rounded-full overflow-hidden flex mb-2" style={{ background: 'rgba(0,0,0,0.2)' }}>
-                        {stats.success > 0 && (
-                          <div style={{ width: `${(stats.success / stats.total) * 100}%`, background: 'var(--accent-green)' }} />
-                        )}
-                        {stats.sending > 0 && (
-                          <div style={{ width: `${(stats.sending / stats.total) * 100}%`, background: 'var(--accent-amber)' }} />
-                        )}
-                        {stats.queued > 0 && (
-                          <div style={{ width: `${(stats.queued / stats.total) * 100}%`, background: 'var(--accent-primary)' }} />
-                        )}
-                        {stats.error > 0 && (
-                          <div style={{ width: `${(stats.error / stats.total) * 100}%`, background: 'var(--accent-pink)' }} />
-                        )}
-                      </div>
+
+                      {/* Send stats */}
                       <div className="flex flex-wrap gap-3 text-[10px]">
                         <span style={{ color: 'var(--text-muted)' }}>全{stats.total}件</span>
                         <span style={{ color: 'var(--accent-green)' }}>成功 {stats.success}</span>
                         {stats.error > 0 && <span style={{ color: 'var(--accent-pink)' }}>失敗 {stats.error}</span>}
-                        {(stats.queued + stats.sending) > 0 && (
-                          <span style={{ color: 'var(--accent-amber)' }}>処理中 {stats.queued + stats.sending}</span>
-                        )}
-                        {stats.total > 0 && (
-                          <span style={{ color: 'var(--accent-primary)' }}>
-                            成功率 {Math.round((stats.success / stats.total) * 1000) / 10}%
-                          </span>
-                        )}
+                        {(stats.queued + stats.sending) > 0 && <span style={{ color: 'var(--accent-amber)' }}>処理中 {stats.queued + stats.sending}</span>}
+                        {stats.lastSent && <span style={{ color: 'var(--text-muted)' }}>最終: {new Date(stats.lastSent).toLocaleDateString('ja-JP')}</span>}
                       </div>
-                      {/* Retention */}
+
+                      {/* C-2: Retention slider + presets */}
                       {ret && (
-                        <div className="mt-2 pt-2 flex items-center gap-2 text-[10px]" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                          <span style={{ color: 'var(--text-muted)' }}>リテンション:</span>
-                          {ret.period_ended ? (
-                            <span style={{ color: retColor }}>
-                              {ret.returned_count}/{ret.total_sent}人 ({ret.retention_rate}%)
+                        <div className="space-y-2 pt-1" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold" style={{ color: 'var(--text-secondary)' }}>
+                              リテンション判定期間: {days}日
                             </span>
-                          ) : (() => {
-                            const latestDm = new Date(ret.latest_dm);
-                            const endDate = new Date(latestDm.getTime() + 14 * 24 * 60 * 60 * 1000);
-                            const remaining = Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
-                            return (
-                              <span style={{ color: 'var(--accent-amber)' }}>
-                                判定中（残り{remaining}日）{ret.returned_count > 0 && ` — 暫定 ${ret.returned_count}/${ret.total_sent}人`}
+                            <div className="flex items-center gap-1">
+                              {[1, 7, 14, 30].map(preset => (
+                                <button
+                                  key={preset}
+                                  onClick={() => handleSliderChange(campaign, preset)}
+                                  className="text-[9px] px-1.5 py-0.5 rounded transition-colors"
+                                  style={{
+                                    background: days === preset ? 'rgba(56,189,248,0.2)' : 'rgba(255,255,255,0.05)',
+                                    color: days === preset ? 'var(--accent-primary)' : 'var(--text-muted)',
+                                    border: days === preset ? '1px solid rgba(56,189,248,0.3)' : '1px solid transparent',
+                                  }}
+                                >
+                                  {preset}日
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <input
+                            type="range"
+                            min={1}
+                            max={30}
+                            value={days}
+                            onChange={e => handleSliderChange(campaign, Number(e.target.value))}
+                            className="w-full h-1 rounded-lg appearance-none cursor-pointer"
+                            style={{ accentColor: 'var(--accent-primary)', background: 'rgba(255,255,255,0.1)' }}
+                          />
+
+                          {/* CVR detail */}
+                          <div className="flex items-center gap-2 text-[10px]">
+                            <span style={{ color: 'var(--text-muted)' }}>CVR:</span>
+                            {ret.period_ended ? (
+                              <span style={{ color: retColor }}>
+                                {ret.returned_count}/{ret.total_sent}人 ({ret.retention_rate}%)
                               </span>
-                            );
-                          })()}
+                            ) : (() => {
+                              const latestDm = new Date(ret.latest_dm);
+                              const endDate = new Date(latestDm.getTime() + days * 24 * 60 * 60 * 1000);
+                              const remaining = Math.max(0, Math.ceil((endDate.getTime() - Date.now()) / (24 * 60 * 60 * 1000)));
+                              return (
+                                <span style={{ color: 'var(--accent-amber)' }}>
+                                  判定中（残り{remaining}日）{ret.returned_count > 0 && ` — 暫定 ${ret.returned_count}/${ret.total_sent}人 (${ret.retention_rate}%)`}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </div>
                       )}
+
+                      {/* Delete button */}
+                      <div className="flex justify-end">
+                        <button
+                          onClick={() => handleDeleteCampaign(campaign)}
+                          disabled={deleting === campaign}
+                          className="text-[10px] px-2 py-1 rounded transition-colors hover:bg-red-500/20"
+                          style={{ color: deleting === campaign ? 'var(--text-muted)' : '#ef4444' }}
+                        >
+                          {deleting === campaign ? '削除中...' : '🗑️ 削除'}
+                        </button>
+                      </div>
                     </div>
-                  );
-                });
-            })()}
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
