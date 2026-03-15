@@ -390,9 +390,8 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
                       <div className="flex items-center gap-0.5 truncate" style={{ color: 'var(--accent-amber)' }}>
                         <span className="text-[11px]">📝</span>
                         <span className="truncate">
-                          {dayPlans.length === 1
-                            ? (dayPlans[0].title || dayPlans[0].content?.substring(0, 10) || 'メモ')
-                            : `メモ ${dayPlans.length}件`}
+                          {dayPlans[0].title || dayPlans[0].content?.substring(0, 10) || 'メモ'}
+                          {dayPlans.length > 1 && ` 他${dayPlans.length - 1}件`}
                         </span>
                       </div>
                     )}
