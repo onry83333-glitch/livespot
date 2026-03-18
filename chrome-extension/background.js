@@ -4211,6 +4211,14 @@ async function tryDMviaAPI(task, tabId) {
             }).then(parseResponse).then(handleMessageResponse);
           }
           function uploadPhoto() {
+            // albums事前コール（ownershipセッション確立 — 手動送信と同じフロー）
+            return fetch('/api/front/users/' + myUid + '/albums?accessModes=purchased,free', {
+              credentials: 'include',
+              headers: { 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
+            }).then(function(albumsRes) {
+              console.log('[LS-DM] albums事前コール: ' + albumsRes.status);
+              return albumsRes.json().catch(function() { return {}; });
+            }).then(function() {
             var binaryStr = atob(imgB64);
             var bytes = new Uint8Array(binaryStr.length);
             for (var i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
@@ -4241,6 +4249,7 @@ async function tryDMviaAPI(task, tabId) {
               }
               return { __mediaId: photoData.photo.id };
             });
+            }); // albums事前コールのthen閉じ
           }
           function sendMessageWithMedia(mediaId, body, uniqId) {
             var deviceId = 'unknown';
@@ -4268,16 +4277,33 @@ async function tryDMviaAPI(task, tabId) {
               uniq: uniqId,
             };
             if (body) payload.body = body;
-            console.log('[LS-DM] sendMessageWithMedia payload: mediaId=' + mediaId + ' mediaSource=upload device_id=' + deviceId + ' targetUid=' + targetUid);
-            return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
-              credentials: 'include',
-              body: JSON.stringify(payload),
+            console.log('[LS-DM] sendMessageWithMedia: mediaId=' + mediaId + ' myUid=' + myUid + ' targetUid=' + targetUid + ' device_id=' + deviceId);
+            // まずテキストのみ送信してconversationを確立（存在しない場合に備える）
+            var ensureConversation = (body && body.length > 0)
+              ? Promise.resolve(null)  // text_then_imageの場合は既にテキスト送信済み
+              : fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
+                  credentials: 'include',
+                  body: JSON.stringify({
+                    body: ' ',
+                    csrfToken: csrf.csrfToken, csrfTimestamp: csrf.csrfTimestamp, csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
+                    uniq: Math.random().toString(36).substring(2, 18),
+                  }),
+                }).then(function(r) { return r.json().catch(function() { return {}; }); });
+            return ensureConversation.then(function() {
+              return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
+                credentials: 'include',
+                body: JSON.stringify(payload),
+              });
             }).then(parseResponse).then(function (resp) {
               var result = handleMessageResponse(resp);
               result._api = 'sendMessageWithMedia';
               result._mediaId = mediaId;
+              result._targetUid = targetUid;
+              result._myUid = myUid;
               return result;
             });
           }
