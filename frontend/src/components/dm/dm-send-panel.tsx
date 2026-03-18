@@ -16,6 +16,9 @@ interface DmSendPanelProps {
   setDmSchedules: React.Dispatch<React.SetStateAction<DmScheduleItem[]>>;
 }
 
+// 統合送信タイプ: モード+送信順序を1つに統合
+type SendType = 'text_only' | 'text_and_image' | 'image_only';
+
 export default function DmSendPanel({
   accountId, castName, sb, fans, dmLogs, setDmLogs,
   dmSchedules, setDmSchedules,
@@ -26,7 +29,6 @@ export default function DmSendPanel({
   const [dmMessage, setDmMessage] = useState('');
   const [dmCampaign, setDmCampaign] = useState('');
   const [dmIsTest, setDmIsTest] = useState(process.env.NODE_ENV === 'development');
-  const [dmSendMode, setDmSendMode] = useState<'sequential' | 'pipeline'>('pipeline');
   const [dmTabs, setDmTabs] = useState(3);
   const [dmSending, setDmSending] = useState(false);
   const [dmError, setDmError] = useState<string | null>(null);
@@ -40,14 +42,18 @@ export default function DmSendPanel({
   const [dmScheduleTime, setDmScheduleTime] = useState('');
   const [dmScheduleSaving, setDmScheduleSaving] = useState(false);
 
+  // 統合送信タイプ (A: モード+送信順序を統合3択)
+  const [sendType, setSendType] = useState<SendType>('text_only');
+  // サブ選択: text_and_image 時の送信順序（テキスト先 or 画像先）
+  const [imageFirst, setImageFirst] = useState(false);
+  // 詳細設定の展開
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
   // Image state
   const [dmImageFile, setDmImageFile] = useState<File | null>(null);
   const [dmImagePreview, setDmImagePreview] = useState<string | null>(null);
   const dmImageInputRef = useRef<HTMLInputElement>(null);
-
-  // Delivery mode
-  const [dmDeliveryMode, setDmDeliveryMode] = useState<'fast_text' | 'image_pipeline'>('fast_text');
-  const [dmSendOrder, setDmSendOrder] = useState<'text_only' | 'image_only' | 'text_then_image' | 'image_then_text'>('text_only');
+  const dropZoneRef = useRef<HTMLDivElement>(null);
 
   // Safety gates
   const [dmShowPreview, setDmShowPreview] = useState(false);
@@ -56,13 +62,20 @@ export default function DmSendPanel({
   const [sendUnlocked, setSendUnlocked] = useState(false);
   const unlockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // 派生値: 内部的なdeliveryMode / sendMode / sendOrder
+  const dmDeliveryMode = sendType === 'text_only' ? 'fast_text' : 'image_pipeline';
+  const dmSendMode = sendType === 'text_only' ? 'sequential' as const : 'pipeline' as const;
+  const dmSendOrder = sendType === 'text_only' ? 'text_only' as const
+    : sendType === 'image_only' ? 'image_only' as const
+    : imageFirst ? 'image_then_text' as const : 'text_then_image' as const;
+  const needsImage = sendType !== 'text_only';
+
   // Realtime status polling
   const dmBatchIdRef = useRef(dmBatchId);
   dmBatchIdRef.current = dmBatchId;
   const dmCastChannelRef = useRef<ReturnType<typeof sb.channel> | null>(null);
 
   useEffect(() => {
-    // 前のチャネルをクリーンアップ
     if (dmCastChannelRef.current) {
       sb.removeChannel(dmCastChannelRef.current);
       dmCastChannelRef.current = null;
@@ -81,9 +94,7 @@ export default function DmSendPanel({
         setDmStatusCounts(counts);
       });
 
-    // Subscribe using the imported helper
     import('@/lib/realtime-helpers').then(({ subscribeWithRetry }) => subscribeWithRetry(channel));
-
     dmCastChannelRef.current = channel;
 
     return () => {
@@ -98,6 +109,14 @@ export default function DmSendPanel({
   useEffect(() => {
     return () => { if (unlockTimerRef.current) clearTimeout(unlockTimerRef.current); };
   }, []);
+
+  // 画像クリア（タイプ切替時）
+  useEffect(() => {
+    if (sendType === 'text_only') {
+      setDmImageFile(null);
+      if (dmImagePreview) { URL.revokeObjectURL(dmImagePreview); setDmImagePreview(null); }
+    }
+  }, [sendType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Target management
   const toggleTarget = useCallback((un: string) => {
@@ -127,12 +146,33 @@ export default function DmSendPanel({
     setDmTargets(prev => { const next = new Set(prev); next.delete(un); return next; });
   }, []);
 
+  // 画像ドロップ&選択ハンドラ
+  const handleImageSelect = useCallback((file: File) => {
+    setDmImageFile(file);
+    if (dmImagePreview) URL.revokeObjectURL(dmImagePreview);
+    setDmImagePreview(URL.createObjectURL(file));
+  }, [dmImagePreview]);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const file = e.dataTransfer.files[0];
+    if (file && file.type.startsWith('image/')) {
+      handleImageSelect(file);
+    }
+  }, [handleImageSelect]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
   // DM Send
   const handleDmSend = useCallback(async () => {
-    console.log('[DM-Cast] handleDmSend called, targets:', dmTargets.size, 'cast:', castName, 'deliveryMode:', dmDeliveryMode, 'sendOrder:', dmSendOrder);
+    console.log('[DM-Cast] handleDmSend called, targets:', dmTargets.size, 'cast:', castName, 'sendType:', sendType, 'sendOrder:', dmSendOrder);
     const needsMessage = dmSendOrder !== 'image_only';
-    const needsImage = dmDeliveryMode === 'image_pipeline' && (dmSendOrder === 'image_only' || dmSendOrder === 'text_then_image' || dmSendOrder === 'image_then_text');
-    if (dmTargets.size === 0 || (needsMessage && !dmMessage.trim()) || (needsImage && !dmImageFile) || !accountId) return;
+    const needsImg = sendType !== 'text_only' && (dmSendOrder === 'image_only' || dmSendOrder === 'text_then_image' || dmSendOrder === 'image_then_text');
+    if (dmTargets.size === 0 || (needsMessage && !dmMessage.trim()) || (needsImg && !dmImageFile) || !accountId) return;
 
     if (!dmCampaign.trim()) {
       setDmError('キャンペーンタグは必須です。送信目的を識別するタグを入力してください。');
@@ -214,22 +254,20 @@ export default function DmSendPanel({
 
       if (!usedRpc || uploadedImageUrl) {
         if (usedRpc && uploadedImageUrl) {
-          const effectiveSendOrder = dmDeliveryMode === 'fast_text' ? 'text_only' : dmSendOrder;
           await sb.from('dm_send_log')
-            .update({ image_url: uploadedImageUrl, image_sent: true, send_order: effectiveSendOrder })
+            .update({ image_url: uploadedImageUrl, image_sent: true, send_order: dmSendOrder })
             .eq('campaign', originalBid);
           console.log('[DM-Cast] RPC登録分にimage_url付与:', originalBid);
         } else if (!usedRpc) {
           console.log('[DM-Cast] Step2: direct INSERT for', usernames.length, 'users');
           originalBid = `bulk_${timestamp}`;
-          const effectiveSendOrder = dmDeliveryMode === 'fast_text' ? 'text_only' : dmSendOrder;
           const rows = usernames.map(un => ({
             account_id: accountId,
             user_name: un,
-            message: effectiveSendOrder === 'image_only' ? '' : dmMessage,
+            message: dmSendOrder === 'image_only' ? '' : dmMessage,
             image_url: uploadedImageUrl,
             image_sent: !!uploadedImageUrl,
-            send_order: effectiveSendOrder,
+            send_order: dmSendOrder,
             status: 'queued',
             campaign: originalBid,
             cast_name: castName,
@@ -274,7 +312,7 @@ export default function DmSendPanel({
       setDmError(errMsg);
     }
     setDmSending(false);
-  }, [dmTargets, dmMessage, dmCampaign, dmIsTest, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview, dmDeliveryMode, dmSendOrder, dmPreviewConfirmed, setDmLogs]);
+  }, [dmTargets, dmMessage, dmCampaign, dmIsTest, dmSendMode, dmTabs, accountId, castName, sb, dmImageFile, dmImagePreview, sendType, dmSendOrder, dmPreviewConfirmed, setDmLogs]);
 
   const handleUnlockToggle = useCallback(() => {
     if (sendUnlocked) {
@@ -347,6 +385,11 @@ export default function DmSendPanel({
     setDmSchedules(prev => prev.map(s => s.id === scheduleId ? { ...s, status: 'cancelled' } : s));
   }, [sb, setDmSchedules]);
 
+  // 送信ボタンのdisabled判定
+  const isSendDisabled = dmSending || dmTargets.size === 0
+    || (dmSendOrder !== 'image_only' && !dmMessage.trim())
+    || (needsImage && !dmImageFile);
+
   return (
     <>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -355,184 +398,184 @@ export default function DmSendPanel({
           <div className="glass-card p-5">
             <h3 className="text-sm font-bold mb-4">✉️ DM送信</h3>
 
-            {/* 送信モード選択カード */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <button
-                onClick={() => {
-                  setDmDeliveryMode('fast_text');
-                  setDmSendMode('sequential');
-                  setDmSendOrder('text_only');
-                  setDmImageFile(null);
-                  if (dmImagePreview) { URL.revokeObjectURL(dmImagePreview); setDmImagePreview(null); }
-                }}
-                className="p-3 rounded-xl text-left transition-all"
-                style={{
-                  background: dmDeliveryMode === 'fast_text' ? 'rgba(56,189,248,0.1)' : 'rgba(15,23,42,0.4)',
-                  border: `1px solid ${dmDeliveryMode === 'fast_text' ? 'rgba(56,189,248,0.3)' : 'var(--border-glass)'}`,
-                }}
-              >
-                <p className="text-xs font-bold mb-1" style={{ color: dmDeliveryMode === 'fast_text' ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
-                  ⚡ 高速テキスト送信
-                </p>
-                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>API送信（~2秒/通）</p>
-                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>テキストDMのみ</p>
-              </button>
-              <button
-                onClick={() => {
-                  setDmDeliveryMode('image_pipeline');
-                  setDmSendMode('pipeline');
-                  if (dmSendOrder === 'text_only') setDmSendOrder('text_then_image');
-                }}
-                className="p-3 rounded-xl text-left transition-all"
-                style={{
-                  background: dmDeliveryMode === 'image_pipeline' ? 'rgba(167,139,250,0.1)' : 'rgba(15,23,42,0.4)',
-                  border: `1px solid ${dmDeliveryMode === 'image_pipeline' ? 'rgba(167,139,250,0.3)' : 'var(--border-glass)'}`,
-                }}
-              >
-                <p className="text-xs font-bold mb-1" style={{ color: dmDeliveryMode === 'image_pipeline' ? 'var(--accent-purple)' : 'var(--text-secondary)' }}>
-                  🖼 画像付きパイプライン
-                </p>
-                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>DOM操作（~18秒/通）</p>
-                <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>画像+テキスト対応</p>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>キャンペーンタグ</label>
-                <div className="flex gap-2 items-center">
-                  <input type="text" value={dmCampaign} onChange={e => setDmCampaign(e.target.value)}
-                    className="input-glass text-xs flex-1" placeholder="例: バレンタイン復帰DM" />
-                  <button
-                    onClick={() => setDmIsTest(p => !p)}
-                    className={`shrink-0 text-[10px] px-2.5 py-1.5 rounded-lg font-medium transition-all ${dmIsTest ? 'bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/40' : 'btn-ghost opacity-60'}`}
-                    title="ONにするとcampaignにtest_プレフィックスが付き、テストデータ管理から一括削除可能"
-                  >
-                    {dmIsTest ? 'テスト ON' : 'テスト'}
-                  </button>
-                </div>
-                {dmIsTest && (
-                  <p className="text-[9px] mt-1" style={{ color: 'var(--accent-amber)' }}>
-                    test_ プレフィックスが自動付与されます（管理画面から一括削除可能）
+            {/* A: 統合送信タイプ 3択 */}
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {([
+                { type: 'text_only' as SendType, icon: '⚡', label: 'テキストのみ', desc: 'API高速送信 ~2秒/通', color: 'var(--accent-primary)', bgActive: 'rgba(56,189,248,0.1)', borderActive: 'rgba(56,189,248,0.3)' },
+                { type: 'text_and_image' as SendType, icon: '🖼', label: 'テキスト+画像', desc: 'パイプライン ~18秒/通', color: 'var(--accent-purple)', bgActive: 'rgba(167,139,250,0.1)', borderActive: 'rgba(167,139,250,0.3)' },
+                { type: 'image_only' as SendType, icon: '🖼', label: '画像のみ', desc: 'パイプライン ~18秒/通', color: 'var(--accent-purple)', bgActive: 'rgba(167,139,250,0.1)', borderActive: 'rgba(167,139,250,0.3)' },
+              ]).map(opt => (
+                <button
+                  key={opt.type}
+                  onClick={() => setSendType(opt.type)}
+                  className="p-2.5 rounded-xl text-center transition-all"
+                  style={{
+                    background: sendType === opt.type ? opt.bgActive : 'rgba(15,23,42,0.4)',
+                    border: `1px solid ${sendType === opt.type ? opt.borderActive : 'var(--border-glass)'}`,
+                  }}
+                >
+                  <p className="text-xs font-bold mb-0.5" style={{ color: sendType === opt.type ? opt.color : 'var(--text-secondary)' }}>
+                    {opt.icon} {opt.label}
                   </p>
-                )}
-              </div>
-              {dmDeliveryMode === 'image_pipeline' && (
-                <div>
-                  <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>パイプライン設定</label>
-                  <div className="flex gap-2">
-                    <button onClick={() => setDmSendMode('pipeline')}
-                      className={`text-[10px] px-3 py-1.5 rounded-lg ${dmSendMode === 'pipeline' ? 'btn-primary' : 'btn-ghost'}`}>
-                      パイプライン ({dmTabs}tab)
-                    </button>
-                    <button onClick={() => setDmSendMode('sequential')}
-                      className={`text-[10px] px-3 py-1.5 rounded-lg ${dmSendMode === 'sequential' ? 'btn-primary' : 'btn-ghost'}`}>
-                      順次
-                    </button>
-                    {dmSendMode === 'pipeline' && (
-                      <select value={dmTabs} onChange={e => setDmTabs(Number(e.target.value))}
-                        className="input-glass text-[10px] py-1 px-2 w-16">
-                        {[2, 3, 4, 5].map(n => <option key={n} value={n}>{n}tab</option>)}
-                      </select>
-                    )}
-                  </div>
-                </div>
-              )}
+                  <p className="text-[9px]" style={{ color: 'var(--text-muted)' }}>{opt.desc}</p>
+                </button>
+              ))}
             </div>
 
-            {/* 送信順序セレクター */}
-            {dmDeliveryMode === 'image_pipeline' && (
-              <div className="mb-3">
-                <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>送信順序</label>
-                <div className="flex gap-1.5 flex-wrap">
-                  {([
-                    { key: 'text_then_image' as const, label: 'テキスト→画像', desc: 'テキスト送信後に画像送信' },
-                    { key: 'image_then_text' as const, label: '画像→テキスト', desc: '画像送信後にテキスト送信' },
-                    { key: 'text_only' as const, label: 'テキストのみ', desc: '画像を使わずテキストのみ' },
-                    { key: 'image_only' as const, label: '画像のみ', desc: 'テキストなしで画像のみ' },
-                  ]).map(opt => (
-                    <button
-                      key={opt.key}
-                      onClick={() => setDmSendOrder(opt.key)}
-                      className="text-[10px] px-3 py-1.5 rounded-lg transition-all"
-                      style={{
-                        background: dmSendOrder === opt.key ? 'rgba(167,139,250,0.12)' : 'transparent',
-                        color: dmSendOrder === opt.key ? 'var(--accent-purple)' : 'var(--text-muted)',
-                        border: dmSendOrder === opt.key ? '1px solid rgba(167,139,250,0.25)' : '1px solid transparent',
-                      }}
-                      title={opt.desc}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
+            {/* テキスト+画像時: 送信順序サブ選択 */}
+            {sendType === 'text_and_image' && (
+              <div className="flex items-center gap-2 mb-3 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                <span>送信順序:</span>
+                <button
+                  onClick={() => setImageFirst(false)}
+                  className="px-2 py-1 rounded-lg transition-all"
+                  style={{
+                    background: !imageFirst ? 'rgba(167,139,250,0.12)' : 'transparent',
+                    color: !imageFirst ? 'var(--accent-purple)' : 'var(--text-muted)',
+                    border: !imageFirst ? '1px solid rgba(167,139,250,0.25)' : '1px solid transparent',
+                  }}
+                >
+                  テキスト→画像
+                </button>
+                <button
+                  onClick={() => setImageFirst(true)}
+                  className="px-2 py-1 rounded-lg transition-all"
+                  style={{
+                    background: imageFirst ? 'rgba(167,139,250,0.12)' : 'transparent',
+                    color: imageFirst ? 'var(--accent-purple)' : 'var(--text-muted)',
+                    border: imageFirst ? '1px solid rgba(167,139,250,0.25)' : '1px solid transparent',
+                  }}
+                >
+                  画像→テキスト
+                </button>
               </div>
             )}
 
+            {/* キャンペーンタグ + テスト */}
             <div className="mb-3">
-              <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                メッセージ {dmSendOrder !== 'image_only' && <span style={{ color: 'var(--accent-pink)' }}>*</span>}
-                {dmSendOrder === 'image_only' && <span className="text-[9px] ml-1" style={{ color: 'var(--text-muted)' }}>（任意）</span>}
-              </label>
-              <textarea value={dmMessage} onChange={e => setDmMessage(e.target.value)}
-                className="input-glass text-xs w-full h-24 resize-none"
-                placeholder={dmSendOrder === 'image_only' ? '画像のみ送信（テキストは任意）' : 'メッセージを入力... {username}でユーザー名置換'} />
-            </div>
-
-            {/* 画像添付 */}
-            {dmDeliveryMode === 'image_pipeline' && (
-            <div className="mb-3">
-              <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>
-                画像添付{dmSendOrder === 'image_only' || dmSendOrder === 'text_then_image' || dmSendOrder === 'image_then_text'
-                  ? <span style={{ color: 'var(--accent-pink)' }}> *</span>
-                  : '（任意）'}
-              </label>
-              <input
-                ref={dmImageInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    setDmImageFile(file);
-                    if (dmImagePreview) URL.revokeObjectURL(dmImagePreview);
-                    setDmImagePreview(URL.createObjectURL(file));
-                  }
-                  e.target.value = '';
-                }}
-              />
-              {dmImagePreview ? (
-                <div className="flex items-start gap-3">
-                  <div className="relative">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={dmImagePreview} alt="DM画像プレビュー" className="w-20 h-20 rounded-lg object-cover border" style={{ borderColor: 'var(--border-glass)' }} />
-                    <button
-                      onClick={() => {
-                        setDmImageFile(null);
-                        if (dmImagePreview) URL.revokeObjectURL(dmImagePreview);
-                        setDmImagePreview(null);
-                      }}
-                      className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px]"
-                      style={{ background: 'var(--accent-pink)', color: 'white' }}
-                    >
-                      x
-                    </button>
-                  </div>
-                  <div className="text-[10px] pt-1" style={{ color: 'var(--text-muted)' }}>
-                    <p>{dmImageFile?.name}</p>
-                    <p>{dmImageFile ? `${(dmImageFile.size / 1024).toFixed(0)}KB` : ''}</p>
-                  </div>
-                </div>
-              ) : (
+              <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>キャンペーンタグ</label>
+              <div className="flex gap-2 items-center">
+                <input type="text" value={dmCampaign} onChange={e => setDmCampaign(e.target.value)}
+                  className="input-glass text-xs flex-1" placeholder="例: バレンタイン復帰DM" />
                 <button
-                  onClick={() => dmImageInputRef.current?.click()}
-                  className="btn-ghost text-[10px] px-3 py-1.5 rounded-lg"
+                  onClick={() => setDmIsTest(p => !p)}
+                  className={`shrink-0 text-[10px] px-2.5 py-1.5 rounded-lg font-medium transition-all ${dmIsTest ? 'bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/40' : 'btn-ghost opacity-60'}`}
+                  title="ONにするとcampaignにtest_プレフィックスが付き、テストデータ管理から一括削除可能"
                 >
-                  🖼 画像を選択
+                  {dmIsTest ? 'テスト ON' : 'テスト'}
                 </button>
+              </div>
+              {dmIsTest && (
+                <p className="text-[9px] mt-1" style={{ color: 'var(--accent-amber)' }}>
+                  test_ プレフィックスが自動付与されます（管理画面から一括削除可能）
+                </p>
               )}
             </div>
+
+            {/* B: 詳細設定（折りたたみ） */}
+            {needsImage && (
+              <div className="mb-3">
+                <button
+                  onClick={() => setShowAdvanced(p => !p)}
+                  className="text-[10px] flex items-center gap-1 transition-colors"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  <span style={{ display: 'inline-block', transform: showAdvanced ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▶</span>
+                  詳細設定
+                </button>
+                {showAdvanced && (
+                  <div className="mt-2 p-3 rounded-lg flex items-center gap-3" style={{ background: 'rgba(15,23,42,0.3)', border: '1px solid var(--border-glass)' }}>
+                    <label className="text-[10px]" style={{ color: 'var(--text-muted)' }}>パイプラインtab数</label>
+                    <select value={dmTabs} onChange={e => setDmTabs(Number(e.target.value))}
+                      className="input-glass text-[10px] py-1 px-2 w-16">
+                      {[2, 3, 4, 5].map(n => <option key={n} value={n}>{n}tab</option>)}
+                    </select>
+                    <span className="text-[9px]" style={{ color: 'var(--text-muted)' }}>（デフォルト: 3tab）</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* メッセージ入力 */}
+            {sendType !== 'image_only' && (
+              <div className="mb-3">
+                <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                  メッセージ <span style={{ color: 'var(--accent-pink)' }}>*</span>
+                </label>
+                <textarea value={dmMessage} onChange={e => setDmMessage(e.target.value)}
+                  className="input-glass text-xs w-full h-24 resize-none"
+                  placeholder="メッセージを入力... {username}でユーザー名置換" />
+              </div>
+            )}
+
+            {/* C: 画像選択エリア（テキスト+画像 or 画像のみ時のみ表示） */}
+            {needsImage && (
+              <div className="mb-3">
+                <label className="text-[10px] font-semibold uppercase tracking-wider block mb-1.5" style={{ color: 'var(--text-muted)' }}>
+                  画像 <span style={{ color: 'var(--accent-pink)' }}>*</span>
+                </label>
+                <input
+                  ref={dmImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleImageSelect(file);
+                    e.target.value = '';
+                  }}
+                />
+                {dmImagePreview ? (
+                  <div className="flex items-start gap-4">
+                    <div className="relative">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={dmImagePreview} alt="DM画像プレビュー" className="w-[150px] h-[150px] rounded-xl object-cover border" style={{ borderColor: 'var(--border-glass)' }} />
+                      <button
+                        onClick={() => {
+                          setDmImageFile(null);
+                          if (dmImagePreview) URL.revokeObjectURL(dmImagePreview);
+                          setDmImagePreview(null);
+                        }}
+                        className="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold"
+                        style={{ background: 'var(--accent-pink)', color: 'white' }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    <div className="text-[10px] pt-2" style={{ color: 'var(--text-muted)' }}>
+                      <p className="font-medium">{dmImageFile?.name}</p>
+                      <p>{dmImageFile ? `${(dmImageFile.size / 1024).toFixed(0)}KB` : ''}</p>
+                      <button
+                        onClick={() => dmImageInputRef.current?.click()}
+                        className="mt-2 text-[10px] px-3 py-1 rounded-lg transition-colors"
+                        style={{ background: 'rgba(167,139,250,0.1)', border: '1px solid rgba(167,139,250,0.25)', color: 'var(--accent-purple)' }}
+                      >
+                        画像を変更
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    ref={dropZoneRef}
+                    onDrop={handleDrop}
+                    onDragOver={handleDragOver}
+                    onClick={() => dmImageInputRef.current?.click()}
+                    className="w-full py-8 rounded-xl text-center cursor-pointer transition-all hover:brightness-125"
+                    style={{
+                      background: 'rgba(167,139,250,0.04)',
+                      border: '2px dashed rgba(167,139,250,0.2)',
+                    }}
+                  >
+                    <p className="text-2xl mb-1">🖼</p>
+                    <p className="text-[11px] font-medium" style={{ color: 'var(--accent-purple)' }}>
+                      クリックまたはドラッグ&ドロップで画像を選択
+                    </p>
+                    <p className="text-[9px] mt-1" style={{ color: 'var(--text-muted)' }}>
+                      JPG, PNG, GIF, WebP
+                    </p>
+                  </div>
+                )}
+              </div>
             )}
 
             {/* 送信タイミング */}
@@ -566,6 +609,7 @@ export default function DmSendPanel({
             <div className="flex items-center justify-between">
               <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
                 選択中: <span className="font-bold text-white">{dmTargets.size}</span> 名
+                {needsImage && !dmImageFile && <span className="ml-2" style={{ color: 'var(--accent-pink)' }}>画像未選択</span>}
               </span>
               {dmScheduleMode ? (
                 <button onClick={handleScheduleDm}
@@ -576,7 +620,6 @@ export default function DmSendPanel({
                 </button>
               ) : (
                 <button onClick={async () => {
-                    // セッション有効性チェック
                     const { data: sess } = await sb
                       .from('stripchat_sessions')
                       .select('expires_at, is_valid, cast_name')
@@ -592,14 +635,14 @@ export default function DmSendPanel({
                     }
                     setShowConfirmModal(true);
                   }}
-                  disabled={dmSending || dmTargets.size === 0 || !dmMessage.trim()}
+                  disabled={isSendDisabled}
                   className="btn-primary text-xs py-1.5 px-5 disabled:opacity-50">
                   {dmSending ? '送信中...' : '送信確認'}
                 </button>
               )}
             </div>
 
-            {dmError && <p className="mt-2 text-xs" style={{ color: 'var(--accent-pink)' }}>{dmError}</p>}
+            {dmError && <p className="mt-2 text-xs whitespace-pre-wrap" style={{ color: 'var(--accent-pink)' }}>{dmError}</p>}
             {dmResult && (
               <p className="mt-2 text-xs" style={{ color: 'var(--accent-green)' }}>
                 {dmResult.count}件をキューに登録 (batch: {dmResult.batch_id})
@@ -712,38 +755,6 @@ export default function DmSendPanel({
               </div>
             </div>
           )}
-
-          {/* Fan list selection — 非表示 */}
-          {/* <div className="glass-card p-4">
-            <h3 className="text-sm font-bold mb-2">ファン選択</h3>
-            <div className="flex gap-1.5 mb-3 flex-wrap">
-              <button onClick={() => addFansAsTargets('all')} className="btn-ghost text-[9px] py-1 px-2">全ファン</button>
-              <button onClick={() => addFansAsTargets('vip')} className="btn-ghost text-[9px] py-1 px-2">VIP (100tk+)</button>
-              <button onClick={() => addFansAsTargets('regular')} className="btn-ghost text-[9px] py-1 px-2">常連 (3回+)</button>
-            </div>
-            {fans.length === 0 ? (
-              <p className="text-xs" style={{ color: 'var(--text-muted)' }}>ファンデータなし</p>
-            ) : (
-              <div className="space-y-1 max-h-60 overflow-auto">
-                {fans.map(f => {
-                  const checked = dmTargets.has(f.user_name);
-                  return (
-                    <button key={f.user_name} onClick={() => toggleTarget(f.user_name)}
-                      className={`w-full text-left p-2 rounded-lg text-[11px] transition-all ${checked ? 'border' : 'hover:bg-white/[0.03]'}`}
-                      style={checked ? { background: 'rgba(56,189,248,0.08)', borderColor: 'rgba(56,189,248,0.2)' } : {}}>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className={`w-3 h-3 rounded-sm border ${checked ? 'bg-sky-500 border-sky-500' : 'border-slate-600'}`} />
-                          <span className="font-medium">{f.user_name}</span>
-                        </div>
-                        <span className="font-bold tabular-nums" style={{ color: 'var(--accent-amber)' }}>{formatTokens(f.total_tokens)}</span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div> */}
         </div>
       </div>
 
@@ -763,25 +774,27 @@ export default function DmSendPanel({
                 <p className="text-lg font-bold">{dmTargets.size}名</p>
               </div>
 
-              <div className="glass-panel p-3 rounded-xl">
-                <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>メッセージ</p>
-                {(() => {
-                  const firstUser = Array.from(dmTargets)[0] || 'ユーザー名';
-                  const preview = dmMessage.replace(/\{username\}/g, firstUser);
-                  return (
-                    <>
-                      <p className="text-xs whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
-                        {preview.length > 200 ? preview.slice(0, 200) + '...' : preview}
-                      </p>
-                      {dmMessage.includes('{username}') && (
-                        <p className="text-[9px] mt-1" style={{ color: 'var(--accent-amber)' }}>
-                          ※ {'{username}'} は送信時に各ユーザー名に自動置換されます
+              {dmSendOrder !== 'image_only' && (
+                <div className="glass-panel p-3 rounded-xl">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>メッセージ</p>
+                  {(() => {
+                    const firstUser = Array.from(dmTargets)[0] || 'ユーザー名';
+                    const preview = dmMessage.replace(/\{username\}/g, firstUser);
+                    return (
+                      <>
+                        <p className="text-xs whitespace-pre-wrap" style={{ color: 'var(--text-secondary)' }}>
+                          {preview.length > 200 ? preview.slice(0, 200) + '...' : preview}
                         </p>
-                      )}
-                    </>
-                  );
-                })()}
-              </div>
+                        {dmMessage.includes('{username}') && (
+                          <p className="text-[9px] mt-1" style={{ color: 'var(--accent-amber)' }}>
+                            ※ {'{username}'} は送信時に各ユーザー名に自動置換されます
+                          </p>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              )}
 
               {dmCampaign && (
                 <div className="glass-panel p-3 rounded-xl">
@@ -799,18 +812,18 @@ export default function DmSendPanel({
               {/* 送信モード情報 */}
               <div className="glass-panel p-3 rounded-xl">
                 <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>送信モード</p>
-                <p className="text-xs font-semibold" style={{ color: dmDeliveryMode === 'fast_text' ? 'var(--accent-primary)' : 'var(--accent-purple)' }}>
-                  {dmDeliveryMode === 'fast_text' ? '⚡ 高速テキスト' : `🖼 画像付きパイプライン (${dmTabs}tab)`}
+                <p className="text-xs font-semibold" style={{ color: sendType === 'text_only' ? 'var(--accent-primary)' : 'var(--accent-purple)' }}>
+                  {sendType === 'text_only' ? '⚡ 高速テキスト' : `🖼 画像付きパイプライン (${dmTabs}tab)`}
                 </p>
-                {dmDeliveryMode === 'image_pipeline' && (
+                {sendType !== 'text_only' && (
                   <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                    送信順序: {dmSendOrder === 'text_then_image' ? 'テキスト→画像' : dmSendOrder === 'image_then_text' ? '画像→テキスト' : dmSendOrder === 'image_only' ? '画像のみ' : 'テキストのみ'}
+                    送信順序: {dmSendOrder === 'text_then_image' ? 'テキスト→画像' : dmSendOrder === 'image_then_text' ? '画像→テキスト' : '画像のみ'}
                   </p>
                 )}
                 <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
-                  推定所要時間: ~{dmDeliveryMode === 'fast_text'
+                  推定所要時間: ~{sendType === 'text_only'
                     ? `${Math.ceil(dmTargets.size * 2 / 60)}分`
-                    : `${Math.ceil(dmTargets.size * 18 / (dmSendMode === 'pipeline' ? dmTabs : 1) / 60)}分`
+                    : `${Math.ceil(dmTargets.size * 18 / dmTabs / 60)}分`
                   }
                 </p>
               </div>
@@ -819,7 +832,7 @@ export default function DmSendPanel({
                 <div className="glass-panel p-3 rounded-xl">
                   <p className="text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--text-muted)' }}>添付画像</p>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={dmImagePreview} alt="DM添付画像" className="w-16 h-16 rounded-lg object-cover" />
+                  <img src={dmImagePreview} alt="DM添付画像" className="w-20 h-20 rounded-lg object-cover" />
                 </div>
               )}
 
