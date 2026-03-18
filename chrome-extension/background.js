@@ -4368,9 +4368,16 @@ async function processDMQueueSerial(tasks) {
   console.log('[LS-DM] ========== DM直列送信開始 (' + tasks.length + '件) ==========');
 
   // Stripchatタブを1つ作成
+  // 画像付きDMの場合はDMページを開く（albums/0のownership確立に必要）
+  const hasImageTask = tasks.some(t => t.image_url && t.send_order && t.send_order !== 'text_only');
+  const castForTab = tasks[0]?.cast_name || '';
+  const tabUrl = hasImageTask
+    ? `https://ja.stripchat.com/user/${encodeURIComponent(castForTab)}/messages`
+    : 'https://ja.stripchat.com/';
+  console.log('[LS-DM] タブ作成:', tabUrl, hasImageTask ? '(画像DM → DMページ)' : '(テキストDM → トップ)');
   let tabId;
   try {
-    const tab = await chrome.tabs.create({ url: 'https://ja.stripchat.com/', active: false });
+    const tab = await chrome.tabs.create({ url: tabUrl, active: false });
     tabId = tab.id;
   } catch (e) {
     console.error('[LS-DM] タブ作成失敗:', e.message);
