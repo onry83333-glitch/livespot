@@ -4243,17 +4243,32 @@ async function tryDMviaAPI(task, tabId) {
             });
           }
           function sendMessageWithMedia(mediaId, body, uniqId) {
-            var payload = {
-              body: body || '',
-              mediaId: mediaId,
-              mediaSource: 'messenger',
+            var deviceId = 'unknown';
+            try {
+              var amplCookie = document.cookie.split(';').map(function(c){return c.trim();}).find(function(c){return c.startsWith('baseAmpl=');});
+              if (amplCookie) {
+                var decoded = decodeURIComponent(amplCookie.split('=').slice(1).join('='));
+                var m = decoded.match(/"device_id"\s*:\s*"([^"]+)"/);
+                if (m) deviceId = m[1];
+              }
+            } catch(e) { /* skip */ }
+            var ampl = {
+              ep: { pageSection: 'none', isActivityCategoryPage: false, algorithmSource: '', tagSource: 'index' },
+              device_id: deviceId,
               platform: 'Web',
+              session_id: Date.now(),
+            };
+            var payload = {
+              mediaId: mediaId,
+              mediaSource: 'upload',
+              ampl: ampl,
               csrfToken: csrf.csrfToken,
               csrfTimestamp: csrf.csrfTimestamp,
               csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
               uniq: uniqId,
             };
-            console.log('[LS-DM] sendMessageWithMedia payload: mediaId=' + mediaId + ' mediaSource=messenger targetUid=' + targetUid + ' tabUrl=' + tabUrl);
+            if (body) payload.body = body;
+            console.log('[LS-DM] sendMessageWithMedia payload: mediaId=' + mediaId + ' mediaSource=upload device_id=' + deviceId + ' targetUid=' + targetUid);
             return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
