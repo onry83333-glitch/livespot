@@ -4049,6 +4049,7 @@ async function tryDMviaAPI(task, tabId) {
       console.warn('[LS-DM] myUserId取得失敗');
       return null;
     }
+    console.log('[LS-DM] myUserId=' + myUserId + ', cast_name=' + (task.cast_name || '?'));
 
     // ---- 1.5 キャスト身元照合 ----
     // registered_castsのstripchat_user_idとmyUserIdが一致するか確認
@@ -4159,12 +4160,24 @@ async function tryDMviaAPI(task, tabId) {
         func: (myUid, targetUid, msgBody, imgB64, sendOrd) => {
           var csrf = window.__logger && window.__logger.kibanaLogger
             && window.__logger.kibanaLogger.api && window.__logger.kibanaLogger.api.csrfParams;
+          // Stripchatが認識しているログインuserIdを取得
+          var pageUserId = (window.__CONFIG__ && window.__CONFIG__.userId)
+            || (window.__initialData__ && window.__initialData__.user && window.__initialData__.user.id)
+            || null;
+          if (pageUserId && String(pageUserId) !== String(myUid)) {
+            return {
+              success: false,
+              error: 'USER_ID_MISMATCH: AMP_cookie=' + myUid + ', page=' + pageUserId,
+              httpStatus: 403,
+            };
+          }
           if (!csrf || !csrf.csrfToken) {
             return {
               success: false, error: 'CSRF未初期化',
               hasLogger: !!window.__logger,
               hasKibana: !!(window.__logger && window.__logger.kibanaLogger),
               hasApi: !!(window.__logger && window.__logger.kibanaLogger && window.__logger.kibanaLogger.api),
+              pageUserId: pageUserId,
             };
           }
 
