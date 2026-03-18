@@ -4216,26 +4216,47 @@ async function tryDMviaAPI(task, tabId) {
             }).then(function (r) {
               if (!r.ok) {
                 return r.text().then(function (t) {
-                  throw new Error('写真アップロードHTTP ' + r.status + ': ' + t.substring(0, 200));
+                  console.error('[LS-DM] uploadPhoto → ' + r.status + ': ' + t.substring(0, 300));
+                  return { __uploadError: true, httpStatus: r.status, errorBody: t.substring(0, 300) };
                 });
               }
               return r.json();
             }).then(function (photoData) {
-              if (!photoData.photo || !photoData.photo.id) throw new Error('写真アップロード失敗: ' + JSON.stringify(photoData).substring(0, 200));
+              if (photoData && photoData.__uploadError) return photoData;
+              if (!photoData.photo || !photoData.photo.id) {
+                console.error('[LS-DM] uploadPhoto → レスポンス異常: ' + JSON.stringify(photoData).substring(0, 300));
+                return { __uploadError: true, httpStatus: 0, errorBody: JSON.stringify(photoData).substring(0, 300) };
+              }
+              console.log('[LS-DM] uploadPhoto → 成功, mediaId=' + photoData.photo.id);
               return photoData.photo.id;
             });
           }
           function sendMessageWithMedia(mediaId, body, uniqId) {
             return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
               credentials: 'include',
               body: JSON.stringify({
                 body: body || '', mediaId: mediaId, mediaSource: 'upload', platform: 'Web',
                 csrfToken: csrf.csrfToken, csrfTimestamp: csrf.csrfTimestamp, csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
                 uniq: uniqId,
               }),
-            }).then(parseResponse).then(handleMessageResponse);
+            }).then(parseResponse).then(function (resp) {
+              var result = handleMessageResponse(resp);
+              if (!result.success) {
+                console.error('[LS-DM] sendMessageWithMedia → ' + (resp.status || '?') + ': ' + (resp.text || '').substring(0, 300));
+              } else {
+                console.log('[LS-DM] sendMessageWithMedia → 成功, messageId=' + result.messageId);
+              }
+              return result;
+            });
+          }
+          // uploadPhotoエラーをhttpStatus付きで返すヘルパー
+          function handleUploadResult(uploadResult) {
+            if (uploadResult && uploadResult.__uploadError) {
+              return { success: false, error: 'uploadPhoto HTTP ' + uploadResult.httpStatus + ': ' + uploadResult.errorBody, httpStatus: uploadResult.httpStatus };
+            }
+            return uploadResult; // mediaId (number)
           }
 
           try {
@@ -4243,23 +4264,30 @@ async function tryDMviaAPI(task, tabId) {
             var uniq2 = Math.random().toString(36).substring(2, 18);
 
             if (sendOrd === 'image_only') {
-              return uploadPhoto().then(function (mediaId) {
-                return sendMessageWithMedia(mediaId, '', uniq1);
+              return uploadPhoto().then(function (mediaIdOrErr) {
+                var err = handleUploadResult(mediaIdOrErr);
+                if (err && err.success === false) return err;
+                return sendMessageWithMedia(mediaIdOrErr, '', uniq1);
               }).catch(function (e) { return { success: false, error: '画像DM: ' + e.message }; });
             }
             if (sendOrd === 'text_then_image') {
               return sendTextMessage(uniq1).then(function (textResult) {
                 if (!textResult.success) return textResult;
-                return uploadPhoto().then(function (mediaId) {
-                  return sendMessageWithMedia(mediaId, '', uniq2);
+                return uploadPhoto().then(function (mediaIdOrErr) {
+                  var err = handleUploadResult(mediaIdOrErr);
+                  if (err && err.success === false) return err;
+                  return sendMessageWithMedia(mediaIdOrErr, '', uniq2);
                 }).then(function (imgResult) {
-                  return { success: imgResult.success, messageId: imgResult.messageId, httpStatus: imgResult.httpStatus, sentMessages: 2, textMessageId: textResult.messageId };
+                  if (!imgResult.success) return imgResult;
+                  return { success: true, messageId: imgResult.messageId, httpStatus: imgResult.httpStatus, sentMessages: 2, textMessageId: textResult.messageId };
                 });
               }).catch(function (e) { return { success: false, error: 'text_then_image: ' + e.message }; });
             }
             if (sendOrd === 'image_then_text') {
-              return uploadPhoto().then(function (mediaId) {
-                return sendMessageWithMedia(mediaId, '', uniq1);
+              return uploadPhoto().then(function (mediaIdOrErr) {
+                var err = handleUploadResult(mediaIdOrErr);
+                if (err && err.success === false) return err;
+                return sendMessageWithMedia(mediaIdOrErr, '', uniq1);
               }).then(function (imgResult) {
                 if (!imgResult.success) return imgResult;
                 return sendTextMessage(uniq2).then(function (textResult) {
