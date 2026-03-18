@@ -4277,33 +4277,24 @@ async function tryDMviaAPI(task, tabId) {
               uniq: uniqId,
             };
             if (body) payload.body = body;
-            console.log('[LS-DM] sendMessageWithMedia: mediaId=' + mediaId + ' myUid=' + myUid + ' targetUid=' + targetUid + ' device_id=' + deviceId);
-            // まずテキストのみ送信してconversationを確立（存在しない場合に備える）
-            var ensureConversation = (body && body.length > 0)
-              ? Promise.resolve(null)  // text_then_imageの場合は既にテキスト送信済み
-              : fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
-                  credentials: 'include',
-                  body: JSON.stringify({
-                    body: ' ',
-                    csrfToken: csrf.csrfToken, csrfTimestamp: csrf.csrfTimestamp, csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
-                    uniq: Math.random().toString(36).substring(2, 18),
-                  }),
-                }).then(function(r) { return r.json().catch(function() { return {}; }); });
-            return ensureConversation.then(function() {
-              return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
-                credentials: 'include',
-                body: JSON.stringify(payload),
-              });
+            var reqUrl = '/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages';
+            var reqHeaders = { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion };
+            // MAIN world ログ（StripchatタブのDevToolsで確認）
+            console.log('[LS-DM] sendMessageWithMedia REQUEST:', JSON.stringify({ url: reqUrl, headers: reqHeaders, body: payload }));
+            return fetch(reqUrl, {
+              method: 'POST',
+              headers: reqHeaders,
+              credentials: 'include',
+              body: JSON.stringify(payload),
             }).then(parseResponse).then(function (resp) {
+              // MAIN world ログ（レスポンス）
+              console.log('[LS-DM] sendMessageWithMedia RESPONSE:', JSON.stringify({ status: resp.status, text: (resp.text || '').substring(0, 500) }));
               var result = handleMessageResponse(resp);
               result._api = 'sendMessageWithMedia';
               result._mediaId = mediaId;
               result._targetUid = targetUid;
               result._myUid = myUid;
+              result._requestPayload = JSON.stringify(payload);
               return result;
             });
           }
@@ -4391,9 +4382,9 @@ async function tryDMviaAPI(task, tabId) {
 
     // 失敗
     dmApiConsecutiveErrors++;
-    console.error('[LS-DM] 送信失敗:', task.user_name, 'api:', result._api || '?', 'httpStatus:', result.httpStatus, 'mediaId:', result._mediaId || '-', 'tabUrl:', result.tabUrl || '-', 'error:', result.error);
+    console.error('[LS-DM] 送信失敗:', task.user_name, 'api:', result._api || '?', 'httpStatus:', result.httpStatus, 'mediaId:', result._mediaId || '-', 'tabUrl:', result.tabUrl || '-', 'error:', result.error, 'payload:', result._requestPayload || '-');
     if (result.httpStatus === 403) {
-      console.warn('[LS-DM] 403 → 5分クールダウン | api:', result._api || '?', '| 詳細:', result.error);
+      console.warn('[LS-DM] 403 → 5分クールダウン | api:', result._api || '?', '| payload:', result._requestPayload || '-', '| 詳細:', result.error);
       dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_403;
     } else if (result.httpStatus === 429) {
       console.warn('[LS-DM] 429 → 10分クールダウン');
