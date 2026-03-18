@@ -4158,6 +4158,7 @@ async function tryDMviaAPI(task, tabId) {
         target: { tabId },
         world: 'MAIN',
         func: (myUid, targetUid, msgBody, imgB64, sendOrd) => {
+          var tabUrl = window.location.href;
           var csrf = window.__logger && window.__logger.kibanaLogger
             && window.__logger.kibanaLogger.api && window.__logger.kibanaLogger.api.csrfParams;
           // Stripchatが認識しているログインuserIdを取得
@@ -4168,7 +4169,7 @@ async function tryDMviaAPI(task, tabId) {
             return {
               success: false,
               error: 'USER_ID_MISMATCH: AMP_cookie=' + myUid + ', page=' + pageUserId,
-              httpStatus: 403,
+              httpStatus: 403, tabUrl: tabUrl,
             };
           }
           if (!csrf || !csrf.csrfToken) {
@@ -4177,7 +4178,7 @@ async function tryDMviaAPI(task, tabId) {
               hasLogger: !!window.__logger,
               hasKibana: !!(window.__logger && window.__logger.kibanaLogger),
               hasApi: !!(window.__logger && window.__logger.kibanaLogger && window.__logger.kibanaLogger.api),
-              pageUserId: pageUserId,
+              pageUserId: pageUserId, tabUrl: tabUrl,
             };
           }
 
@@ -4229,19 +4230,16 @@ async function tryDMviaAPI(task, tabId) {
             }).then(function (r) {
               if (!r.ok) {
                 return r.text().then(function (t) {
-                  console.error('[LS-DM] uploadPhoto → ' + r.status + ': ' + t.substring(0, 300));
-                  return { __uploadError: true, httpStatus: r.status, errorBody: t.substring(0, 300) };
+                  return { __uploadError: true, httpStatus: r.status, errorBody: t.substring(0, 300), _api: 'uploadPhoto' };
                 });
               }
               return r.json();
             }).then(function (photoData) {
               if (photoData && photoData.__uploadError) return photoData;
               if (!photoData.photo || !photoData.photo.id) {
-                console.error('[LS-DM] uploadPhoto → レスポンス異常: ' + JSON.stringify(photoData).substring(0, 300));
-                return { __uploadError: true, httpStatus: 0, errorBody: JSON.stringify(photoData).substring(0, 300) };
+                return { __uploadError: true, httpStatus: 0, errorBody: JSON.stringify(photoData).substring(0, 300), _api: 'uploadPhoto' };
               }
-              console.log('[LS-DM] uploadPhoto → 成功, mediaId=' + photoData.photo.id);
-              return photoData.photo.id;
+              return { __mediaId: photoData.photo.id };
             });
           }
           function sendMessageWithMedia(mediaId, body, uniqId) {
@@ -4256,20 +4254,20 @@ async function tryDMviaAPI(task, tabId) {
               }),
             }).then(parseResponse).then(function (resp) {
               var result = handleMessageResponse(resp);
-              if (!result.success) {
-                console.error('[LS-DM] sendMessageWithMedia → ' + (resp.status || '?') + ': ' + (resp.text || '').substring(0, 300));
-              } else {
-                console.log('[LS-DM] sendMessageWithMedia → 成功, messageId=' + result.messageId);
-              }
+              result._api = 'sendMessageWithMedia';
+              result._mediaId = mediaId;
               return result;
             });
           }
-          // uploadPhotoエラーをhttpStatus付きで返すヘルパー
+          // uploadPhotoの結果を処理するヘルパー
           function handleUploadResult(uploadResult) {
             if (uploadResult && uploadResult.__uploadError) {
-              return { success: false, error: 'uploadPhoto HTTP ' + uploadResult.httpStatus + ': ' + uploadResult.errorBody, httpStatus: uploadResult.httpStatus };
+              return { success: false, error: 'uploadPhoto HTTP ' + uploadResult.httpStatus + ': ' + uploadResult.errorBody, httpStatus: uploadResult.httpStatus, _api: 'uploadPhoto', tabUrl: tabUrl };
             }
-            return uploadResult; // mediaId (number)
+            if (uploadResult && uploadResult.__mediaId) {
+              return uploadResult.__mediaId; // number
+            }
+            return uploadResult;
           }
 
           try {
@@ -4345,9 +4343,9 @@ async function tryDMviaAPI(task, tabId) {
 
     // 失敗
     dmApiConsecutiveErrors++;
-    console.error('[LS-DM] 送信失敗:', task.user_name, 'httpStatus:', result.httpStatus, 'error:', result.error);
+    console.error('[LS-DM] 送信失敗:', task.user_name, 'api:', result._api || '?', 'httpStatus:', result.httpStatus, 'mediaId:', result._mediaId || '-', 'tabUrl:', result.tabUrl || '-', 'error:', result.error);
     if (result.httpStatus === 403) {
-      console.warn('[LS-DM] 403 → 5分クールダウン | 詳細:', result.error);
+      console.warn('[LS-DM] 403 → 5分クールダウン | api:', result._api || '?', '| 詳細:', result.error);
       dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_403;
     } else if (result.httpStatus === 429) {
       console.warn('[LS-DM] 429 → 10分クールダウン');
