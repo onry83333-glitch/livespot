@@ -4193,6 +4193,9 @@ async function tryDMviaAPI(task, tabId) {
               }),
             }).then(parseResponse).then(handleMessageResponse);
           }
+          var frontVersion = (document.querySelector('meta[name="front-version"]') || {}).content
+            || (window.__CONFIG__ && window.__CONFIG__.frontVersion)
+            || '11.5.92';
           function uploadPhoto() {
             var binaryStr = atob(imgB64);
             var bytes = new Uint8Array(binaryStr.length);
@@ -4207,10 +4210,17 @@ async function tryDMviaAPI(task, tabId) {
             fd.append('csrfNotifyTimestamp', csrf.csrfNotifyTimestamp);
             return fetch('/api/front/users/' + myUid + '/albums/0/photos', {
               method: 'POST',
-              headers: { 'X-Requested-With': 'XMLHttpRequest' },
+              headers: { 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
               credentials: 'include',
               body: fd,
-            }).then(function (r) { return r.json(); }).then(function (photoData) {
+            }).then(function (r) {
+              if (!r.ok) {
+                return r.text().then(function (t) {
+                  throw new Error('写真アップロードHTTP ' + r.status + ': ' + t.substring(0, 200));
+                });
+              }
+              return r.json();
+            }).then(function (photoData) {
               if (!photoData.photo || !photoData.photo.id) throw new Error('写真アップロード失敗: ' + JSON.stringify(photoData).substring(0, 200));
               return photoData.photo.id;
             });
