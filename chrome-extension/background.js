@@ -4181,10 +4181,13 @@ async function tryDMviaAPI(task, tabId) {
             }
             return { success: false, error: 'HTTP ' + resp.status + ': ' + resp.text, httpStatus: resp.status };
           }
+          var frontVersion = (document.querySelector('meta[name="front-version"]') || {}).content
+            || (window.__CONFIG__ && window.__CONFIG__.frontVersion)
+            || '11.5.92';
           function sendTextMessage(uniqId) {
             return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+              headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
               credentials: 'include',
               body: JSON.stringify({
                 body: msgBody,
@@ -4193,9 +4196,6 @@ async function tryDMviaAPI(task, tabId) {
               }),
             }).then(parseResponse).then(handleMessageResponse);
           }
-          var frontVersion = (document.querySelector('meta[name="front-version"]') || {}).content
-            || (window.__CONFIG__ && window.__CONFIG__.frontVersion)
-            || '11.5.92';
           function uploadPhoto() {
             var binaryStr = atob(imgB64);
             var bytes = new Uint8Array(binaryStr.length);
@@ -4332,8 +4332,9 @@ async function tryDMviaAPI(task, tabId) {
 
     // 失敗
     dmApiConsecutiveErrors++;
+    console.error('[LS-DM] 送信失敗:', task.user_name, 'httpStatus:', result.httpStatus, 'error:', result.error);
     if (result.httpStatus === 403) {
-      console.warn('[LS-DM] 403 → 5分クールダウン');
+      console.warn('[LS-DM] 403 → 5分クールダウン | 詳細:', result.error);
       dmApiCooldownUntil = Date.now() + DM_API_COOLDOWN_403;
     } else if (result.httpStatus === 429) {
       console.warn('[LS-DM] 429 → 10分クールダウン');
