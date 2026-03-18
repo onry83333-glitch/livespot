@@ -4243,15 +4243,22 @@ async function tryDMviaAPI(task, tabId) {
             });
           }
           function sendMessageWithMedia(mediaId, body, uniqId) {
+            var payload = {
+              body: body || '',
+              mediaId: mediaId,
+              mediaSource: 'messenger',
+              platform: 'Web',
+              csrfToken: csrf.csrfToken,
+              csrfTimestamp: csrf.csrfTimestamp,
+              csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
+              uniq: uniqId,
+            };
+            console.log('[LS-DM] sendMessageWithMedia payload: mediaId=' + mediaId + ' mediaSource=messenger targetUid=' + targetUid + ' tabUrl=' + tabUrl);
             return fetch('/api/front/users/' + myUid + '/conversations/' + targetUid + '/messages', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'front-version': frontVersion },
               credentials: 'include',
-              body: JSON.stringify({
-                body: body || '', mediaId: mediaId, mediaSource: 'upload', platform: 'Web',
-                csrfToken: csrf.csrfToken, csrfTimestamp: csrf.csrfTimestamp, csrfNotifyTimestamp: csrf.csrfNotifyTimestamp,
-                uniq: uniqId,
-              }),
+              body: JSON.stringify(payload),
             }).then(parseResponse).then(function (resp) {
               var result = handleMessageResponse(resp);
               result._api = 'sendMessageWithMedia';
@@ -4276,18 +4283,18 @@ async function tryDMviaAPI(task, tabId) {
 
             if (sendOrd === 'image_only') {
               return uploadPhoto().then(function (mediaIdOrErr) {
-                var err = handleUploadResult(mediaIdOrErr);
-                if (err && err.success === false) return err;
-                return sendMessageWithMedia(mediaIdOrErr, '', uniq1);
+                var mediaId = handleUploadResult(mediaIdOrErr);
+                if (mediaId && mediaId.success === false) return mediaId;
+                return sendMessageWithMedia(mediaId, '', uniq1);
               }).catch(function (e) { return { success: false, error: '画像DM: ' + e.message }; });
             }
             if (sendOrd === 'text_then_image') {
               return sendTextMessage(uniq1).then(function (textResult) {
                 if (!textResult.success) return textResult;
                 return uploadPhoto().then(function (mediaIdOrErr) {
-                  var err = handleUploadResult(mediaIdOrErr);
-                  if (err && err.success === false) return err;
-                  return sendMessageWithMedia(mediaIdOrErr, '', uniq2);
+                  var mediaId = handleUploadResult(mediaIdOrErr);
+                  if (mediaId && mediaId.success === false) return mediaId;
+                  return sendMessageWithMedia(mediaId, '', uniq2);
                 }).then(function (imgResult) {
                   if (!imgResult.success) return imgResult;
                   return { success: true, messageId: imgResult.messageId, httpStatus: imgResult.httpStatus, sentMessages: 2, textMessageId: textResult.messageId };
@@ -4296,9 +4303,9 @@ async function tryDMviaAPI(task, tabId) {
             }
             if (sendOrd === 'image_then_text') {
               return uploadPhoto().then(function (mediaIdOrErr) {
-                var err = handleUploadResult(mediaIdOrErr);
-                if (err && err.success === false) return err;
-                return sendMessageWithMedia(mediaIdOrErr, '', uniq1);
+                var mediaId = handleUploadResult(mediaIdOrErr);
+                if (mediaId && mediaId.success === false) return mediaId;
+                return sendMessageWithMedia(mediaId, '', uniq1);
               }).then(function (imgResult) {
                 if (!imgResult.success) return imgResult;
                 return sendTextMessage(uniq2).then(function (textResult) {
