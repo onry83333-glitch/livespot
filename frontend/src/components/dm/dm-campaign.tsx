@@ -65,6 +65,10 @@ export default function DmCampaign({
   const [campaignExpanded, setCampaignExpanded] = useState<Set<string>>(new Set());
   // C-2: Per-campaign slider days
   const [sliderDaysMap, setSliderDaysMap] = useState<Map<string, number>>(new Map());
+  // User results sub-accordion per campaign
+  const [userResultsExpanded, setUserResultsExpanded] = useState<Set<string>>(new Set());
+  // Representative image_url per campaign (fetched on demand)
+  const [campaignImageUrl, setCampaignImageUrl] = useState<Map<string, string | null>>(new Map());
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   // Fetch retention data for all campaigns (batch)
@@ -130,6 +134,32 @@ export default function DmCampaign({
       debounceTimers.current.delete(campaign);
     }, 300));
   }, [fetchSingleRetention]);
+
+  // Fetch image_url for representative message when campaign expands
+  const fetchCampaignImage = useCallback(async (campaign: string) => {
+    if (campaignImageUrl.has(campaign)) return;
+    try {
+      const { data } = await sb.from('dm_send_log')
+        .select('image_url')
+        .eq('account_id', accountId)
+        .eq('cast_name', castName)
+        .eq('campaign', campaign)
+        .not('image_url', 'is', null)
+        .limit(1)
+        .single();
+      setCampaignImageUrl(prev => {
+        const next = new Map(prev);
+        next.set(campaign, data?.image_url || null);
+        return next;
+      });
+    } catch {
+      setCampaignImageUrl(prev => {
+        const next = new Map(prev);
+        next.set(campaign, null);
+        return next;
+      });
+    }
+  }, [sb, accountId, castName, campaignImageUrl]);
 
   // Auto-fetch retention when campaigns section loads
   useEffect(() => {
@@ -256,11 +286,13 @@ export default function DmCampaign({
                             {/* === Tier 2: Campaign header === */}
                             <div
                               className="px-3 py-2 flex items-center justify-between cursor-pointer hover:bg-white/[0.03] transition-colors"
-                              onClick={() => setCampaignExpanded(prev => {
-                                const next = new Set(prev);
-                                if (next.has(campaign)) next.delete(campaign); else next.add(campaign);
-                                return next;
-                              })}
+                              onClick={() => {
+                                setCampaignExpanded(prev => {
+                                  const next = new Set(prev);
+                                  if (next.has(campaign)) next.delete(campaign); else { next.add(campaign); fetchCampaignImage(campaign); }
+                                  return next;
+                                });
+                              }}
                             >
                               <div className="flex items-center gap-2 flex-1 min-w-0">
                                 <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{isOpen ? '▼' : '▶'}</span>
@@ -292,6 +324,83 @@ export default function DmCampaign({
                                   {stats.error > 0 && <span style={{ color: 'var(--accent-pink)' }}>失敗 {stats.error}</span>}
                                   {(stats.queued + stats.sending) > 0 && <span style={{ color: 'var(--accent-amber)' }}>処理中 {stats.queued + stats.sending}</span>}
                                 </div>
+
+                                {/* === Message preview === */}
+                                {(() => {
+                                  const campaignLogs = dmLogs.filter(l => (l.campaign || '(タグなし)') === campaign);
+                                  const representative = campaignLogs.length > 0 ? campaignLogs[campaignLogs.length - 1] : null;
+                                  const imgUrl = campaignImageUrl.get(campaign);
+                                  if (!representative?.message) return null;
+                                  return (
+                                    <div className="flex items-start gap-2 rounded-lg px-3 py-2 text-[11px]" style={{ background: 'rgba(0,0,0,0.25)' }}>
+                                      <span className="shrink-0 mt-0.5">💬</span>
+                                      <p className="flex-1 min-w-0 whitespace-pre-wrap break-all" style={{ color: 'var(--text-secondary)' }}>
+                                        {representative.message}
+                                      </p>
+                                      {imgUrl && (
+                                        <img
+                                          src={imgUrl}
+                                          alt="添付画像"
+                                          className="shrink-0 rounded"
+                                          style={{ width: 50, height: 50, objectFit: 'cover' }}
+                                        />
+                                      )}
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* === User send results sub-accordion === */}
+                                {(() => {
+                                  const campaignLogs = dmLogs.filter(l => (l.campaign || '(タグなし)') === campaign);
+                                  const successCount = campaignLogs.filter(l => l.status === 'success').length;
+                                  const isUserOpen = userResultsExpanded.has(campaign);
+                                  return (
+                                    <div>
+                                      <button
+                                        onClick={() => setUserResultsExpanded(prev => {
+                                          const next = new Set(prev);
+                                          if (next.has(campaign)) next.delete(campaign); else next.add(campaign);
+                                          return next;
+                                        })}
+                                        className="flex items-center gap-2 text-[10px] font-semibold w-full text-left hover:opacity-80 transition-opacity py-1"
+                                        style={{ color: 'var(--accent-primary)' }}
+                                      >
+                                        <span>{isUserOpen ? '▼' : '▶'}</span>
+                                        <span>ユーザー別送信結果（{successCount}件成功）</span>
+                                      </button>
+                                      {isUserOpen && (
+                                        <div className="space-y-0.5 max-h-60 overflow-auto mt-1">
+                                          {campaignLogs.map(log => {
+                                            const icon = log.status === 'success' ? '✅' : log.status === 'error' ? '❌' : '⏳';
+                                            const statusMsg = log.status === 'success' ? '成功' : log.status === 'error' ? (log.error || 'エラー') : log.status;
+                                            const timeStr = log.sent_at
+                                              ? new Date(log.sent_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                              : log.queued_at
+                                                ? new Date(log.queued_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                                                : '';
+                                            return (
+                                              <div key={log.id} className="flex items-center gap-2 text-[10px] px-2 py-1 rounded hover:bg-white/[0.03]">
+                                                <span className="shrink-0">{icon}</span>
+                                                <span
+                                                  className="font-medium truncate cursor-pointer"
+                                                  style={{ color: 'var(--text-secondary)' }}
+                                                  title="クリックでコピー"
+                                                  onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(log.user_name); }}
+                                                >
+                                                  {log.user_name}
+                                                </span>
+                                                <span className="truncate" style={{ color: log.status === 'error' ? 'var(--accent-pink)' : 'var(--text-muted)' }}>
+                                                  {statusMsg}
+                                                </span>
+                                                <span className="shrink-0 ml-auto" style={{ color: 'var(--text-muted)' }}>{timeStr}</span>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
 
                                 {/* === CVR / Retention section === */}
                                 {ret && (() => {
