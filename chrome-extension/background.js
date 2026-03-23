@@ -1316,6 +1316,59 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
 
+  // --- LIVE_VIEWER_STATS: live_viewer_stats テーブルへ即時INSERT（60秒間隔） ---
+  if (msg.type === 'LIVE_VIEWER_STATS') {
+    const lvCastName = msg.cast_name || '';
+    if (!lvCastName) {
+      sendResponse({ ok: false, error: 'cast_name empty' });
+      return false;
+    }
+
+    // 非同期でSupabaseに即時INSERT（バッファリングなし）
+    (async () => {
+      try {
+        await loadAuth();
+        if (!accountId || !accessToken) {
+          console.warn('[LS-BG] live_viewer_stats: 認証未完了 スキップ');
+          return;
+        }
+
+        const row = {
+          account_id: accountId,
+          cast_name: lvCastName,
+          total_viewers: msg.total_viewers ?? 0,
+          coin_users: msg.coin_users ?? 0,
+          ultimate_members: msg.ultimate_members ?? 0,
+          recorded_at: msg.recorded_at || new Date().toISOString(),
+        };
+
+        const res = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/live_viewer_stats`, {
+          method: 'POST',
+          headers: {
+            'apikey': CONFIG.SUPABASE_ANON_KEY,
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify(row),
+        });
+
+        if (res.ok || res.status === 201) {
+          console.log('[LS-BG] live_viewer_stats INSERT成功:', lvCastName,
+            `total=${row.total_viewers} coin=${row.coin_users} ult=${row.ultimate_members}`);
+        } else {
+          const errText = await res.text();
+          console.warn('[LS-BG] live_viewer_stats INSERT失敗:', res.status, errText);
+        }
+      } catch (e) {
+        console.warn('[LS-BG] live_viewer_stats INSERT例外:', e.message);
+      }
+    })();
+
+    sendResponse({ ok: true });
+    return false;
+  }
+
   // --- M-3: Broadcast Title from content_spy.js ---
   if (msg.type === 'BROADCAST_TITLE') {
     const titleCastName = msg.cast_name || '';

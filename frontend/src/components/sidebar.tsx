@@ -56,10 +56,11 @@ function SidebarInner() {
   const searchParams = useSearchParams();
   const { user, signOut } = useAuth();
 
-  // キャスト個別ページかどうかを判定
-  const castMatch = pathname.match(/^\/casts\/([^/]+)$/);
+  // キャスト個別ページかどうかを判定（/casts/[name] と /casts/[name]/live の両方）
+  const castMatch = pathname.match(/^\/casts\/([^/]+)/);
   const activeCastName = castMatch ? decodeURIComponent(castMatch[1]) : null;
   const activeTab = searchParams.get('tab') || 'overview';
+  const isLivePage = pathname.endsWith('/live');
 
   // スパイキャスト個別ページかどうかを判定
   const spyMatch = pathname.match(/^\/spy\/([^/]+)$/);
@@ -226,7 +227,7 @@ function SidebarInner() {
                 {/* Tab links */}
                 <div className="space-y-0.5">
                   {castTabs.map(t => {
-                    const isTabActive = activeTab === t.tab;
+                    const isTabActive = !isLivePage && activeTab === t.tab;
                     const href = `/casts/${encodeURIComponent(activeCastName)}?tab=${t.tab}`;
                     return (
                       <Link key={t.tab} href={href}
@@ -245,6 +246,23 @@ function SidebarInner() {
                       </Link>
                     );
                   })}
+
+                  {/* LIVE link */}
+                  <Link
+                    href={`/casts/${encodeURIComponent(activeCastName)}/live`}
+                    className={`flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-[11px] font-bold transition-all duration-200 ${
+                      isLivePage
+                        ? 'text-white'
+                        : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03]'
+                    }`}
+                    style={isLivePage ? {
+                      background: 'rgba(239,68,68,0.12)',
+                      color: '#ef4444',
+                    } : {}}
+                  >
+                    <span className="text-[10px] w-4 text-center">🔴</span>
+                    <span>LIVE</span>
+                  </Link>
                 </div>
               </div>
             )}

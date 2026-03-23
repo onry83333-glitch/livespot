@@ -971,6 +971,7 @@
       if (enabled) {
         startObserving();
         startViewerStatsPolling();
+        startLiveViewerStatsPolling();
       }
     }, 500);
   }
@@ -1245,6 +1246,52 @@
       viewerStatsTimer = null;
       lastViewerStats = null;
     }
+    stopLiveViewerStatsPolling();
+  }
+
+  // ============================================================
+  // live_viewer_stats ポーリング — 60秒間隔で Supabase live_viewer_stats へ直接 INSERT
+  // コイン有りユーザー数・アルティメット会員数の推移をリアルタイム表示するため
+  // ============================================================
+  let liveViewerStatsTimer = null;
+
+  function getLiveViewerStats() {
+    try {
+      const panelInfo = extractViewerPanelInfo();
+
+      // パネルが閉じている場合はスキップ
+      if (panelInfo.total_viewers === null && panelInfo.coin_holders === null) {
+        return;
+      }
+
+      chrome.runtime.sendMessage({
+        type: 'LIVE_VIEWER_STATS',
+        cast_name: castName,
+        total_viewers: panelInfo.total_viewers ?? 0,
+        coin_users: panelInfo.coin_holders ?? 0,
+        ultimate_members: panelInfo.ultimate_count ?? 0,
+        recorded_at: new Date().toISOString(),
+      });
+
+      console.log(LOG, `live_viewer_stats: total=${panelInfo.total_viewers} coin=${panelInfo.coin_holders} ult=${panelInfo.ultimate_count} for ${castName}`);
+    } catch (e) {
+      // DOM not ready yet
+    }
+  }
+
+  function startLiveViewerStatsPolling() {
+    if (liveViewerStatsTimer) return;
+    // 初回は少し遅延（DOM安定待ち）
+    setTimeout(getLiveViewerStats, 5000);
+    liveViewerStatsTimer = setInterval(getLiveViewerStats, 60000);
+    console.log(LOG, 'live_viewer_stats ポーリング開始(60秒間隔)');
+  }
+
+  function stopLiveViewerStatsPolling() {
+    if (liveViewerStatsTimer) {
+      clearInterval(liveViewerStatsTimer);
+      liveViewerStatsTimer = null;
+    }
   }
 
   // ============================================================
@@ -1492,6 +1539,7 @@
         console.log(LOG, 'SPY自動開始(storage復元)');
         setTimeout(startObserving, 1000);
         setTimeout(startViewerStatsPolling, 2000);
+        setTimeout(startLiveViewerStatsPolling, 3000);
         startStaleCheck();
         startUrlCheck();
         startHeartbeat();
