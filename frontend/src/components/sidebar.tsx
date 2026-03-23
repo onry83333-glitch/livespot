@@ -2,8 +2,10 @@
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/auth-provider';
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useCallback, Suspense } from 'react';
 import { createClient } from '@/lib/supabase/client';
+
+const STORAGE_KEY = 'sls-sidebar-collapsed';
 
 interface NavItem {
   href: string;
@@ -51,7 +53,7 @@ const spyTabs = [
   { tab: 'format',    icon: '📋', label: 'フォーマット' },
 ];
 
-function SidebarInner() {
+function SidebarInner({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { user, signOut } = useAuth();
@@ -101,6 +103,26 @@ function SidebarInner() {
       });
   }, [activeSpyCastName]);
 
+  // Collapsed: show only expand button
+  if (collapsed) {
+    return (
+      <div className="fixed left-0 top-0 bottom-0 w-[40px] z-50 flex flex-col items-center pt-4"
+        style={{ background: 'rgba(10,15,30,0.6)' }}
+      >
+        <button
+          onClick={onToggle}
+          className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white/10 transition-colors"
+          style={{ color: 'var(--text-secondary)' }}
+          title="サイドバーを開く"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M6 3l5 5-5 5" />
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <aside className="fixed left-0 top-0 bottom-0 w-[220px] flex flex-col border-r z-50"
       style={{
@@ -108,8 +130,8 @@ function SidebarInner() {
         borderColor: 'var(--border-glass)',
       }}
     >
-      {/* Logo */}
-      <div className="px-5 py-5">
+      {/* Logo + collapse button */}
+      <div className="px-5 py-5 flex items-start justify-between">
         <Link href="/" className="flex items-center gap-2.5 group">
           <div className="w-9 h-9 rounded-xl flex items-center justify-center text-lg"
             style={{ background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-purple))' }}>
@@ -124,6 +146,16 @@ function SidebarInner() {
             </p>
           </div>
         </Link>
+        <button
+          onClick={onToggle}
+          className="mt-1 w-6 h-6 rounded flex items-center justify-center hover:bg-white/10 transition-colors"
+          style={{ color: 'var(--text-muted)' }}
+          title="サイドバーを閉じる"
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M10 3l-5 5 5 5" />
+          </svg>
+        </button>
       </div>
 
       {/* Nav Sections */}
@@ -294,10 +326,34 @@ function SidebarInner() {
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle?: () => void }) {
   return (
     <Suspense fallback={null}>
-      <SidebarInner />
+      <SidebarInner collapsed={collapsed} onToggle={onToggle} />
     </Suspense>
   );
+}
+
+/** Hook to manage sidebar collapsed state with localStorage persistence */
+export function useSidebarCollapsed(defaultCollapsed = false) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored !== null) {
+      setCollapsed(stored === 'true');
+    }
+    setLoaded(true);
+  }, []);
+
+  const toggle = useCallback(() => {
+    setCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem(STORAGE_KEY, String(next));
+      return next;
+    });
+  }, []);
+
+  return { collapsed: loaded ? collapsed : defaultCollapsed, toggle };
 }

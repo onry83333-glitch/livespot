@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from 'next/navigation';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/components/auth-provider';
-import { Sidebar } from '@/components/sidebar';
+import { Sidebar, useSidebarCollapsed } from '@/components/sidebar';
 import { CoinSyncAlert } from '@/components/coin-sync-alert';
 import { createClient } from '@/lib/supabase/client';
 import { timeAgo } from '@/lib/utils';
@@ -247,11 +247,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
 
+  // /casts/[name]/live ページはデフォルトで折り畳み
+  const isLivePage = pathname.endsWith('/live') && pathname.startsWith('/casts/');
+  const { collapsed, toggle } = useSidebarCollapsed(isLivePage);
+
   // 認証済みページはサイドバー + メインコンテンツ
   return (
     <>
-      <Sidebar />
-      <main className="flex-1 ml-[220px] overflow-auto">
+      <Sidebar collapsed={collapsed} onToggle={toggle} />
+      <main
+        className="flex-1 overflow-auto transition-[margin] duration-200"
+        style={{ marginLeft: collapsed ? 40 : 220 }}
+      >
         {/* Top bar with notification bell */}
         <div className="sticky top-0 z-40 flex items-center justify-end px-6 py-2 border-b" style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-glass)' }}>
           <NotificationBell />
