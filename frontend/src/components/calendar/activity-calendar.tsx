@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { SupabaseClient } from '@supabase/supabase-js';
+import CalendarNotesModal from './calendar-notes-modal';
 
 interface ActivityCalendarProps {
   accountId: string;
@@ -131,6 +132,11 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
     });
   };
 
+  // Calendar notes (TipTap リッチメモ) — 日付ごとの件数マップ
+  const [noteCounts, setNoteCounts] = useState<Record<string, number>>({});
+  // 新モーダル: 日付クリックで開くリッチメモモーダル（embedMode ではオープンしない）
+  const [notesModalDate, setNotesModalDate] = useState<string | null>(null);
+
   // Sticky notes state
   const [stickies, setStickies] = useState<StickyNote[]>([]);
   const [editingSticky, setEditingSticky] = useState<string | null>(null);
@@ -179,6 +185,35 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
     if (!accountId || !castName) return;
     fetchPlans();
   }, [accountId, castName, fetchPlans]);
+
+  // Fetch cast_calendar_notes の日別件数（セルのインジケータ用）
+  // embed/通常モード共通。anon SELECT 許可済みのため直接 sb から取得。
+  const fetchNoteCounts = useCallback(async () => {
+    if (!accountId || !castName) return;
+    const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
+    const endDate = `${year}-${String(month).padStart(2, '0')}-${new Date(year, month, 0).getDate()}`;
+    const { data, error } = await sb
+      .from('cast_calendar_notes')
+      .select('note_date')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .gte('note_date', startDate)
+      .lte('note_date', endDate);
+    if (error) {
+      console.warn('[CalendarNotes] fetch counts error:', error.message);
+      return;
+    }
+    const counts: Record<string, number> = {};
+    for (const row of (data || []) as { note_date: string }[]) {
+      const key = row.note_date.substring(0, 10);
+      counts[key] = (counts[key] || 0) + 1;
+    }
+    setNoteCounts(counts);
+  }, [sb, accountId, castName, year, month]);
+
+  useEffect(() => {
+    fetchNoteCounts();
+  }, [fetchNoteCounts]);
 
   // Reset memo form when selectedDay changes
   useEffect(() => {
@@ -465,9 +500,11 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
                   key={cell.dayNum}
                   onClick={() => {
                     if (onDayClick) {
+                      // 埋め込みモード: 新規タブで SLS を開く（embed 側で処理）
                       onDayClick(cell.activity_date);
                     } else {
-                      setSelectedDay(cell);
+                      // 通常モード: リッチメモ（cast_calendar_notes）モーダルを開く
+                      setNotesModalDate(cell.activity_date.substring(0, 10));
                     }
                   }}
                   className="min-h-[100px] p-1.5 transition-all duration-150 cursor-pointer hover:brightness-125 hover:scale-[1.02]"
@@ -509,6 +546,13 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
                     )}
                     {/* 修正1: メモタイトル表示 */}
                     {filters.showMemo && hasMemo && renderMemoInCell(dayPlans)}
+                    {/* リッチメモ (cast_calendar_notes) の件数インジケータ */}
+                    {filters.showMemo && (noteCounts[cell.activity_date] || 0) > 0 && (
+                      <div className="flex items-center gap-0.5 truncate" style={{ color: '#c084fc' }}>
+                        <span className="text-[11px]">📓</span>
+                        <span>ノート {noteCounts[cell.activity_date]}件</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -796,6 +840,19 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
             })()}
           </div>
         </div>
+      )}
+
+      {/* リッチメモモーダル (cast_calendar_notes) — 通常モードのみ */}
+      {!embedMode && notesModalDate && (
+        <CalendarNotesModal
+          open={!!notesModalDate}
+          onClose={() => setNotesModalDate(null)}
+          accountId={accountId}
+          castName={castName}
+          date={notesModalDate}
+          sb={sb}
+          onNotesChanged={fetchNoteCounts}
+        />
       )}
     </div>
   );
