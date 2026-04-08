@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { SupabaseClient } from '@supabase/supabase-js';
 import CalendarNotesModal from './calendar-notes-modal';
+import StickyNotesModal, { type StickyNoteRich } from './sticky-notes-modal';
 
 interface ActivityCalendarProps {
   accountId: string;
@@ -33,21 +34,29 @@ interface CastPlan {
   color: string;
 }
 
-interface StickyNote {
-  id: string;
-  title: string | null;
-  content: string | null;
-  color: string;
-  sort_order: number;
+// StickyNoteRich は sticky-notes-modal.tsx からインポート（リッチテキスト対応）
+type StickyNote = StickyNoteRich;
+
+/**
+ * TipTap JSON ドキュメントからプレビュー用プレーンテキストを抽出。
+ * 先頭 N 文字まで、改行はスペース化。
+ */
+function extractPreviewText(doc: Record<string, unknown> | null, maxLen = 140): string {
+  if (!doc) return '';
+  const parts: string[] = [];
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== 'object') return;
+    const n = node as { type?: string; text?: string; content?: unknown[] };
+    if (n.type === 'text' && typeof n.text === 'string') parts.push(n.text);
+    if (Array.isArray(n.content)) n.content.forEach(walk);
+  };
+  walk(doc);
+  const text = parts.join(' ').replace(/\s+/g, ' ').trim();
+  return text.length > maxLen ? text.substring(0, maxLen) + '...' : text;
 }
 
-const STICKY_COLORS: { key: string; bg: string; border: string; label: string }[] = [
-  { key: 'yellow', bg: 'rgba(234,179,8,0.15)', border: 'rgba(234,179,8,0.3)', label: '黄' },
-  { key: 'blue', bg: 'rgba(56,189,248,0.15)', border: 'rgba(56,189,248,0.3)', label: '青' },
-  { key: 'green', bg: 'rgba(34,197,94,0.15)', border: 'rgba(34,197,94,0.3)', label: '緑' },
-  { key: 'pink', bg: 'rgba(244,114,182,0.15)', border: 'rgba(244,114,182,0.3)', label: 'ピンク' },
-  { key: 'purple', bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.3)', label: '紫' },
-];
+// STICKY_COLORS (legacy 色ピッカー) は 145 でカテゴリタグに移行したため削除。
+// 既存データの color カラムは DB 上に保持されるが UI では使用しない。
 
 // 修正4: メモ文字色パレット
 const MEMO_COLORS: { key: string; hex: string; label: string }[] = [
@@ -152,12 +161,11 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
   // 新モーダル: 日付クリックで開くリッチメモモーダル（embedMode ではオープンしない）
   const [notesModalDate, setNotesModalDate] = useState<string | null>(null);
 
-  // Sticky notes state
+  // Sticky notes state (リッチ化済み: cast_sticky_notes.content_rich)
   const [stickies, setStickies] = useState<StickyNote[]>([]);
-  const [editingSticky, setEditingSticky] = useState<string | null>(null);
-  const [stickyTitle, setStickyTitle] = useState('');
-  const [stickyContent, setStickyContent] = useState('');
   const [stickyError, setStickyError] = useState<string | null>(null);
+  // 編集中の付箋 ID。モーダルに渡すノート参照。
+  const [editStickyId, setEditStickyId] = useState<string | null>(null);
 
   // Fetch activity data
   useEffect(() => {
@@ -286,11 +294,12 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
     await fetchPlans();
   };
 
-  // Sticky notes CRUD
+  // Sticky notes CRUD — cast_sticky_notes をリッチテキスト対応で取得
+  // RLS で anon SELECT 許可されているため直接 sb から取得（認証は write 時のみ API 経由）
   const fetchStickies = useCallback(async () => {
     const { data: notes, error } = await sb
       .from('cast_sticky_notes')
-      .select('id, title, content, color, sort_order')
+      .select('id, account_id, cast_name, title, content, content_rich, category, color, sort_order, created_at, updated_at')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
       .order('sort_order', { ascending: true })
@@ -310,66 +319,50 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
     if (accountId && castName) fetchStickies();
   }, [accountId, castName, fetchStickies, embedMode]);
 
+  // 新規付箋作成: API 経由で POST → 返却 ID を editStickyId にセットしてモーダル展開
   const handleAddSticky = async () => {
     if (stickies.length >= MAX_STICKIES) return;
     setStickyError(null);
-    const maxOrder = stickies.length > 0 ? Math.max(...stickies.map(s => s.sort_order)) + 1 : 0;
-    const { error } = await sb.from('cast_sticky_notes').insert({
-      account_id: accountId,
-      cast_name: castName,
-      title: null,
-      content: null,
-      color: STICKY_COLORS[stickies.length % STICKY_COLORS.length].key,
-      sort_order: maxOrder,
-    });
-    if (error) {
-      console.error('[StickyNotes] insert error:', error.message, error.details, error.hint);
-      setStickyError(`追加失敗: ${error.message}`);
-      return;
+    try {
+      const { data: authData } = await sb.auth.getSession();
+      const token = authData.session?.access_token;
+      if (!token) {
+        setStickyError('認証が必要です');
+        return;
+      }
+      const maxOrder =
+        stickies.length > 0 ? Math.max(...stickies.map((s) => s.sort_order)) + 1 : 0;
+      const res = await fetch('/api/cast-sticky-notes', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          account_id: accountId,
+          cast_name: castName,
+          title: '',
+          content_rich: { type: 'doc', content: [{ type: 'paragraph' }] },
+          category: 'other',
+          sort_order: maxOrder,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as { note: StickyNote };
+      setStickies((prev) => [...prev, body.note]);
+      setEditStickyId(body.note.id);
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      setStickyError(`追加失敗: ${err.message || 'unknown'}`);
     }
-    await fetchStickies();
   };
 
-  const handleDeleteSticky = async (id: string) => {
-    const { error } = await sb.from('cast_sticky_notes').delete().eq('id', id);
-    if (error) {
-      console.error('[StickyNotes] delete error:', error.message);
-      setStickyError(`削除失敗: ${error.message}`);
-      return;
-    }
-    setEditingSticky(null);
-    await fetchStickies();
-  };
-
-  const handleSaveSticky = async (id: string) => {
-    const { error } = await sb.from('cast_sticky_notes').update({
-      title: stickyTitle.trim() || null,
-      content: stickyContent.trim().substring(0, 1000) || null,
-      updated_at: new Date().toISOString(),
-    }).eq('id', id);
-    if (error) {
-      console.error('[StickyNotes] update error:', error.message);
-      setStickyError(`保存失敗: ${error.message}`);
-      return;
-    }
-    setEditingSticky(null);
-    await fetchStickies();
-  };
-
-  const handleStickyColorChange = async (id: string, color: string) => {
-    const { error } = await sb.from('cast_sticky_notes').update({ color, updated_at: new Date().toISOString() }).eq('id', id);
-    if (error) console.error('[StickyNotes] color change error:', error.message);
-    await fetchStickies();
-  };
-
-  const startEditSticky = (note: StickyNote) => {
-    setEditingSticky(note.id);
-    setStickyTitle(note.title || '');
-    setStickyContent(note.content || '');
-  };
-
-  const getStickyStyle = (colorKey: string) => {
-    return STICKY_COLORS.find(c => c.key === colorKey) || STICKY_COLORS[0];
+  // 削除時: stickies から除外（モーダル側で DELETE 完了後にコールバック）
+  const handleStickyDeleted = (id: string) => {
+    setStickies((prev) => prev.filter((s) => s.id !== id));
   };
 
   const todayStr = useMemo(() => {
@@ -613,7 +606,7 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
         <span>📝 メモ</span>
       </div>
 
-      {/* Sticky Notes — 修正2: 最大8件 + レスポンシブ */}
+      {/* Sticky Notes (リッチテキスト対応) — キャスト全体のグローバルメモ */}
       {!embedMode && (
       <div className="space-y-2">
         <div className="flex items-center justify-between">
@@ -621,10 +614,10 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
           {stickies.length < MAX_STICKIES && (
             <button
               onClick={handleAddSticky}
-              className="text-[11px] px-2 py-0.5 rounded-lg transition-colors hover:brightness-125"
+              className="text-[11px] px-2.5 py-1 rounded-lg transition-colors hover:brightness-125"
               style={{ background: 'rgba(56,189,248,0.12)', border: '1px solid rgba(56,189,248,0.3)', color: 'var(--accent-primary)' }}
             >
-              ＋ 追加
+              ＋ 新規付箋
             </button>
           )}
         </div>
@@ -639,83 +632,58 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
           </div>
         ) : (
           <div className="flex flex-wrap gap-3">
-            {stickies.map(note => {
-              const cs = getStickyStyle(note.color);
-              const isEditing = editingSticky === note.id;
+            {stickies.map((note) => {
+              // カテゴリ色でカード装飾（cast_calendar_notes と整合）
+              const catColor = getNoteCategoryColor(note.category || 'other');
+              // プレビュー: content_rich があればそこから抽出、無ければ legacy content を使う
+              const previewText = note.content_rich
+                ? extractPreviewText(note.content_rich)
+                : (note.content || '').substring(0, 140);
               return (
                 <div
                   key={note.id}
-                  className="min-w-[200px] flex-1 max-w-[300px] min-h-[180px] rounded-xl p-3 flex flex-col transition-all duration-150 hover:scale-[1.02]"
-                  style={{ background: cs.bg, border: `1px solid ${cs.border}`, boxShadow: '0 2px 8px rgba(0,0,0,0.2)' }}
+                  onClick={() => setEditStickyId(note.id)}
+                  className="min-w-[220px] flex-1 max-w-[320px] min-h-[160px] rounded-xl p-3 flex flex-col cursor-pointer transition-all duration-150 hover:scale-[1.02] hover:brightness-110"
+                  style={{
+                    background: `${catColor}12`,
+                    border: `1px solid ${catColor}40`,
+                    boxShadow: `0 2px 8px rgba(0,0,0,0.2), inset 0 0 0 1px ${catColor}10`,
+                  }}
                 >
-                  {isEditing ? (
-                    <>
-                      <input
-                        type="text"
-                        placeholder="タイトル"
-                        value={stickyTitle}
-                        onChange={e => setStickyTitle(e.target.value)}
-                        className="w-full text-[11px] font-bold mb-1 px-1.5 py-1 rounded"
-                        style={{ background: 'rgba(0,0,0,0.15)', border: 'none', color: 'var(--text-primary)', outline: 'none' }}
-                        autoFocus
-                      />
-                      <textarea
-                        placeholder="メモ内容..."
-                        value={stickyContent}
-                        onChange={e => setStickyContent(e.target.value)}
-                        maxLength={1000}
-                        rows={5}
-                        className="w-full text-[10px] flex-1 px-1.5 py-1 rounded resize-none"
-                        style={{ background: 'rgba(0,0,0,0.15)', border: 'none', color: 'var(--text-primary)', outline: 'none' }}
-                      />
-                      <div className="flex items-center justify-between mt-1.5">
-                        <div className="flex gap-1">
-                          {STICKY_COLORS.map(c => (
-                            <button
-                              key={c.key}
-                              onClick={() => handleStickyColorChange(note.id, c.key)}
-                              className="w-4 h-4 rounded-full transition-transform hover:scale-125"
-                              style={{ background: c.bg, border: `2px solid ${note.color === c.key ? c.border : 'transparent'}` }}
-                              title={c.label}
-                            />
-                          ))}
-                        </div>
-                        <button
-                          onClick={() => handleSaveSticky(note.id)}
-                          className="text-[10px] px-2 py-0.5 rounded"
-                          style={{ background: 'rgba(56,189,248,0.2)', color: 'var(--accent-primary)' }}
-                        >
-                          保存
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="flex items-start justify-between mb-1">
-                        <span className="text-[11px] font-bold truncate flex-1" style={{ color: 'var(--text-primary)' }}>
-                          {note.title || '無題'}
-                        </span>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleDeleteSticky(note.id); }}
-                          className="text-[11px] ml-1 opacity-40 hover:opacity-100 transition-opacity"
-                          title="削除"
-                        >
-                          🗑️
-                        </button>
-                      </div>
-                      <div
-                        className="text-[10px] flex-1 cursor-pointer overflow-hidden"
-                        style={{ color: 'var(--text-secondary)', wordBreak: 'break-word' }}
-                        onClick={() => startEditSticky(note)}
-                      >
-                        {note.content ? (
-                          <span className="whitespace-pre-wrap">{note.content.length > 150 ? note.content.substring(0, 150) + '...' : note.content}</span>
-                        ) : (
-                          <span style={{ color: 'var(--text-muted)' }}>クリックして編集...</span>
-                        )}
-                      </div>
-                    </>
-                  )}
+                  {/* Category badge */}
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <span
+                      className="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
+                      style={{
+                        background: `${catColor}22`,
+                        color: catColor,
+                        border: `1px solid ${catColor}40`,
+                      }}
+                    >
+                      {note.category === 'plan' ? '企画'
+                        : note.category === 'fb' ? '配信FB'
+                        : note.category === 'idea' ? 'アイデア'
+                        : 'その他'}
+                    </span>
+                  </div>
+                  {/* Title */}
+                  <div
+                    className="text-[12px] font-bold truncate mb-1"
+                    style={{ color: 'var(--text-primary)' }}
+                  >
+                    {note.title || '(無題)'}
+                  </div>
+                  {/* Rich content preview */}
+                  <div
+                    className="text-[10px] flex-1 overflow-hidden"
+                    style={{ color: 'var(--text-secondary)', wordBreak: 'break-word' }}
+                  >
+                    {previewText ? (
+                      <span className="line-clamp-5 whitespace-pre-wrap">{previewText}</span>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>クリックして編集...</span>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -895,6 +863,20 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
           date={notesModalDate}
           sb={sb}
           onNotesChanged={fetchNoteSummaries}
+        />
+      )}
+
+      {/* 付箋メモ編集モーダル (cast_sticky_notes) — 通常モードのみ */}
+      {!embedMode && editStickyId && (
+        <StickyNotesModal
+          open={!!editStickyId}
+          onClose={() => setEditStickyId(null)}
+          accountId={accountId}
+          castName={castName}
+          note={stickies.find((s) => s.id === editStickyId) || null}
+          sb={sb}
+          onChanged={fetchStickies}
+          onDelete={handleStickyDeleted}
         />
       )}
     </div>
