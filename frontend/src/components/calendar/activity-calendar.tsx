@@ -62,6 +62,16 @@ const MEMO_COLORS: { key: string; hex: string; label: string }[] = [
 const getMemoColorHex = (key: string | undefined | null) =>
   MEMO_COLORS.find(c => c.key === key)?.hex || MEMO_COLORS[0].hex;
 
+// cast_calendar_notes のカテゴリ別配色（セル表示用）
+const NOTE_CATEGORY_COLORS: Record<string, string> = {
+  plan: '#c084fc',  // 企画: 紫
+  fb: '#38bdf8',    // 配信FB: 青
+  idea: '#4ade80',  // アイデア: 緑
+  other: '#94a3b8', // その他: グレー
+};
+const getNoteCategoryColor = (category: string): string =>
+  NOTE_CATEGORY_COLORS[category] || NOTE_CATEGORY_COLORS.other;
+
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土'];
 const TK_TO_YEN = 7.7;
 const MAX_STICKIES = 8;
@@ -132,8 +142,13 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
     });
   };
 
-  // Calendar notes (TipTap リッチメモ) — 日付ごとの件数マップ
-  const [noteCounts, setNoteCounts] = useState<Record<string, number>>({});
+  // Calendar notes (TipTap リッチメモ) — 日付ごとの要約リスト（タイトル・カテゴリ）
+  interface NoteSummary {
+    id: string;
+    title: string | null;
+    category: string;
+  }
+  const [noteSummaries, setNoteSummaries] = useState<Record<string, NoteSummary[]>>({});
   // 新モーダル: 日付クリックで開くリッチメモモーダル（embedMode ではオープンしない）
   const [notesModalDate, setNotesModalDate] = useState<string | null>(null);
 
@@ -186,34 +201,42 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
     fetchPlans();
   }, [accountId, castName, fetchPlans]);
 
-  // Fetch cast_calendar_notes の日別件数（セルのインジケータ用）
+  // Fetch cast_calendar_notes の日別要約（タイトル・カテゴリ）
   // embed/通常モード共通。anon SELECT 許可済みのため直接 sb から取得。
-  const fetchNoteCounts = useCallback(async () => {
+  const fetchNoteSummaries = useCallback(async () => {
     if (!accountId || !castName) return;
     const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
     const endDate = `${year}-${String(month).padStart(2, '0')}-${new Date(year, month, 0).getDate()}`;
     const { data, error } = await sb
       .from('cast_calendar_notes')
-      .select('note_date')
+      .select('id, note_date, title, category, sort_order, created_at')
       .eq('account_id', accountId)
       .eq('cast_name', castName)
       .gte('note_date', startDate)
-      .lte('note_date', endDate);
+      .lte('note_date', endDate)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true });
     if (error) {
-      console.warn('[CalendarNotes] fetch counts error:', error.message);
+      console.warn('[CalendarNotes] fetch summaries error:', error.message);
       return;
     }
-    const counts: Record<string, number> = {};
-    for (const row of (data || []) as { note_date: string }[]) {
+    const map: Record<string, NoteSummary[]> = {};
+    for (const row of (data || []) as {
+      id: string;
+      note_date: string;
+      title: string | null;
+      category: string;
+    }[]) {
       const key = row.note_date.substring(0, 10);
-      counts[key] = (counts[key] || 0) + 1;
+      if (!map[key]) map[key] = [];
+      map[key].push({ id: row.id, title: row.title, category: row.category });
     }
-    setNoteCounts(counts);
+    setNoteSummaries(map);
   }, [sb, accountId, castName, year, month]);
 
   useEffect(() => {
-    fetchNoteCounts();
-  }, [fetchNoteCounts]);
+    fetchNoteSummaries();
+  }, [fetchNoteSummaries]);
 
   // Reset memo form when selectedDay changes
   useEffect(() => {
@@ -546,13 +569,33 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
                     )}
                     {/* 修正1: メモタイトル表示 */}
                     {filters.showMemo && hasMemo && renderMemoInCell(dayPlans)}
-                    {/* リッチメモ (cast_calendar_notes) の件数インジケータ */}
-                    {filters.showMemo && (noteCounts[cell.activity_date] || 0) > 0 && (
-                      <div className="flex items-center gap-0.5 truncate" style={{ color: '#c084fc' }}>
-                        <span className="text-[11px]">📓</span>
-                        <span>ノート {noteCounts[cell.activity_date]}件</span>
-                      </div>
-                    )}
+                    {/* リッチメモ (cast_calendar_notes) — 各メモのタイトルをカテゴリ色で表示 */}
+                    {filters.showMemo && (() => {
+                      const dayNotes = noteSummaries[cell.activity_date] || [];
+                      if (dayNotes.length === 0) return null;
+                      const visible = dayNotes.slice(0, 3);
+                      const remaining = dayNotes.length - visible.length;
+                      return (
+                        <>
+                          {visible.map((n) => (
+                            <div
+                              key={n.id}
+                              className="flex items-center gap-0.5 truncate"
+                              style={{ color: getNoteCategoryColor(n.category) }}
+                              title={n.title || '(無題)'}
+                            >
+                              <span className="text-[11px]">📓</span>
+                              <span className="truncate">{n.title || '(無題)'}</span>
+                            </div>
+                          ))}
+                          {remaining > 0 && (
+                            <div className="truncate" style={{ color: 'var(--text-muted)' }}>
+                              +{remaining}件
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               );
@@ -851,7 +894,7 @@ export default function ActivityCalendar({ accountId, castName, sb, embedMode = 
           castName={castName}
           date={notesModalDate}
           sb={sb}
-          onNotesChanged={fetchNoteCounts}
+          onNotesChanged={fetchNoteSummaries}
         />
       )}
     </div>
