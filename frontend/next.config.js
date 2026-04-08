@@ -31,10 +31,25 @@ const nextConfig = {
   // セキュリティヘッダー
   async headers() {
     return [
+      // /embed/* 以外: 従来通り iframe 埋め込み禁止
+      // 負の先読みで /embed 配下を除外（path-to-regexp）
       {
-        source: '/(.*)',
+        source: '/((?!embed/).*)',
         headers: [
           { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        ],
+      },
+      // /embed/* : Notion からの iframe 埋め込みを許可
+      // X-Frame-Options は付与せず、frame-ancestors で self + notion.so/notion.site のみ許可
+      {
+        source: '/embed/:path*',
+        headers: [
+          {
+            key: 'Content-Security-Policy',
+            value: "frame-ancestors 'self' https://*.notion.so https://*.notion.site;",
+          },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
         ],
