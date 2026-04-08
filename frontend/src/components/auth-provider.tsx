@@ -56,6 +56,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // 未ログイン時のリダイレクト
   useEffect(() => {
     if (loading) return;
+    // /embed/* は認証不要（Notion埋め込み用）
+    if (pathname.startsWith('/embed/')) return;
     const isPublic = PUBLIC_PATHS.includes(pathname);
 
     if (!user && !isPublic) {

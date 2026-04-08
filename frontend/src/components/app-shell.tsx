@@ -224,6 +224,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { loading } = useAuth();
   const pathname = usePathname();
   const isPublic = PUBLIC_PATHS.includes(pathname);
+  // /embed/* は Notion 埋め込み用。AuthProvider のロード待ちも含めて chrome を一切出さない
+  const isEmbed = pathname.startsWith('/embed/');
+  if (isEmbed) {
+    return <>{children}</>;
+  }
 
   // ローディング中はスピナー表示
   if (loading) {

@@ -6,6 +6,10 @@ interface ActivityCalendarProps {
   accountId: string;
   castName: string;
   sb: SupabaseClient;
+  /** 埋め込み表示モード。付箋・編集モーダルを非表示にする。 */
+  embedMode?: boolean;
+  /** 日付セルクリック時のカスタムハンドラ（埋め込み用）。指定時はモーダルを開かない。 */
+  onDayClick?: (activityDate: string) => void;
 }
 
 interface ActivityDay {
@@ -98,7 +102,7 @@ function saveFilters(castName: string, filters: FilterState) {
   } catch { /* ignore */ }
 }
 
-export default function ActivityCalendar({ accountId, castName, sb }: ActivityCalendarProps) {
+export default function ActivityCalendar({ accountId, castName, sb, embedMode = false, onDayClick }: ActivityCalendarProps) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1); // 1-based
@@ -244,8 +248,9 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
   }, [sb, accountId, castName]);
 
   useEffect(() => {
+    if (embedMode) return;
     if (accountId && castName) fetchStickies();
-  }, [accountId, castName, fetchStickies]);
+  }, [accountId, castName, fetchStickies, embedMode]);
 
   const handleAddSticky = async () => {
     if (stickies.length >= MAX_STICKIES) return;
@@ -458,7 +463,13 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
               return (
                 <div
                   key={cell.dayNum}
-                  onClick={() => setSelectedDay(cell)}
+                  onClick={() => {
+                    if (onDayClick) {
+                      onDayClick(cell.activity_date);
+                    } else {
+                      setSelectedDay(cell);
+                    }
+                  }}
                   className="min-h-[100px] p-1.5 transition-all duration-150 cursor-pointer hover:brightness-125 hover:scale-[1.02]"
                   style={{
                     borderBottom: '1px solid var(--border-primary)',
@@ -516,6 +527,7 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
       </div>
 
       {/* Sticky Notes — 修正2: 最大8件 + レスポンシブ */}
+      {!embedMode && (
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <h4 className="text-xs font-bold" style={{ color: 'var(--text-secondary)' }}>📌 付箋メモ</h4>
@@ -623,9 +635,10 @@ export default function ActivityCalendar({ accountId, castName, sb }: ActivityCa
           </div>
         )}
       </div>
+      )}
 
       {/* Detail Modal */}
-      {selectedDay && (
+      {!embedMode && selectedDay && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setSelectedDay(null)}>
           <div className="rounded-xl p-5 w-[360px] max-w-[90vw] space-y-3"
             style={{ background: 'var(--bg-card)', border: '1px solid var(--border-primary)' }}
