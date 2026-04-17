@@ -220,6 +220,7 @@ async def update_dm_status(dm_id: int, body: DMStatusUpdate, user=Depends(get_cu
 @router.get("/log")
 async def get_dm_log(
     account_id: str,
+    cast_name: str = Query(default=None),
     campaign: str = None,
     days: int = Query(default=30, le=365),
     limit: int = Query(default=100, le=1000),
@@ -236,6 +237,8 @@ async def get_dm_log(
              .order("queued_at", desc=True)
              .limit(limit))
 
+    if cast_name:
+        query = query.eq("cast_name", cast_name)
     if campaign:
         query = query.eq("campaign", campaign)
 

@@ -1150,11 +1150,22 @@ ${chatterLines || '(データなし)'}${goalText}`;
 
       // 前回レポートのnext_actionsを取得して突合
       try {
-        const { data: prevReportRow } = await sb
+        // cast_knowledge は cast_id で識別 → registered_casts から解決
+        const { data: castReg } = await sb
+          .from('registered_casts')
+          .select('id')
+          .eq('account_id', accountId)
+          .eq('cast_name', castName)
+          .limit(1)
+          .single();
+
+        let prevReportQuery = sb
           .from('cast_knowledge')
           .select('metrics_json')
           .eq('account_id', accountId)
-          .eq('report_type', 'session_report')
+          .eq('report_type', 'session_report');
+        if (castReg?.id) prevReportQuery = prevReportQuery.eq('cast_id', castReg.id);
+        const { data: prevReportRow } = await prevReportQuery
           .order('created_at', { ascending: false })
           .limit(1)
           .single();
@@ -2258,29 +2269,45 @@ ${goalSummaryLines.join('\n')}
 // ============================================================
 
 /** cast_knowledge から marketer_persona_source テキストを取得 */
-async function fetchMarketerPersonaSources(token: string): Promise<string | null> {
+async function fetchMarketerPersonaSources(token: string, accountId: string, castName: string): Promise<string | null> {
   try {
     const sb = getAuthClient(token);
+
+    // cast_knowledge は cast_id で識別 → registered_casts から解決
+    const { data: castReg } = await sb
+      .from('registered_casts')
+      .select('id')
+      .eq('account_id', accountId)
+      .eq('cast_name', castName)
+      .limit(1)
+      .single();
+
+    const castIdFilter = castReg?.id ?? null;
+
     // monthly (最新3件) + method (2件) + experience/ふみ (1件) = 最大6件
-    const [monthlyRes, methodRes, fumiRes] = await Promise.all([
-      sb.from('cast_knowledge')
+    const buildQuery = () => {
+      let q = sb.from('cast_knowledge')
         .select('insights_json, metrics_json')
+        .eq('account_id', accountId);
+      if (castIdFilter) q = q.eq('cast_id', castIdFilter);
+      return q;
+    };
+    const [monthlyRes, methodRes, fumiRes] = await Promise.all([
+      buildQuery()
         .eq('knowledge_type', 'marketer_persona_source')
         .eq('report_type', 'post_session')
         .filter('metrics_json->>category', 'eq', 'monthly')
         .filter('metrics_json->>author', 'eq', '安藤')
         .order('period_start', { ascending: false })
         .limit(3),
-      sb.from('cast_knowledge')
-        .select('insights_json, metrics_json')
+      buildQuery()
         .eq('knowledge_type', 'marketer_persona_source')
         .eq('report_type', 'post_session')
         .filter('metrics_json->>category', 'eq', 'method')
         .filter('metrics_json->>author', 'eq', '安藤')
         .order('period_start', { ascending: false })
         .limit(2),
-      sb.from('cast_knowledge')
-        .select('insights_json, metrics_json')
+      buildQuery()
         .eq('knowledge_type', 'marketer_persona_source')
         .eq('report_type', 'post_session')
         .filter('metrics_json->>author', 'eq', 'ふみ')
@@ -2409,10 +2436,10 @@ export async function POST(req: NextRequest) {
     const isFbReport = FB_REPORT_TYPES.includes(task_type as typeof FB_REPORT_TYPES[number]);
     let fiveAxisData: FiveAxisData | undefined;
     let dynamicLayerC = '';
+    const effectiveAccountId = reqAccountId || (auth.accountIds?.[0]) || '';
     if (isFbReport) {
       if (task_type === 'fb_report' && !prebuiltUserPrompt) {
         // 従来互換: collect5AxisData を実行（1リクエストモード）
-        const effectiveAccountId = reqAccountId || (auth.accountIds?.[0]) || '';
         const t0 = Date.now();
         fiveAxisData = await collect5AxisData(auth.token, cast_name, effectiveAccountId, context);
         const t1 = Date.now();
@@ -2472,7 +2499,7 @@ export async function POST(req: NextRequest) {
     // ── Layer A 選択 ──
     let layerA: string;
     if (isFbReport) {
-      const marketerSources = await fetchMarketerPersonaSources(auth.token);
+      const marketerSources = await fetchMarketerPersonaSources(auth.token, effectiveAccountId, cast_name);
       layerA = selectLayerAForFbReport(marketerSources, activePersona.system_prompt_base);
     } else {
       layerA = selectLayerA(task_type, activePersona.system_prompt_base);

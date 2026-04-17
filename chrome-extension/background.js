@@ -1894,10 +1894,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // --- Content Script: コイン取引バッチ（ストリーミングUPSERT） ---
   if (msg.type === 'COIN_BATCH') {
     // content_coin_sync.jsから随時送られるバッチをUPSERTキューに追加
+    // タブIDからキャスト名を特定（レースコンディション防止）
+    const tabId = sender && sender.tab ? sender.tab.id : null;
+    const castName = tabId != null ? _coinStreamTabMap.get(tabId) : null;
+    const st = castName ? _coinStreamStates.get(castName) : null;
     const txs = msg.transactions || [];
-    if (txs.length > 0 && _coinStreamState.active) {
-      _coinStreamState.totalReceived += txs.length;
-      _coinStreamUpsertQueue(txs);
+    if (txs.length > 0 && st && st.active) {
+      st.totalReceived += txs.length;
+      _coinStreamUpsertQueue(st, txs);
     }
     sendResponse({ ok: true, queued: txs.length });
     return false;
@@ -1918,20 +1922,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ============================================================
 // コインストリーミングUPSERT — content scriptから随時バッチ受信してDB保存
+// キャストごとに独立したstateを持ち、複数キャスト同時syncのレースコンディションを防止
 // ============================================================
-const _coinStreamState = {
-  active: false,
-  accountId: null,
-  castName: null,
-  serviceRoleKey: null,
-  totalReceived: 0,
-  totalSynced: 0,
-  queue: [],
-  processing: false,
-};
+const _coinStreamStates = new Map(); // castName → state
+const _coinStreamTabMap = new Map(); // tabId → castName
 
-async function _coinStreamUpsertQueue(newTxs) {
-  const st = _coinStreamState;
+function _getCoinStreamState(castName) {
+  if (!_coinStreamStates.has(castName)) {
+    _coinStreamStates.set(castName, {
+      active: false,
+      accountId: null,
+      castName: castName,
+      serviceRoleKey: null,
+      totalReceived: 0,
+      totalSynced: 0,
+      queue: [],
+      processing: false,
+    });
+  }
+  return _coinStreamStates.get(castName);
+}
+
+async function _coinStreamUpsertQueue(st, newTxs) {
   if (!st.active || !st.serviceRoleKey) return;
 
   st.queue.push(...newTxs);
@@ -2049,14 +2061,17 @@ async function handleSyncEarnings(castName, fromDate) {
   }
 
   // 4. ストリーミングUPSERT状態を初期化（COIN_BATCHハンドラが使用）
-  _coinStreamState.active = true;
-  _coinStreamState.accountId = accountId;
-  _coinStreamState.castName = castName;
-  _coinStreamState.serviceRoleKey = SERVICE_ROLE_KEY;
-  _coinStreamState.totalReceived = 0;
-  _coinStreamState.totalSynced = 0;
-  _coinStreamState.queue = [];
-  _coinStreamState.processing = false;
+  // キャストごとに独立したstateを使用（レースコンディション防止）
+  const coinState = _getCoinStreamState(castName);
+  coinState.active = true;
+  coinState.accountId = accountId;
+  coinState.serviceRoleKey = SERVICE_ROLE_KEY;
+  coinState.totalReceived = 0;
+  coinState.totalSynced = 0;
+  coinState.queue = [];
+  coinState.processing = false;
+  // タブIDとキャスト名を紐付け（COIN_BATCHハンドラでキャスト特定に使用）
+  _coinStreamTabMap.set(targetTab.id, castName);
 
   // 5. 差分同期: coin_transactionsのMAX(date)を取得してsinceISOに使用
   let sinceISO = fromDate || null;
@@ -2108,14 +2123,15 @@ async function handleSyncEarnings(castName, fromDate) {
     });
   } finally {
     // ストリーミング終了 — 残りのキューを処理してから無効化
-    if (_coinStreamState.queue.length > 0) {
-      await _coinStreamUpsertQueue([]);
+    if (coinState.queue.length > 0) {
+      await _coinStreamUpsertQueue(coinState, []);
     }
     // processing完了を待つ（最大10秒）
-    for (let i = 0; i < 20 && _coinStreamState.processing; i++) {
+    for (let i = 0; i < 20 && coinState.processing; i++) {
       await new Promise(r => setTimeout(r, 500));
     }
-    _coinStreamState.active = false;
+    coinState.active = false;
+    _coinStreamTabMap.delete(targetTab.id);
   }
 
   if (result.error) {
@@ -2123,7 +2139,7 @@ async function handleSyncEarnings(castName, fromDate) {
   }
 
   const totalFetched = result.totalFetched || 0;
-  const totalSynced = _coinStreamState.totalSynced;
+  const totalSynced = coinState.totalSynced;
   console.log(`[LS-BG] Earnings同期完了: 取得=${totalFetched}件, UPSERT=${totalSynced}件`);
 
   if (totalFetched === 0) {
